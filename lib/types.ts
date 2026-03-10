@@ -1,6 +1,9 @@
 export type ExchangeId = 'binance' | 'bybit' | 'okx'
 export type Timeframe = 'daily' | 'weekly' | 'monthly'
 export type TradeSide = 'long' | 'short'
+export type TradeType = 'spot' | 'futures' | 'options'
+export type Period = '1D' | '1W' | '1M' | '1Y' | 'manual'
+export type ConnectionStatus = 'connected' | 'error' | 'not_configured'
 
 export interface SubAccount {
   id: string
@@ -15,18 +18,25 @@ export interface ExchangeConfig {
   subAccounts: SubAccount[]
 }
 
+export interface DateRange {
+  start: string  // ISO date YYYY-MM-DD
+  end: string    // ISO date YYYY-MM-DD
+}
+
 export interface Trade {
   id: string
   subAccountId: string
   exchangeId: ExchangeId
   symbol: string
   side: TradeSide
+  tradeType: TradeType
   entryPrice: number
   exitPrice: number
   quantity: number
   pnl: number
   pnlPercent: number
   fee: number
+  durationMin: number
   openedAt: string
   closedAt: string
 }
@@ -66,4 +76,36 @@ export interface FilterState {
   exchangeId: ExchangeId | 'all'
   subAccountId: string | 'all'
   timeframe: Timeframe
+  period: Period
+}
+
+export interface HistoryFilterState {
+  exchangeId: ExchangeId | 'all'
+  subAccountId: string | 'all'
+  symbol: string
+  tradeType: TradeType | 'all'
+  side: TradeSide | 'all'
+  dateRange: DateRange
+  page: number
+}
+
+export interface MetricTimeSeries {
+  date: string
+  [accountId: string]: number | string
+}
+
+export interface AccountSummary {
+  subAccountId: string
+  exchangeId: ExchangeId
+  name: string
+  balance: number
+  pnl: number
+  pnlPct: number
+}
+
+export interface ApiKeyConfig {
+  exchangeId: ExchangeId
+  apiKey: string
+  apiSecret: string
+  passphrase?: string  // OKX only
 }

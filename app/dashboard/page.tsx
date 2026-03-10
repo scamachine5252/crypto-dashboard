@@ -15,6 +15,7 @@ export default function DashboardPage() {
     exchangeId: 'all',
     subAccountId: 'all',
     timeframe: 'daily',
+    period: '1Y',
   })
 
   const daily = useMemo(

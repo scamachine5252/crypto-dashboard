@@ -1,4 +1,4 @@
-import type { ExchangeConfig, Trade, DailyPnLEntry, ExchangeId } from './types'
+import type { ExchangeConfig, Trade, DailyPnLEntry, ExchangeId, TradeType } from './types'
 
 // ---------------------------------------------------------------------------
 // Seeded deterministic RNG (mulberry32)
@@ -177,6 +177,7 @@ function generateTrades(): Trade[] {
         const symbol = rng.choice(SYMBOLS)
         const [lo, hi] = PRICE_RANGE[symbol]
         const side = rng.bool(0.54) ? 'long' : ('short' as const)
+        const tradeType: TradeType = rng.choice(['spot', 'futures', 'options'] as TradeType[])
 
         const dateIdx = rng.int(0, ALL_DATES.length - 1)
         const openedAt = new Date(ALL_DATES[dateIdx] + 'T00:00:00Z')
@@ -205,12 +206,14 @@ function generateTrades(): Trade[] {
           exchangeId: ex.id as ExchangeId,
           symbol,
           side,
+          tradeType,
           entryPrice: Math.round(entryPrice * 100) / 100,
           exitPrice: Math.round(exitPrice * 100) / 100,
           quantity: Math.round(quantity * 10_000) / 10_000,
           pnl: Math.round(pnl),
           pnlPercent: Math.round(pnlPercent * 100) / 100,
           fee: Math.round(fee),
+          durationMin: durMin,
           openedAt: openedAt.toISOString(),
           closedAt: closedAt.toISOString(),
         })

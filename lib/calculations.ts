@@ -1,4 +1,4 @@
-import type { DailyPnLEntry, Metrics, Trade, ChartDataPoint, Timeframe } from './types'
+import type { DailyPnLEntry, Metrics, Trade, ChartDataPoint, Timeframe, Period, DateRange, HistoryFilterState } from './types'
 
 const INITIAL_CAPITAL = 6_800_000
 const RISK_FREE_DAILY = 0.05 / 252
@@ -154,4 +154,99 @@ export function aggregateChartData(daily: DailyPnLEntry[], timeframe: Timeframe)
 function getWeekNumber(d: Date): number {
   const jan1 = new Date(Date.UTC(d.getUTCFullYear(), 0, 1))
   return Math.ceil((((d.getTime() - jan1.getTime()) / 86_400_000) + jan1.getUTCDay() + 1) / 7)
+}
+
+// ---------------------------------------------------------------------------
+// Period → DateRange
+// ---------------------------------------------------------------------------
+export function resolveDateRange(period: Period, today?: string): DateRange {
+  const end = today ?? new Date().toISOString().slice(0, 10)
+  const endDate = new Date(end + 'T00:00:00Z')
+
+  if (period === '1D') {
+    return { start: end, end }
+  }
+  if (period === '1W') {
+    const start = new Date(endDate)
+    start.setUTCDate(start.getUTCDate() - 6)
+    return { start: start.toISOString().slice(0, 10), end }
+  }
+  if (period === '1M') {
+    const start = new Date(endDate)
+    start.setUTCMonth(start.getUTCMonth() - 1)
+    return { start: start.toISOString().slice(0, 10), end }
+  }
+  if (period === '1Y') {
+    const start = new Date(endDate)
+    start.setUTCFullYear(start.getUTCFullYear() - 1)
+    return { start: start.toISOString().slice(0, 10), end }
+  }
+  // manual: return a wide default range covering 2025 mock data
+  return { start: '2025-01-01', end }
+}
+
+// ---------------------------------------------------------------------------
+// Date range filter for DailyPnLEntry
+// ---------------------------------------------------------------------------
+export function filterByDateRange(entries: DailyPnLEntry[], dateRange: DateRange): DailyPnLEntry[] {
+  return entries.filter((e) => e.date >= dateRange.start && e.date <= dateRange.end)
+}
+
+// ---------------------------------------------------------------------------
+// Normalize equity curve to index 0 at period start (for overlay comparisons)
+// ---------------------------------------------------------------------------
+export function normalizeEquityCurve(daily: DailyPnLEntry[], subAccountId: string): ChartDataPoint[] {
+  const entries = daily
+    .filter((e) => e.subAccountId === subAccountId)
+    .sort((a, b) => a.date.localeCompare(b.date))
+
+  if (entries.length === 0) return []
+
+  let cum = 0
+  return entries.map((e, i) => {
+    if (i === 0) {
+      // First point starts at 0; pnl already happened
+      cum = 0
+      const d = new Date(e.date + 'T00:00:00Z')
+      return {
+        period: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        pnl: e.pnl,
+        cumulativePnl: 0,
+      }
+    }
+    cum += entries[i - 1].pnl
+    const d = new Date(e.date + 'T00:00:00Z')
+    return {
+      period: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+      pnl: e.pnl,
+      cumulativePnl: cum,
+    }
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Advanced trade filtering (for Trading History page)
+// ---------------------------------------------------------------------------
+export function filterTradesAdvanced(trades: Trade[], filter: HistoryFilterState): Trade[] {
+  return trades.filter((t) => {
+    if (filter.exchangeId !== 'all' && t.exchangeId !== filter.exchangeId) return false
+    if (filter.subAccountId !== 'all' && t.subAccountId !== filter.subAccountId) return false
+    if (filter.symbol && !t.symbol.toUpperCase().includes(filter.symbol.toUpperCase())) return false
+    if (filter.tradeType !== 'all' && t.tradeType !== filter.tradeType) return false
+    if (filter.side !== 'all' && t.side !== filter.side) return false
+    const closed = t.closedAt.slice(0, 10)
+    if (closed < filter.dateRange.start || closed > filter.dateRange.end) return false
+    return true
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Summarize filtered trades (for History page footer)
+// ---------------------------------------------------------------------------
+export function summarizeFilteredTrades(trades: Trade[]): { totalPnl: number; totalFees: number; count: number } {
+  return {
+    totalPnl: trades.reduce((s, t) => s + t.pnl, 0),
+    totalFees: trades.reduce((s, t) => s + t.fee, 0),
+    count: trades.length,
+  }
 }
