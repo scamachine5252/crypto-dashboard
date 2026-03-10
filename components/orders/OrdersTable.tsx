@@ -155,12 +155,9 @@ export default function OrdersTable({ trades }: OrdersTableProps) {
                     key={trade.id}
                     className="border-b border-[#0f1e32] hover:bg-[#0f1e32] transition-colors"
                   >
-                    {/* Symbol */}
                     <td className="px-4 py-3 font-medium text-[#e8f0fe] whitespace-nowrap">
                       {trade.symbol}
                     </td>
-
-                    {/* Side */}
                     <td className="px-4 py-3">
                       <span
                         className={cn(
@@ -173,39 +170,27 @@ export default function OrdersTable({ trades }: OrdersTableProps) {
                         {trade.side}
                       </span>
                     </td>
-
-                    {/* Entry */}
                     <td className="px-4 py-3 text-[#8ba3c7] tabular-nums whitespace-nowrap">
                       ${formatPrice(trade.entryPrice)}
                     </td>
-
-                    {/* Exit */}
                     <td className="px-4 py-3 text-[#8ba3c7] tabular-nums whitespace-nowrap">
                       ${formatPrice(trade.exitPrice)}
                     </td>
-
-                    {/* PnL */}
                     <td className="px-4 py-3 font-semibold tabular-nums whitespace-nowrap">
                       <span className={isWin ? 'text-[#0ecb81]' : 'text-[#f6465d]'}>
                         {isWin ? '+' : ''}
                         {formatMoney(trade.pnl)}
                       </span>
                     </td>
-
-                    {/* PnL % */}
                     <td className="px-4 py-3 tabular-nums whitespace-nowrap">
                       <span className={isWin ? 'text-[#0ecb81]' : 'text-[#f6465d]'}>
                         {trade.pnlPercent > 0 ? '+' : ''}
                         {trade.pnlPercent.toFixed(2)}%
                       </span>
                     </td>
-
-                    {/* Fee */}
                     <td className="px-4 py-3 text-[#f6465d]/70 tabular-nums whitespace-nowrap">
                       -{formatMoney(trade.fee)}
                     </td>
-
-                    {/* Exchange / Account */}
                     <td className="px-4 py-3 whitespace-nowrap">
                       <span className="flex items-center gap-1.5">
                         <span
@@ -219,8 +204,6 @@ export default function OrdersTable({ trades }: OrdersTableProps) {
                         <span className="text-[#8ba3c7]">{getSubAccountName(trade.subAccountId)}</span>
                       </span>
                     </td>
-
-                    {/* Date */}
                     <td className="px-4 py-3 text-[#4d6b8e] whitespace-nowrap">
                       {formatDate(trade.closedAt)}
                     </td>

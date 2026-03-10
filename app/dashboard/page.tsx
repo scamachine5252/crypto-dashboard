@@ -4,11 +4,11 @@ import { useState, useMemo } from 'react'
 import type { FilterState } from '@/lib/types'
 import { filterDailyPnL, filterTrades } from '@/lib/mock-data'
 import { calculateMetrics, aggregateChartData } from '@/lib/calculations'
-import Header from '@/components/dashboard/Header'
-import FilterBar from '@/components/dashboard/FilterBar'
-import MetricsGrid from '@/components/dashboard/MetricsGrid'
-import PnLChart from '@/components/dashboard/PnLChart'
-import OrdersTable from '@/components/dashboard/OrdersTable'
+import Header from '@/components/layout/Header'
+import FilterBar from '@/components/layout/FilterBar'
+import MetricsGrid from '@/components/metrics/MetricsGrid'
+import PnLChart from '@/components/charts/PnLChart'
+import OrdersTable from '@/components/orders/OrdersTable'
 
 export default function DashboardPage() {
   const [filter, setFilter] = useState<FilterState>({

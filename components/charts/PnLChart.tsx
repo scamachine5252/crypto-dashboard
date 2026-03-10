@@ -153,7 +153,6 @@ export default function PnLChart({ data, timeframe, onTimeframeChange, totalPnl 
                 interval={tickInterval}
               />
 
-              {/* Left Y-axis: cumulative PnL */}
               <YAxis
                 yAxisId="cum"
                 orientation="left"
@@ -164,7 +163,6 @@ export default function PnLChart({ data, timeframe, onTimeframeChange, totalPnl 
                 width={60}
               />
 
-              {/* Right Y-axis: period PnL */}
               <YAxis
                 yAxisId="period"
                 orientation="right"
@@ -179,7 +177,6 @@ export default function PnLChart({ data, timeframe, onTimeframeChange, totalPnl 
 
               <ReferenceLine yAxisId="cum" y={0} stroke="#1a2d45" strokeDasharray="3 3" />
 
-              {/* Period PnL bars */}
               <Bar yAxisId="period" dataKey="pnl" maxBarSize={6} radius={[2, 2, 0, 0]}>
                 {data.map((entry, i) => (
                   <Cell
@@ -190,7 +187,6 @@ export default function PnLChart({ data, timeframe, onTimeframeChange, totalPnl 
                 ))}
               </Bar>
 
-              {/* Cumulative PnL area */}
               <Area
                 yAxisId="cum"
                 type="monotone"
