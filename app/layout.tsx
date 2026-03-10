@@ -30,6 +30,12 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
+      {/* Anti-flash: apply saved theme class before React hydrates */}
+      <script
+        dangerouslySetInnerHTML={{
+          __html: `try{var t=localStorage.getItem('theme');if(t==='light')document.documentElement.classList.add('light');}catch(e){}`,
+        }}
+      />
       <body className={`${inter.variable} ${spaceGrotesk.variable} ${geistMono.variable} antialiased`}>
         <Providers>{children}</Providers>
       </body>

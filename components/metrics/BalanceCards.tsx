@@ -1,17 +1,14 @@
 'use client'
 
 import { useMemo } from 'react'
-import { EXCHANGES } from '@/lib/mock-data'
-import { getAllDailyPnL } from '@/lib/mock-data'
+import { EXCHANGES, getAllDailyPnL } from '@/lib/mock-data'
 import { formatMoney, formatPercent } from '@/lib/utils'
 
-// Approximate initial capital allocation per sub-account
 const CAPITAL_PER_SUB = 6_800_000 / 7
 
 export default function BalanceCards() {
   const summaries = useMemo(() => {
     const daily = getAllDailyPnL()
-
     return EXCHANGES.map((ex) => {
       const exPnl = daily
         .filter((d) => d.exchangeId === ex.id)
@@ -26,89 +23,91 @@ export default function BalanceCards() {
   const total = useMemo(() => {
     const totalPnl = summaries.reduce((s, r) => s + r.pnl, 0)
     const totalBalance = summaries.reduce((s, r) => s + r.balance, 0)
-    const totalAlloc = 6_800_000
-    return { balance: totalBalance, pnl: totalPnl, pnlPct: (totalPnl / totalAlloc) * 100 }
+    return { balance: totalBalance, pnl: totalPnl, pnlPct: (totalPnl / 6_800_000) * 100 }
   }, [summaries])
 
   return (
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-px" style={{ background: 'var(--border-subtle)' }}>
+      {summaries.map(({ ex, balance, pnl, pnlPct, subCount }) => (
+        <ExchangeCard
+          key={ex.id}
+          label={ex.name}
+          accentColor={ex.color}
+          balance={balance}
+          pnl={pnl}
+          pnlPct={pnlPct}
+          subCount={subCount}
+        />
+      ))}
+      <ExchangeCard
+        label="Portfolio"
+        accentColor="var(--accent-gold)"
+        balance={total.balance}
+        pnl={total.pnl}
+        pnlPct={total.pnlPct}
+        subCount={7}
+      />
+    </div>
+  )
+}
+
+interface ExchangeCardProps {
+  label: string
+  accentColor: string
+  balance: number
+  pnl: number
+  pnlPct: number
+  subCount: number
+}
+
+function ExchangeCard({ label, accentColor, balance, pnl, pnlPct, subCount }: ExchangeCardProps) {
+  const isPos = pnl >= 0
+  const pnlColor = isPos ? 'var(--accent-profit)' : 'var(--accent-loss)'
+
+  return (
     <div
-      className="px-4 py-2 grid grid-cols-2 lg:grid-cols-4 gap-px"
-      style={{ background: 'var(--border-subtle)' }}
+      className="px-4 py-3 flex flex-col gap-2"
+      style={{ background: 'var(--bg-secondary)', borderLeft: `2px solid ${accentColor}` }}
     >
-      {summaries.map(({ ex, balance, pnl, pnlPct, subCount }) => {
-        const isPos = pnl >= 0
-        return (
-          <div
-            key={ex.id}
-            className="px-4 py-3 flex flex-col gap-1.5"
-            style={{ background: 'var(--bg-secondary)', borderLeft: `2px solid ${ex.color}` }}
-          >
-            {/* Exchange header */}
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] font-semibold tracking-widest uppercase" style={{ color: ex.color }}>
-                {ex.name}
-              </span>
-              <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                {subCount} {subCount === 1 ? 'account' : 'accounts'}
-              </span>
-            </div>
+      {/* Exchange name + account count */}
+      <div className="flex items-center justify-between">
+        {/* Bold Inter, larger — institutional terminal look */}
+        <span
+          className="text-sm font-bold uppercase tracking-widest"
+          style={{ color: accentColor, fontFamily: 'var(--font-inter)' }}
+        >
+          {label}
+        </span>
+        <span
+          className="text-xs tracking-wide"
+          style={{ color: 'var(--text-muted)' }}
+        >
+          {subCount} {subCount === 1 ? 'acct' : 'accts'}
+        </span>
+      </div>
 
-            {/* Balance */}
-            <div className="font-mono text-base font-bold tracking-tight leading-none" style={{ color: 'var(--text-primary)' }}>
-              {formatMoney(balance)}
-            </div>
-
-            {/* PnL row */}
-            <div className="flex items-center gap-2">
-              <span
-                className="font-mono text-xs"
-                style={{ color: isPos ? 'var(--accent-profit)' : 'var(--accent-loss)' }}
-              >
-                {isPos ? '+' : ''}{formatMoney(pnl)}
-              </span>
-              <span
-                className="text-[10px]"
-                style={{ color: isPos ? 'var(--accent-profit)' : 'var(--accent-loss)', opacity: 0.7 }}
-              >
-                ({isPos ? '+' : ''}{formatPercent(pnlPct)})
-              </span>
-            </div>
-          </div>
-        )
-      })}
-
-      {/* Total card */}
+      {/* Balance — large Geist Mono */}
       <div
-        className="px-4 py-3 flex flex-col gap-1.5"
-        style={{ background: 'var(--bg-secondary)', borderLeft: '2px solid var(--accent-gold)' }}
+        className="font-mono text-2xl font-bold leading-none tabular"
+        style={{ color: 'var(--text-primary)', letterSpacing: '-0.02em' }}
       >
-        <div className="flex items-center justify-between">
-          <span className="text-[10px] font-semibold tracking-widest uppercase" style={{ color: 'var(--accent-gold)' }}>
-            Portfolio
-          </span>
-          <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-            7 accounts
-          </span>
-        </div>
+        {formatMoney(balance)}
+      </div>
 
-        <div className="font-mono text-base font-bold tracking-tight leading-none" style={{ color: 'var(--text-primary)' }}>
-          {formatMoney(total.balance)}
-        </div>
-
-        <div className="flex items-center gap-2">
-          <span
-            className="font-mono text-xs"
-            style={{ color: total.pnl >= 0 ? 'var(--accent-profit)' : 'var(--accent-loss)' }}
-          >
-            {total.pnl >= 0 ? '+' : ''}{formatMoney(total.pnl)}
-          </span>
-          <span
-            className="text-[10px]"
-            style={{ color: total.pnl >= 0 ? 'var(--accent-profit)' : 'var(--accent-loss)', opacity: 0.7 }}
-          >
-            ({total.pnl >= 0 ? '+' : ''}{formatPercent(total.pnlPct)})
-          </span>
-        </div>
+      {/* PnL row */}
+      <div className="flex items-center gap-2">
+        <span
+          className="font-mono text-sm font-semibold"
+          style={{ color: pnlColor }}
+        >
+          {isPos ? '+' : ''}{formatMoney(pnl)}
+        </span>
+        <span
+          className="text-xs tracking-wide"
+          style={{ color: pnlColor, opacity: 0.65 }}
+        >
+          {isPos ? '+' : ''}{formatPercent(pnlPct)}
+        </span>
       </div>
     </div>
   )

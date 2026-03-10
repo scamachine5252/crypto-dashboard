@@ -1,6 +1,6 @@
 @import "tailwindcss";
 
-/* ─── Design tokens ────────────────────────────────────────────────────── */
+/* ─── Dark theme (default) ─────────────────────────────────────────────── */
 :root {
   /* Backgrounds */
   --bg-primary:    #0A0A0F;
@@ -18,7 +18,7 @@
   --text-secondary: #6B7A99;
   --text-muted:     #3D4A66;
 
-  /* Accents */
+  /* Accents — same in both themes */
   --accent-profit: #00FF88;
   --accent-loss:   #FF3B3B;
   --accent-gold:   #FFD700;
@@ -28,6 +28,27 @@
   --exchange-binance: #F0B90B;
   --exchange-bybit:   #FF6B2C;
   --exchange-okx:     #4F8EF7;
+}
+
+/* ─── Light theme ───────────────────────────────────────────────────────── */
+.light {
+  --bg-primary:    #F0F2F8;
+  --bg-secondary:  #FFFFFF;
+  --bg-tertiary:   #E8EBF4;
+  --bg-elevated:   #FFFFFF;
+
+  --border-subtle: #DDE0EE;
+  --border-medium: #C5C9DB;
+  --border-strong: #A8ADC5;
+
+  --text-primary:   #0A0A1F;
+  --text-secondary: #48556A;
+  --text-muted:     #8896AE;
+
+  --accent-profit: #00A854;
+  --accent-loss:   #D93030;
+  --accent-gold:   #B8860B;
+  --accent-blue:   #1A5FE8;
 }
 
 /* ─── Tailwind theme ───────────────────────────────────────────────────── */
@@ -46,6 +67,11 @@ body {
   font-family: var(--font-inter), system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* ─── Theme transition ──────────────────────────────────────────────────── */
+body, header, main, div, section, aside, nav, button, input, select, a, p, span, td, th {
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
 }
 
 /* ─── Utility classes ──────────────────────────────────────────────────── */
@@ -78,6 +104,10 @@ body {
   to   { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 .animate-skeleton {
   animation: pulse-skeleton 1.6s ease-in-out infinite;
 }
@@ -92,6 +122,10 @@ body {
 
 .animate-slide-down {
   animation: slide-down 0.15s ease-out both;
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
 }
 
 /* ─── Scrollbar ────────────────────────────────────────────────────────── */

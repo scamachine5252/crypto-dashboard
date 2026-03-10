@@ -2,8 +2,9 @@
 
 import { useState, useRef, useCallback } from 'react'
 import { useAuth } from '@/lib/auth-context'
+import { useTheme } from '@/lib/theme-context'
 import { useRouter } from 'next/navigation'
-import { TrendingUp, LogOut, User, Activity, ChevronDown } from 'lucide-react'
+import { TrendingUp, LogOut, User, Activity, ChevronDown, Sun, Moon } from 'lucide-react'
 import { formatMoney, formatPercent } from '@/lib/utils'
 import NavDropdown from './NavDropdown'
 
@@ -14,12 +15,13 @@ interface HeaderProps {
 
 export default function Header({ totalPnl, annualYield }: HeaderProps) {
   const { user, logout } = useAuth()
+  const { theme, toggle: toggleTheme } = useTheme()
   const router = useRouter()
   const [navOpen, setNavOpen] = useState(false)
   const navRef = useRef<HTMLDivElement>(null)
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const openNav  = useCallback(() => {
+  const openNav = useCallback(() => {
     if (closeTimer.current) clearTimeout(closeTimer.current)
     setNavOpen(true)
   }, [])
@@ -37,9 +39,9 @@ export default function Header({ totalPnl, annualYield }: HeaderProps) {
 
   return (
     <header
-      className="sticky top-0 z-50 px-6 flex items-center justify-between h-16"
+      className="sticky top-0 z-50 px-6 flex items-center justify-between h-14"
       style={{
-        background: 'rgba(10,10,15,0.95)',
+        background: theme === 'light' ? 'rgba(240,242,248,0.95)' : 'rgba(10,10,15,0.95)',
         backdropFilter: 'blur(12px)',
         borderBottom: '1px solid var(--border-subtle)',
       }}
@@ -52,10 +54,10 @@ export default function Header({ totalPnl, annualYield }: HeaderProps) {
         onMouseLeave={closeNav}
       >
         <div
-          className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+          className="w-7 h-7 rounded flex items-center justify-center shrink-0"
           style={{ background: 'var(--accent-blue)' }}
         >
-          <TrendingUp className="w-4 h-4 text-white" />
+          <TrendingUp className="w-3.5 h-3.5 text-white" />
         </div>
         <div className="hidden sm:block">
           <p
@@ -64,70 +66,102 @@ export default function Header({ totalPnl, annualYield }: HeaderProps) {
           >
             NEXUS FUND
           </p>
-          <p className="text-[10px] tracking-widest uppercase leading-none mt-0.5"
+          <p
+            className="text-[10px] tracking-widest uppercase leading-none mt-0.5"
             style={{ color: 'var(--text-muted)' }}
           >
             PnL Dashboard
           </p>
         </div>
         <ChevronDown
-          className="w-3 h-3 hidden sm:block transition-transform duration-150"
+          className="w-3 h-3 hidden sm:block"
           style={{
             color: 'var(--text-muted)',
             transform: navOpen ? 'rotate(180deg)' : 'rotate(0deg)',
+            transition: 'transform 0.15s ease',
           }}
         />
         {navOpen && <NavDropdown />}
       </div>
 
       {/* Center — total PnL */}
-      <div className="flex items-center gap-6">
-        <div
-          className="hidden md:flex items-center gap-2 rounded-lg px-4 py-2"
-          style={{
-            background: 'var(--bg-secondary)',
-            border: '1px solid var(--border-subtle)',
-          }}
+      <div
+        className="hidden md:flex items-center gap-2 px-4 py-1.5"
+        style={{
+          background: 'var(--bg-secondary)',
+          border: '1px solid var(--border-subtle)',
+        }}
+      >
+        <Activity className="w-3 h-3" style={{ color: 'var(--text-muted)' }} />
+        <span className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>
+          Total P&L
+        </span>
+        <span
+          className="font-mono text-sm font-bold ml-1 tabular"
+          style={{ color: isPositive ? 'var(--accent-profit)' : 'var(--accent-loss)' }}
         >
-          <Activity className="w-3.5 h-3.5" style={{ color: 'var(--text-muted)' }} />
-          <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>Total PnL</span>
-          <span
-            className="text-sm font-bold ml-1 tabular"
-            style={{ color: isPositive ? 'var(--accent-profit)' : 'var(--accent-loss)' }}
-          >
-            {isPositive ? '+' : ''}{formatMoney(totalPnl)}
-          </span>
-          <span
-            className="text-xs ml-1 tabular"
-            style={{ color: isPositive ? 'color-mix(in srgb, var(--accent-profit) 60%, transparent)' : 'color-mix(in srgb, var(--accent-loss) 60%, transparent)' }}
-          >
-            ({formatPercent(annualYield)})
-          </span>
-        </div>
+          {isPositive ? '+' : ''}{formatMoney(totalPnl)}
+        </span>
+        <span
+          className="font-mono text-xs tabular"
+          style={{ color: isPositive ? 'var(--accent-profit)' : 'var(--accent-loss)', opacity: 0.65 }}
+        >
+          ({formatPercent(annualYield)})
+        </span>
       </div>
 
-      {/* Right — user */}
-      <div className="flex items-center gap-3">
+      {/* Right — theme toggle + user + logout */}
+      <div className="flex items-center gap-2">
+        {/* User pill */}
         <div
-          className="hidden sm:flex items-center gap-2 rounded-lg px-3 py-1.5"
+          className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5"
           style={{
             color: 'var(--text-secondary)',
             background: 'var(--bg-secondary)',
             border: '1px solid var(--border-subtle)',
           }}
         >
-          <User className="w-3.5 h-3.5" />
+          <User className="w-3 h-3" />
           <span className="text-xs font-medium">{user?.username}</span>
         </div>
+
+        {/* Theme toggle */}
+        <button
+          onClick={toggleTheme}
+          className="flex items-center justify-center w-7 h-7 border"
+          style={{
+            background: 'var(--bg-secondary)',
+            borderColor: 'var(--border-subtle)',
+            color: 'var(--text-muted)',
+          }}
+          title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+          onMouseEnter={(e) => {
+            const el = e.currentTarget
+            el.style.color = 'var(--accent-gold)'
+            el.style.borderColor = 'var(--accent-gold)'
+          }}
+          onMouseLeave={(e) => {
+            const el = e.currentTarget
+            el.style.color = 'var(--text-muted)'
+            el.style.borderColor = 'var(--border-subtle)'
+          }}
+        >
+          {theme === 'dark'
+            ? <Sun className="w-3.5 h-3.5" />
+            : <Moon className="w-3.5 h-3.5" />
+          }
+        </button>
+
+        {/* Logout */}
         <button
           onClick={handleLogout}
-          className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-transparent transition-colors"
+          className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 border border-transparent"
           style={{ color: 'var(--text-muted)' }}
           onMouseEnter={(e) => {
             const el = e.currentTarget
             el.style.color = 'var(--accent-loss)'
-            el.style.background = 'rgba(255,59,59,0.08)'
-            el.style.borderColor = 'rgba(255,59,59,0.2)'
+            el.style.background = 'rgba(255,59,59,0.07)'
+            el.style.borderColor = 'rgba(255,59,59,0.18)'
           }}
           onMouseLeave={(e) => {
             const el = e.currentTarget

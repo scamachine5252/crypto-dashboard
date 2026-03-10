@@ -49,8 +49,8 @@ export default function MetricCard({
       {/* Label row */}
       <div className="flex items-center justify-between">
         <span
-          className="text-[9px] font-semibold tracking-widest uppercase"
-          style={{ color: 'var(--text-muted)' }}
+          className="text-xs font-semibold tracking-widest uppercase"
+          style={{ color: 'var(--text-muted)', letterSpacing: '0.1em' }}
         >
           {label}
         </span>
@@ -81,7 +81,7 @@ export default function MetricCard({
 
       {/* Description */}
       {description && (
-        <p className="text-[10px] leading-tight" style={{ color: 'var(--text-muted)' }}>
+        <p className="text-xs leading-tight" style={{ color: 'var(--text-muted)' }}>
           {description}
         </p>
       )}
