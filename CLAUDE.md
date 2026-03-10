@@ -1,5 +1,96 @@
 # Crypto Hedge Fund Dashboard — Claude Instructions
 
+---
+
+## Project State
+*Update this section after every major change.*
+
+### Status: Phase 1 complete — full mock dashboard running
+
+### What has been built
+
+A full-stack dark-themed crypto hedge fund PnL dashboard. Authentication, filters, 10 financial metrics, an equity-curve chart, and a paginated orders table are all functional with deterministic mock data. No real exchange APIs are connected yet.
+
+**Credentials:** `admin` / `admin123`
+**Dev server:** `npm run dev` → `http://localhost:3000`
+
+---
+
+### File Structure
+
+```
+crypto-dashboard/          ← project root (NOT src/)
+├── app/
+│   ├── globals.css        ← dark theme, custom scrollbar, Tailwind v4 @theme block
+│   ├── layout.tsx         ← root layout: loads Geist fonts, wraps in <Providers>
+│   ├── page.tsx           ← server redirect → /dashboard
+│   ├── providers.tsx      ← 'use client' wrapper; mounts AuthProvider
+│   ├── login/
+│   │   └── page.tsx       ← imports LoginForm (thin server shell)
+│   └── dashboard/
+│       ├── layout.tsx     ← 'use client' auth guard; redirects → /login if not authed
+│       └── page.tsx       ← main dashboard; owns all filter state (useState/useMemo)
+│
+├── components/
+│   ├── auth/
+│   │   └── LoginForm.tsx  ← form, validation, show/hide password, demo-credential hint
+│   └── dashboard/
+│       ├── Header.tsx     ← sticky header: logo, total PnL badge, user pill, logout
+│       ├── FilterBar.tsx  ← exchange tab buttons + sub-account <select>; resets sub-account on exchange change
+│       ├── MetricCard.tsx ← single metric tile (label, value, trend color, icon, description)
+│       ├── MetricsGrid.tsx← 5×2 grid of MetricCards; maps Metrics → display config
+│       ├── PnLChart.tsx   ← recharts ComposedChart (Area cumulative + Bar period PnL, dual Y-axes)
+│       └── OrdersTable.tsx← sortable columns, client search, 15-row pagination
+│
+└── lib/
+    ├── types.ts           ← ALL shared interfaces: ExchangeId, Trade, DailyPnLEntry, Metrics, FilterState…
+    ├── utils.ts           ← formatMoney(), formatPercent(), formatPrice(), formatDate(), cn()
+    ├── auth-context.tsx   ← 'use client' AuthProvider + useAuth(); stores session in localStorage
+    ├── mock-data.ts       ← seeded mulberry32 RNG; generates 365 days × 7 sub-accounts + ~1,400 trades
+    └── calculations.ts    ← calculateMetrics() (Sharpe, Sortino, MDD, CAGR…), aggregateChartData()
+```
+
+---
+
+### Key Decisions
+
+| Decision | Choice | Reason |
+|---|---|---|
+| Root layout | `app/` (not `src/`) | Default Next.js scaffold kept |
+| Auth | localStorage + React Context | Simple for mock phase; swap for JWT/session when real APIs arrive |
+| Mock data | Seeded deterministic RNG (mulberry32) | Same data every run; no committed fixtures |
+| Data range | 2025-01-01 → 2025-12-31 | Full calendar year gives meaningful weekly/monthly aggregation |
+| Filter state | Lives in `dashboard/page.tsx` | Single source of truth; all children receive filtered props |
+| Chart library | recharts `ComposedChart` | Dual Y-axes: Area (cumulative, left) + colored Bars (period PnL, right) |
+| Styling | Tailwind v4 + CSS variables | No `tailwind.config.js` needed; arbitrary values for brand colors |
+| Color palette | bg `#050b14`, card `#0a1628`, border `#152035`, green `#0ecb81`, red `#f6465d` | High-contrast dark terminal feel |
+| Exchange colors | Binance `#F0B90B`, Bybit `#FF6B2C`, OKX `#4F8EF7` | Matches each exchange's official brand |
+| Metrics source | Daily PnL → Sharpe/Sortino/MDD/CAGR; Trades → WinRate/PF/AvgWin/Fees | Correct financial separation |
+| Initial capital | $6,800,000 (used only for ratio calculations) | Realistic small-fund size |
+
+### Mock Data Profile
+
+| Sub-account | Exchange | Target Sharpe | Archetype |
+|---|---|---|---|
+| Alpha Fund | Binance | ~1.8 | Aggressive momentum |
+| Beta Fund | Binance | ~1.2 | Alt-coin mid-vol |
+| Gamma Stable | Binance | ~2.1 | Conservative yield |
+| Delta Perps | Bybit | ~1.0 | High-vol perpetuals |
+| Epsilon MM | Bybit | ~2.5 | Market making |
+| Zeta Options | OKX | ~1.3 | Options strategies |
+| Eta Arb | OKX | ~2.2 | Statistical arbitrage |
+
+### Next Steps (not yet built)
+
+- `lib/adapters/` — real exchange API adapters (Binance, Bybit, OKX)
+- `/api/` routes — server-side proxy for API keys (see Exchange API Notes below)
+- Proper session auth (NextAuth or JWT cookies) to replace localStorage
+- Date range picker for custom PnL windows
+- CSV / PDF export for the orders table
+- Per-trade notes / tagging
+
+---
+
 ## Project Overview
 This is a professional crypto hedge fund PnL dashboard built with Next.js, TypeScript, and Tailwind CSS.
 It tracks trading performance across Binance, Bybit, and OKX exchanges with sub-account support.
