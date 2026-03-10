@@ -74,6 +74,19 @@ export const EXCHANGES: ExchangeConfig[] = [
 ]
 
 // ---------------------------------------------------------------------------
+// Per-sub-account display colors (exchange family shades)
+// ---------------------------------------------------------------------------
+export const ACCOUNT_COLORS: Record<string, string> = {
+  'binance-alpha': '#F0B90B',
+  'binance-beta':  '#D4A00A',
+  'binance-gamma': '#A87C08',
+  'bybit-delta':   '#FF6B2C',
+  'bybit-epsilon': '#CC4F18',
+  'okx-zeta':      '#4F8EF7',
+  'okx-eta':       '#2B6AD0',
+}
+
+// ---------------------------------------------------------------------------
 // Per-sub-account risk / return config
 // ---------------------------------------------------------------------------
 interface SubCfg {

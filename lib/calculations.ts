@@ -1,4 +1,4 @@
-import type { DailyPnLEntry, Metrics, Trade, ChartDataPoint, Timeframe, Period, DateRange, HistoryFilterState } from './types'
+import type { DailyPnLEntry, Metrics, Trade, ChartDataPoint, Timeframe, Period, DateRange, HistoryFilterState, MetricTimeSeries } from './types'
 
 const INITIAL_CAPITAL = 6_800_000
 const RISK_FREE_DAILY = 0.05 / 252
@@ -249,4 +249,65 @@ export function summarizeFilteredTrades(trades: Trade[]): { totalPnl: number; to
     totalFees: trades.reduce((s, t) => s + t.fee, 0),
     count: trades.length,
   }
+}
+
+// ---------------------------------------------------------------------------
+// Metric time series — one snapshot per time bucket per sub-account
+// Used by the Performance Indicators page chart
+// ---------------------------------------------------------------------------
+export function buildMetricTimeSeries(
+  allDaily: DailyPnLEntry[],
+  allTrades: Trade[],
+  subAccountIds: string[],
+  timeframe: 'weekly' | 'monthly',
+  metric: keyof Metrics,
+  dateRange: DateRange,
+): MetricTimeSeries[] {
+  const daily = filterByDateRange(allDaily, dateRange)
+  const trades = allTrades.filter((t) => {
+    const d = t.closedAt.slice(0, 10)
+    return d >= dateRange.start && d <= dateRange.end
+  })
+
+  const getBucketKey = (date: string): string => {
+    if (timeframe === 'weekly') {
+      const d = new Date(date + 'T00:00:00Z')
+      const week = getWeekNumber(d)
+      return `${d.getUTCFullYear()}-W${String(week).padStart(2, '0')}`
+    }
+    return date.slice(0, 7) // YYYY-MM
+  }
+
+  const getBucketLabel = (key: string): string => {
+    if (timeframe === 'weekly') return key
+    const [yr, mo] = key.split('-')
+    return new Date(parseInt(yr), parseInt(mo) - 1, 1).toLocaleDateString('en-US', {
+      month: 'short',
+      year: '2-digit',
+    })
+  }
+
+  // Ordered unique bucket keys from filtered data
+  const bucketSet = new Set<string>()
+  for (const e of daily) bucketSet.add(getBucketKey(e.date))
+  const buckets = [...bucketSet].sort()
+
+  if (buckets.length === 0) return []
+
+  return buckets.map((bucket) => {
+    const snapshot: MetricTimeSeries = { date: getBucketLabel(bucket) }
+
+    for (const saId of subAccountIds) {
+      const saDaily = daily.filter(
+        (e) => e.subAccountId === saId && getBucketKey(e.date) === bucket,
+      )
+      const saTrades = trades.filter(
+        (t) => t.subAccountId === saId && getBucketKey(t.closedAt.slice(0, 10)) === bucket,
+      )
+      const m = calculateMetrics(saDaily, saTrades)
+      snapshot[saId] = m[metric] as number
+    }
+
+    return snapshot
+  })
 }

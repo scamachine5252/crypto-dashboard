@@ -6,6 +6,7 @@ import {
   normalizeEquityCurve,
   filterTradesAdvanced,
   summarizeFilteredTrades,
+  buildMetricTimeSeries,
 } from '../calculations'
 import type { DailyPnLEntry, Trade, HistoryFilterState } from '../types'
 
@@ -329,5 +330,75 @@ describe('summarizeFilteredTrades', () => {
     expect(result.totalPnl).toBe(200)
     expect(result.totalFees).toBe(15)
     expect(result.count).toBe(2)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// buildMetricTimeSeries
+// ---------------------------------------------------------------------------
+describe('buildMetricTimeSeries', () => {
+  const DR = { start: '2025-01-01', end: '2025-12-31' }
+
+  it('returns empty array for empty daily input', () => {
+    const result = buildMetricTimeSeries([], [], ['sub-a'], 'monthly', 'totalPnl', DR)
+    expect(result).toEqual([])
+  })
+
+  it('returns one entry per monthly bucket', () => {
+    // 3 full months: Jan + Feb + Mar
+    const jan = makeDaily(31, 100, 'sub-a')
+    const feb = makeDaily(28, 100, 'sub-a').map((e) => ({
+      ...e,
+      date: new Date(Date.UTC(2025, 1, parseInt(e.date.slice(8)) )).toISOString().slice(0, 10),
+    }))
+    const daily = [...jan, ...feb]
+    const result = buildMetricTimeSeries(daily, [], ['sub-a'], 'monthly', 'totalPnl', { start: '2025-01-01', end: '2025-02-28' })
+    expect(result.length).toBe(2)
+  })
+
+  it('each snapshot contains the sub-account key with a numeric value', () => {
+    const daily = makeDaily(31, 200, 'sub-a')
+    const result = buildMetricTimeSeries(daily, [], ['sub-a'], 'monthly', 'totalPnl', { start: '2025-01-01', end: '2025-01-31' })
+    expect(result.length).toBe(1)
+    expect(typeof result[0]['sub-a']).toBe('number')
+  })
+
+  it('totalPnl bucket value equals sum of period daily pnl', () => {
+    const daily = makeDaily(31, 100, 'sub-a')  // Jan: 31 days × 100 = 3100
+    const result = buildMetricTimeSeries(daily, [], ['sub-a'], 'monthly', 'totalPnl', { start: '2025-01-01', end: '2025-01-31' })
+    expect(result[0]['sub-a']).toBe(3100)
+  })
+
+  it('handles multiple sub-accounts in the same snapshot', () => {
+    const dailyA = makeDaily(31, 100, 'sub-a')
+    const dailyB = makeDaily(31, 200, 'sub-b')
+    const result = buildMetricTimeSeries([...dailyA, ...dailyB], [], ['sub-a', 'sub-b'], 'monthly', 'totalPnl', { start: '2025-01-01', end: '2025-01-31' })
+    expect(result[0]['sub-a']).toBe(3100)
+    expect(result[0]['sub-b']).toBe(6200)
+  })
+
+  it('respects dateRange (excludes data outside range)', () => {
+    const daily = makeDaily(60, 100, 'sub-a')  // Jan + Feb
+    const result = buildMetricTimeSeries(daily, [], ['sub-a'], 'monthly', 'totalPnl', { start: '2025-01-01', end: '2025-01-31' })
+    expect(result.length).toBe(1)  // Only Jan bucket
+  })
+
+  it('weekly timeframe produces more buckets than monthly for same data', () => {
+    const daily = makeDaily(60, 100, 'sub-a')
+    const monthly = buildMetricTimeSeries(daily, [], ['sub-a'], 'monthly', 'totalPnl', { start: '2025-01-01', end: '2025-03-01' })
+    const weekly  = buildMetricTimeSeries(daily, [], ['sub-a'], 'weekly',  'totalPnl', { start: '2025-01-01', end: '2025-03-01' })
+    expect(weekly.length).toBeGreaterThan(monthly.length)
+  })
+
+  it('winRate is between 0 and 100 for period with trades', () => {
+    const daily = makeDaily(31, 100, 'sub-a')
+    const trades = [
+      makeTrade({ id: 't1', subAccountId: 'sub-a', pnl: 200, closedAt: '2025-01-15T12:00:00.000Z' }),
+      makeTrade({ id: 't2', subAccountId: 'sub-a', pnl: -50, closedAt: '2025-01-20T12:00:00.000Z' }),
+    ]
+    const result = buildMetricTimeSeries(daily, trades, ['sub-a'], 'monthly', 'winRate', { start: '2025-01-01', end: '2025-01-31' })
+    const val = result[0]['sub-a'] as number
+    expect(val).toBeGreaterThanOrEqual(0)
+    expect(val).toBeLessThanOrEqual(100)
   })
 })
