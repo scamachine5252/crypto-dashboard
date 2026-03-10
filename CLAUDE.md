@@ -97,6 +97,76 @@ It tracks trading performance across Binance, Bybit, and OKX exchanges with sub-
 
 ---
 
+## Skill: TDD
+
+All functions in `lib/calculations.ts` must be developed test-first using Jest.
+
+### Rules
+
+- **Write tests before implementation.** Never add a new calculation function without a failing test first.
+- **Test file location:** `lib/__tests__/calculations.test.ts` — no exceptions.
+- **Run tests before committing:** `npm test` must pass with zero failures.
+
+### Workflow for every new calculation
+
+1. Write a `describe` block in `calculations.test.ts` for the new function.
+2. Add `it()` cases covering: normal input, edge cases (empty array, zeros, single element), and negative values.
+3. Run `npm test` — confirm tests **fail** (red).
+4. Implement the function in `calculations.ts`.
+5. Run `npm test` — confirm tests **pass** (green).
+6. Refactor if needed, keeping tests green.
+
+### Required test cases per function
+
+| Function | Must cover |
+|---|---|
+| `calculateMetrics` | empty input returns zero metrics; positive PnL; negative PnL; single-day data |
+| `aggregateChartData` | daily (last 90 days), weekly, monthly aggregation; empty input; single entry |
+| Any new metric helper | happy path, zero denominator (no division by zero), all-loss / all-win edge cases |
+
+### Jest setup
+
+```bash
+npm install --save-dev jest @types/jest ts-jest
+```
+
+`jest.config.ts`:
+```ts
+export default {
+  preset: 'ts-jest',
+  testEnvironment: 'node',
+  moduleNameMapper: { '^@/(.*)$': '<rootDir>/$1' },
+}
+```
+
+`package.json` scripts:
+```json
+"test": "jest",
+"test:watch": "jest --watch"
+```
+
+### Example test structure
+
+```ts
+// lib/__tests__/calculations.test.ts
+import { calculateMetrics, aggregateChartData } from '../calculations'
+
+describe('calculateMetrics', () => {
+  it('returns zero metrics for empty input', () => {
+    const result = calculateMetrics([], [])
+    expect(result.sharpeRatio).toBe(0)
+    expect(result.totalPnl).toBe(0)
+    expect(result.totalTrades).toBe(0)
+  })
+
+  it('calculates positive sharpe for consistently profitable days', () => {
+    // build deterministic daily data, assert sharpeRatio > 0
+  })
+})
+```
+
+---
+
 ## Skill: Frontend Design
 
 Before writing any UI code, commit to a bold aesthetic direction:
