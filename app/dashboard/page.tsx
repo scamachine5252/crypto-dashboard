@@ -6,6 +6,7 @@ import { filterDailyPnL, filterTrades } from '@/lib/mock-data'
 import { calculateMetrics, aggregateChartData, resolveDateRange, filterByDateRange } from '@/lib/calculations'
 import Header from '@/components/layout/Header'
 import FilterBar from '@/components/layout/FilterBar'
+import BalanceCards from '@/components/metrics/BalanceCards'
 import MetricsGrid from '@/components/metrics/MetricsGrid'
 import PnLChart from '@/components/charts/PnLChart'
 import OrdersTable from '@/components/orders/OrdersTable'
@@ -59,12 +60,15 @@ export default function DashboardPage() {
 
       <FilterBar filter={filter} onChange={setFilter} />
 
+      {/* Balance cards */}
+      <BalanceCards />
+
       {/* Period selector */}
       <div
-        className="px-4 py-2 flex items-center gap-3"
-        style={{ borderBottom: '1px solid var(--border-subtle)' }}
+        className="px-4 py-1.5 flex items-center gap-3"
+        style={{ borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-secondary)' }}
       >
-        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Period</span>
+        <span className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>Period</span>
         <PeriodSelector
           value={filter.period}
           customRange={customRange}
@@ -72,7 +76,7 @@ export default function DashboardPage() {
         />
       </div>
 
-      <main className="flex-1 py-2">
+      <main className="flex-1 pt-2 pb-4">
         <MetricsGrid metrics={metrics} />
         <PnLChart
           data={chartData}

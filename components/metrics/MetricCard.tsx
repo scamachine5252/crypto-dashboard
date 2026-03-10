@@ -1,4 +1,3 @@
-import { cn } from '@/lib/utils'
 import type { ReactNode } from 'react'
 
 interface MetricCardProps {
@@ -10,6 +9,18 @@ interface MetricCardProps {
   description?: string
 }
 
+const TREND_COLOR: Record<string, string> = {
+  positive: 'var(--accent-profit)',
+  negative: 'var(--accent-loss)',
+  neutral:  'var(--text-primary)',
+}
+
+const TREND_BORDER: Record<string, string> = {
+  positive: 'var(--accent-profit)',
+  negative: 'var(--accent-loss)',
+  neutral:  'var(--border-medium)',
+}
+
 export default function MetricCard({
   label,
   value,
@@ -18,37 +29,61 @@ export default function MetricCard({
   icon,
   description,
 }: MetricCardProps) {
-  const valueColor =
-    trend === 'positive'
-      ? 'text-[#0ecb81]'
-      : trend === 'negative'
-      ? 'text-[#f6465d]'
-      : 'text-[#e8f0fe]'
-
   return (
-    <div className="bg-[#0a1628] border border-[#152035] rounded-xl p-4 flex flex-col gap-2 hover:border-[#1a2d45] transition-colors group">
+    <div
+      className="px-3 py-2.5 flex flex-col gap-1.5 transition-colors"
+      style={{
+        background: 'var(--bg-secondary)',
+        borderTop: `1px solid var(--border-subtle)`,
+        borderRight: `1px solid var(--border-subtle)`,
+        borderBottom: `1px solid var(--border-subtle)`,
+        borderLeft: `2px solid ${TREND_BORDER[trend]}`,
+      }}
+      onMouseEnter={(e) => {
+        ;(e.currentTarget as HTMLElement).style.background = 'var(--bg-elevated)'
+      }}
+      onMouseLeave={(e) => {
+        ;(e.currentTarget as HTMLElement).style.background = 'var(--bg-secondary)'
+      }}
+    >
+      {/* Label row */}
       <div className="flex items-center justify-between">
-        <span className="text-[#4d6b8e] text-xs font-medium uppercase tracking-wider">
+        <span
+          className="text-[9px] font-semibold tracking-widest uppercase"
+          style={{ color: 'var(--text-muted)' }}
+        >
           {label}
         </span>
         {icon && (
-          <span className="text-[#1a2d45] group-hover:text-[#4d6b8e] transition-colors">
+          <span style={{ color: 'var(--border-medium)' }}>
             {icon}
           </span>
         )}
       </div>
 
-      <div className="flex items-end gap-2">
-        <span className={cn('text-2xl font-bold tabular-nums leading-none', valueColor)}>
+      {/* Value row */}
+      <div className="flex items-baseline gap-1.5">
+        <span
+          className="font-mono text-xl font-bold leading-none tabular"
+          style={{ color: TREND_COLOR[trend] }}
+        >
           {value}
         </span>
         {subValue && (
-          <span className="text-[#4d6b8e] text-xs mb-0.5 leading-none">{subValue}</span>
+          <span
+            className="font-mono text-xs leading-none"
+            style={{ color: 'var(--text-muted)' }}
+          >
+            {subValue}
+          </span>
         )}
       </div>
 
+      {/* Description */}
       {description && (
-        <p className="text-[#4d6b8e] text-[11px] leading-relaxed">{description}</p>
+        <p className="text-[10px] leading-tight" style={{ color: 'var(--text-muted)' }}>
+          {description}
+        </p>
       )}
     </div>
   )

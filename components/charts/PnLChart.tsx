@@ -14,7 +14,6 @@ import {
 } from 'recharts'
 import type { ChartDataPoint, Timeframe } from '@/lib/types'
 import { formatMoney } from '@/lib/utils'
-import { cn } from '@/lib/utils'
 
 interface PnLChartProps {
   data: ChartDataPoint[]
@@ -37,40 +36,24 @@ function CustomTooltip({ active, payload, label }: TooltipProps) {
   return (
     <div
       style={{
-        background: '#0f1e32',
-        border: '1px solid #1a2d45',
-        borderRadius: 10,
-        padding: '12px 16px',
+        background: 'var(--bg-elevated)',
+        border: '1px solid var(--border-medium)',
+        borderRadius: 2,
+        padding: '10px 14px',
         minWidth: 180,
       }}
     >
-      <p style={{ color: '#8ba3c7', fontSize: 11, marginBottom: 8 }}>{label}</p>
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, marginBottom: 6 }}>
-        <span style={{ color: '#4d6b8e', fontSize: 11 }}>Period P&L</span>
-        <span
-          style={{
-            color: isPos ? '#0ecb81' : '#f6465d',
-            fontSize: 13,
-            fontWeight: 700,
-            fontVariantNumeric: 'tabular-nums',
-          }}
-        >
-          {isPos ? '+' : ''}
-          {formatMoney(d.pnl)}
+      <p style={{ color: 'var(--text-muted)', fontSize: 10, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{label}</p>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, marginBottom: 5 }}>
+        <span style={{ color: 'var(--text-muted)', fontSize: 10 }}>Period P&L</span>
+        <span style={{ color: isPos ? 'var(--accent-profit)' : 'var(--accent-loss)', fontSize: 12, fontWeight: 700, fontFamily: 'var(--font-geist-mono)', fontVariantNumeric: 'tabular-nums' }}>
+          {isPos ? '+' : ''}{formatMoney(d.pnl)}
         </span>
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16 }}>
-        <span style={{ color: '#4d6b8e', fontSize: 11 }}>Cumulative</span>
-        <span
-          style={{
-            color: isCumPos ? '#e8f0fe' : '#f6465d',
-            fontSize: 13,
-            fontWeight: 700,
-            fontVariantNumeric: 'tabular-nums',
-          }}
-        >
-          {isCumPos ? '+' : ''}
-          {formatMoney(d.cumulativePnl)}
+        <span style={{ color: 'var(--text-muted)', fontSize: 10 }}>Cumulative</span>
+        <span style={{ color: isCumPos ? 'var(--text-primary)' : 'var(--accent-loss)', fontSize: 12, fontWeight: 700, fontFamily: 'var(--font-geist-mono)', fontVariantNumeric: 'tabular-nums' }}>
+          {isCumPos ? '+' : ''}{formatMoney(d.cumulativePnl)}
         </span>
       </div>
     </div>
@@ -78,16 +61,16 @@ function CustomTooltip({ active, payload, label }: TooltipProps) {
 }
 
 const TIMEFRAMES: { label: string; value: Timeframe }[] = [
-  { label: 'Daily', value: 'daily' },
-  { label: 'Weekly', value: 'weekly' },
+  { label: 'Daily',   value: 'daily' },
+  { label: 'Weekly',  value: 'weekly' },
   { label: 'Monthly', value: 'monthly' },
 ]
 
 export default function PnLChart({ data, timeframe, onTimeframeChange, totalPnl }: PnLChartProps) {
   const isPositive = totalPnl >= 0
-  const GREEN = '#0ecb81'
-  const RED = '#f6465d'
-  const areaColor = isPositive ? GREEN : RED
+  const GREEN = 'var(--accent-profit)'
+  const RED   = 'var(--accent-loss)'
+  const areaColor = isPositive ? '#00FF88' : '#FF3B3B'
 
   const tickInterval = Math.max(1, Math.floor(data.length / 9))
 
@@ -98,56 +81,70 @@ export default function PnLChart({ data, timeframe, onTimeframeChange, totalPnl 
   }
 
   return (
-    <div className="mx-6 mb-4 bg-[#0a1628] border border-[#152035] rounded-xl overflow-hidden">
+    <div
+      className="mx-4 mb-2"
+      style={{ border: '1px solid var(--border-subtle)' }}
+    >
       {/* Header */}
-      <div className="flex items-center justify-between px-5 py-4 border-b border-[#152035]">
-        <div>
-          <p className="text-[#e8f0fe] text-sm font-semibold">Cumulative PnL</p>
-          <p className="text-[#4d6b8e] text-xs mt-0.5">Equity curve + period returns</p>
+      <div
+        className="flex items-center justify-between px-4 py-2.5"
+        style={{ borderBottom: '1px solid var(--border-subtle)' }}
+      >
+        <div className="flex items-center gap-4">
+          <p
+            className="text-xs font-semibold tracking-wide font-heading"
+            style={{ color: 'var(--text-primary)' }}
+          >
+            CUMULATIVE P&L
+          </p>
+          <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+            Equity curve + period returns
+          </p>
         </div>
-        <div className="flex items-center gap-1 bg-[#0f1e32] rounded-lg p-1">
-          {TIMEFRAMES.map((tf) => (
-            <button
-              key={tf.value}
-              onClick={() => onTimeframeChange(tf.value)}
-              className={cn(
-                'px-3 py-1 rounded-md text-xs font-medium transition-all',
-                timeframe === tf.value
-                  ? 'bg-blue-600 text-white'
-                  : 'text-[#8ba3c7] hover:text-white'
-              )}
-            >
-              {tf.label}
-            </button>
-          ))}
+
+        {/* Timeframe tabs */}
+        <div className="flex items-center gap-px" style={{ border: '1px solid var(--border-subtle)' }}>
+          {TIMEFRAMES.map((tf) => {
+            const isActive = timeframe === tf.value
+            return (
+              <button
+                key={tf.value}
+                onClick={() => onTimeframeChange(tf.value)}
+                className="px-3 py-1 text-[10px] font-semibold tracking-wider uppercase transition-colors"
+                style={{
+                  background: isActive ? 'var(--bg-elevated)' : 'transparent',
+                  color: isActive ? 'var(--text-primary)' : 'var(--text-muted)',
+                  borderRight: tf.value !== 'monthly' ? '1px solid var(--border-subtle)' : 'none',
+                }}
+              >
+                {tf.label}
+              </button>
+            )
+          })}
         </div>
       </div>
 
       {/* Chart */}
-      <div className="p-5 pt-4">
+      <div className="px-4 py-3" style={{ background: 'var(--bg-secondary)' }}>
         {data.length === 0 ? (
-          <div className="h-64 flex items-center justify-center text-[#4d6b8e] text-sm">
+          <div className="h-56 flex items-center justify-center text-xs" style={{ color: 'var(--text-muted)' }}>
             No data for selected filter
           </div>
         ) : (
-          <ResponsiveContainer width="100%" height={300}>
-            <ComposedChart data={data} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
+          <ResponsiveContainer width="100%" height={260}>
+            <ComposedChart data={data} margin={{ top: 6, right: 8, left: 8, bottom: 0 }}>
               <defs>
                 <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor={areaColor} stopOpacity={0.2} />
+                  <stop offset="5%"  stopColor={areaColor} stopOpacity={0.15} />
                   <stop offset="95%" stopColor={areaColor} stopOpacity={0} />
                 </linearGradient>
               </defs>
 
-              <CartesianGrid
-                strokeDasharray="3 3"
-                stroke="#152035"
-                vertical={false}
-              />
+              <CartesianGrid strokeDasharray="2 4" stroke="var(--border-subtle)" vertical={false} />
 
               <XAxis
                 dataKey="period"
-                tick={{ fill: '#4d6b8e', fontSize: 10 }}
+                tick={{ fill: 'var(--text-muted)', fontSize: 9, fontFamily: 'var(--font-geist-mono)' }}
                 axisLine={false}
                 tickLine={false}
                 interval={tickInterval}
@@ -157,33 +154,29 @@ export default function PnLChart({ data, timeframe, onTimeframeChange, totalPnl 
                 yAxisId="cum"
                 orientation="left"
                 tickFormatter={formatY}
-                tick={{ fill: '#4d6b8e', fontSize: 10 }}
+                tick={{ fill: 'var(--text-muted)', fontSize: 9, fontFamily: 'var(--font-geist-mono)' }}
                 axisLine={false}
                 tickLine={false}
-                width={60}
+                width={56}
               />
 
               <YAxis
                 yAxisId="period"
                 orientation="right"
                 tickFormatter={formatY}
-                tick={{ fill: '#4d6b8e', fontSize: 10 }}
+                tick={{ fill: 'var(--text-muted)', fontSize: 9, fontFamily: 'var(--font-geist-mono)' }}
                 axisLine={false}
                 tickLine={false}
-                width={60}
+                width={56}
               />
 
-              <Tooltip content={<CustomTooltip />} cursor={{ stroke: '#1a2d45', strokeWidth: 1 }} />
+              <Tooltip content={<CustomTooltip />} cursor={{ stroke: 'var(--border-medium)', strokeWidth: 1 }} />
 
-              <ReferenceLine yAxisId="cum" y={0} stroke="#1a2d45" strokeDasharray="3 3" />
+              <ReferenceLine yAxisId="cum" y={0} stroke="var(--border-medium)" strokeDasharray="2 4" />
 
-              <Bar yAxisId="period" dataKey="pnl" maxBarSize={6} radius={[2, 2, 0, 0]}>
+              <Bar yAxisId="period" dataKey="pnl" maxBarSize={5} radius={[1, 1, 0, 0]}>
                 {data.map((entry, i) => (
-                  <Cell
-                    key={i}
-                    fill={entry.pnl >= 0 ? GREEN : RED}
-                    fillOpacity={0.65}
-                  />
+                  <Cell key={i} fill={entry.pnl >= 0 ? '#00FF88' : '#FF3B3B'} fillOpacity={0.55} />
                 ))}
               </Bar>
 
@@ -192,10 +185,10 @@ export default function PnLChart({ data, timeframe, onTimeframeChange, totalPnl 
                 type="monotone"
                 dataKey="cumulativePnl"
                 stroke={areaColor}
-                strokeWidth={2}
+                strokeWidth={1.5}
                 fill="url(#areaGrad)"
                 dot={false}
-                activeDot={{ r: 4, fill: areaColor, stroke: '#0a1628', strokeWidth: 2 }}
+                activeDot={{ r: 3, fill: areaColor, stroke: 'var(--bg-secondary)', strokeWidth: 2 }}
               />
             </ComposedChart>
           </ResponsiveContainer>

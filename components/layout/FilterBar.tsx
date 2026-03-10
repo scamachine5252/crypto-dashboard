@@ -2,7 +2,6 @@
 
 import { EXCHANGES } from '@/lib/mock-data'
 import type { FilterState, ExchangeId } from '@/lib/types'
-import { cn } from '@/lib/utils'
 
 interface FilterBarProps {
   filter: FilterState
@@ -27,80 +26,94 @@ export default function FilterBar({ filter, onChange }: FilterBarProps) {
   }
 
   return (
-    <div className="bg-[#0a1628] border-b border-[#152035] px-6 py-3 flex flex-wrap items-center gap-4">
+    <div
+      className="px-4 py-1.5 flex flex-wrap items-center gap-3"
+      style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-subtle)' }}
+    >
       {/* Exchange tabs */}
-      <div className="flex items-center gap-1">
-        <button
+      <div className="flex items-center gap-px" style={{ border: '1px solid var(--border-subtle)' }}>
+        <ExTabBtn
+          active={filter.exchangeId === 'all'}
           onClick={() => handleExchange('all')}
-          className={cn(
-            'px-3 py-1.5 rounded-md text-xs font-medium transition-all',
-            filter.exchangeId === 'all'
-              ? 'bg-blue-600 text-white'
-              : 'text-[#8ba3c7] hover:text-white hover:bg-[#0f1e32]'
-          )}
+          color={undefined}
         >
-          All Exchanges
-        </button>
+          All
+        </ExTabBtn>
         {EXCHANGES.map((ex) => (
-          <button
+          <ExTabBtn
             key={ex.id}
+            active={filter.exchangeId === ex.id}
             onClick={() => handleExchange(ex.id)}
-            className={cn(
-              'px-3 py-1.5 rounded-md text-xs font-medium transition-all flex items-center gap-1.5',
-              filter.exchangeId === ex.id
-                ? 'text-white'
-                : 'text-[#8ba3c7] hover:text-white hover:bg-[#0f1e32]'
-            )}
-            style={
-              filter.exchangeId === ex.id
-                ? { backgroundColor: ex.color + '22', color: ex.color }
-                : {}
-            }
+            color={ex.color}
           >
-            <span
-              className="w-1.5 h-1.5 rounded-full"
-              style={{ backgroundColor: ex.color }}
-            />
             {ex.name}
-          </button>
+          </ExTabBtn>
         ))}
       </div>
 
       {/* Divider */}
-      <div className="h-5 w-px bg-[#152035] hidden sm:block" />
+      <div className="h-4 w-px hidden sm:block" style={{ background: 'var(--border-subtle)' }} />
 
-      {/* Sub-account dropdown */}
+      {/* Sub-account */}
       <div className="flex items-center gap-2">
-        <span className="text-[#4d6b8e] text-xs">Account:</span>
+        <span className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>
+          Account
+        </span>
         <select
           value={filter.subAccountId}
           onChange={(e) => handleSubAccount(e.target.value)}
           disabled={filter.exchangeId === 'all'}
-          className="bg-[#0f1e32] border border-[#1a2d45] text-[#e8f0fe] text-xs rounded-md px-3 py-1.5 outline-none focus:border-blue-500 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-          style={
-            selectedExchange && filter.subAccountId !== 'all'
-              ? { borderColor: selectedExchange.color + '44' }
-              : {}
-          }
+          className="text-xs px-2.5 py-1 outline-none disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+          style={{
+            background: 'var(--bg-tertiary)',
+            border: `1px solid ${selectedExchange && filter.subAccountId !== 'all' ? selectedExchange.color + '44' : 'var(--border-medium)'}`,
+            color: 'var(--text-primary)',
+            borderRadius: 2,
+          }}
         >
           <option value="all">All Accounts</option>
           {subAccounts.map((sa) => (
-            <option key={sa.id} value={sa.id}>
-              {sa.name}
-            </option>
+            <option key={sa.id} value={sa.id}>{sa.name}</option>
           ))}
         </select>
       </div>
 
-      {/* Active filter badge */}
+      {/* Clear */}
       {(filter.exchangeId !== 'all' || filter.subAccountId !== 'all') && (
         <button
           onClick={() => onChange({ ...filter, exchangeId: 'all', subAccountId: 'all' })}
-          className="ml-auto text-[#4d6b8e] hover:text-[#f6465d] text-xs flex items-center gap-1 transition-colors"
+          className="ml-auto text-[10px] uppercase tracking-widest transition-colors"
+          style={{ color: 'var(--text-muted)' }}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = 'var(--accent-loss)' }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)' }}
         >
-          ✕ Clear filter
+          ✕ Clear
         </button>
       )}
     </div>
+  )
+}
+
+function ExTabBtn({
+  active, onClick, color, children,
+}: {
+  active: boolean
+  onClick: () => void
+  color: string | undefined
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="px-3 py-1 text-[10px] font-semibold tracking-wider uppercase transition-colors flex items-center gap-1.5"
+      style={{
+        background: active ? 'var(--bg-elevated)' : 'transparent',
+        color: active ? (color ?? 'var(--text-primary)') : 'var(--text-muted)',
+        borderRight: '1px solid var(--border-subtle)',
+      }}
+    >
+      {color && <span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} />}
+      {children}
+    </button>
   )
 }
