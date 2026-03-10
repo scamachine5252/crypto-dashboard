@@ -198,6 +198,10 @@ function generateTrades(): Trade[] {
 
         const durMin = rng.int(30, 10_080)
         const closedAt = new Date(openedAt.getTime() + durMin * 60_000)
+        const isOvernight =
+          closedAt.getUTCDate() !== openedAt.getUTCDate() ||
+          closedAt.getUTCMonth() !== openedAt.getUTCMonth()
+        const leverage = tradeType === 'futures' ? rng.int(3, 25) : 1
 
         const entryPrice = lo + rng.next() * (hi - lo)
         const movePercent = rng.normal(0.008, 0.038)
@@ -209,6 +213,10 @@ function generateTrades(): Trade[] {
         const rawPnl = (exitPrice - entryPrice) * quantity * (side === 'long' ? 1 : -1)
         const feeRate = 0.0004 + rng.next() * 0.00028
         const fee = (entryPrice + exitPrice) * quantity * feeRate
+        // Funding cost: ~0.01% per 8 h on notional × leverage (futures only)
+        const fundingCost = tradeType === 'futures'
+          ? Math.round(entryPrice * quantity * leverage * 0.0001 * (durMin / 480))
+          : 0
         const pnl = rawPnl - fee
         const pnlPercent =
           ((exitPrice - entryPrice) / entryPrice) * 100 * (side === 'long' ? 1 : -1)
@@ -227,6 +235,9 @@ function generateTrades(): Trade[] {
           pnlPercent: Math.round(pnlPercent * 100) / 100,
           fee: Math.round(fee),
           durationMin: durMin,
+          leverage,
+          fundingCost,
+          isOvernight,
           openedAt: openedAt.toISOString(),
           closedAt: closedAt.toISOString(),
         })

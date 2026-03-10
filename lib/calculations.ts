@@ -1,4 +1,4 @@
-import type { DailyPnLEntry, Metrics, Trade, ChartDataPoint, Timeframe, Period, DateRange, HistoryFilterState, MetricTimeSeries } from './types'
+import type { DailyPnLEntry, Metrics, Trade, ChartDataPoint, Timeframe, Period, DateRange, HistoryFilterState, MetricTimeSeries, FuturesMetrics } from './types'
 
 const INITIAL_CAPITAL = 6_800_000
 const RISK_FREE_DAILY = 0.05 / 252
@@ -310,4 +310,38 @@ export function buildMetricTimeSeries(
 
     return snapshot
   })
+}
+
+// ---------------------------------------------------------------------------
+// Futures-specific metrics
+// ---------------------------------------------------------------------------
+export function calculateFuturesMetrics(trades: Trade[]): FuturesMetrics {
+  const futures = trades.filter((t) => t.tradeType === 'futures')
+
+  if (futures.length === 0) {
+    return {
+      totalFundingCost: 0,
+      averageLeverage: 0,
+      longShortRatio: 0,
+      liquidationDistancePct: 0,
+      overnightExposureCount: trades.filter((t) => t.isOvernight).length,
+    }
+  }
+
+  const totalFundingCost = futures.reduce((s, t) => s + t.fundingCost, 0)
+  const averageLeverage = futures.reduce((s, t) => s + t.leverage, 0) / futures.length
+  const longs = futures.filter((t) => t.side === 'long').length
+  const longShortRatio = (longs / futures.length) * 100
+  const liquidationDistancePct = futures.reduce((s, t) => s + 100 / t.leverage, 0) / futures.length
+  const overnightExposureCount = trades.filter((t) => t.isOvernight).length
+
+  const r1 = (v: number) => Math.round(v * 10) / 10
+
+  return {
+    totalFundingCost: Math.round(totalFundingCost),
+    averageLeverage: r1(averageLeverage),
+    longShortRatio: r1(longShortRatio),
+    liquidationDistancePct: r1(liquidationDistancePct),
+    overnightExposureCount,
+  }
 }

@@ -5,6 +5,7 @@ import type { Metrics, Period, DateRange } from '@/lib/types'
 import { EXCHANGES, getAllDailyPnL, getAllTrades, ACCOUNT_COLORS } from '@/lib/mock-data'
 import {
   calculateMetrics,
+  calculateFuturesMetrics,
   resolveDateRange,
   filterByDateRange,
   buildMetricTimeSeries,
@@ -12,6 +13,7 @@ import {
 import Header from '@/components/layout/Header'
 import PeriodSelector from '@/components/ui/PeriodSelector'
 import MetricSelector from '@/components/metrics/MetricSelector'
+import FuturesMetricsTiles from '@/components/metrics/FuturesMetricsTiles'
 import MetricLineChart from '@/components/charts/MetricLineChart'
 
 const ALL_ACCOUNTS = EXCHANGES.flatMap((ex) => ex.subAccounts)
@@ -65,7 +67,7 @@ export default function PerformancePage() {
   }, [])
 
   // Aggregate metrics for the selector tiles (all active accounts, full period)
-  const aggregateMetrics = useMemo(() => {
+  const { aggregateMetrics, futuresMetrics } = useMemo(() => {
     const daily = filterByDateRange(
       getAllDailyPnL().filter((e) => activeIds.has(e.subAccountId)),
       dateRange,
@@ -75,7 +77,10 @@ export default function PerformancePage() {
       const d = t.closedAt.slice(0, 10)
       return d >= dateRange.start && d <= dateRange.end
     })
-    return calculateMetrics(daily, trades)
+    return {
+      aggregateMetrics: calculateMetrics(daily, trades),
+      futuresMetrics: calculateFuturesMetrics(trades),
+    }
   }, [activeIds, dateRange])
 
   // Chart time series
@@ -194,12 +199,15 @@ export default function PerformancePage() {
         </div>
       </div>
 
-      {/* Metric selector tiles */}
+      {/* Spot metric selector tiles */}
       <MetricSelector
         metrics={aggregateMetrics}
         selected={selectedMetric}
         onSelect={setSelectedMetric}
       />
+
+      {/* Futures metrics section */}
+      <FuturesMetricsTiles metrics={futuresMetrics} />
 
       {/* Multi-line chart */}
       <MetricLineChart

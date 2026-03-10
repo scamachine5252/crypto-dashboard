@@ -37,8 +37,19 @@ export interface Trade {
   pnlPercent: number
   fee: number
   durationMin: number
+  leverage: number      // 1 for spot/options; 3-25 for futures
+  fundingCost: number   // cumulative funding paid (futures only, 0 otherwise)
+  isOvernight: boolean  // position spanned at least one midnight UTC
   openedAt: string
   closedAt: string
+}
+
+export interface FuturesMetrics {
+  totalFundingCost: number        // sum of all funding costs across futures trades
+  averageLeverage: number         // simple average leverage on futures trades
+  longShortRatio: number          // % of futures trades that are long (0-100)
+  liquidationDistancePct: number  // avg theoretical liq distance = 100 / leverage %
+  overnightExposureCount: number  // count of all trades held past midnight
 }
 
 export interface DailyPnLEntry {

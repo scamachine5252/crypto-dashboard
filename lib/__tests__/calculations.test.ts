@@ -7,6 +7,7 @@ import {
   filterTradesAdvanced,
   summarizeFilteredTrades,
   buildMetricTimeSeries,
+  calculateFuturesMetrics,
 } from '../calculations'
 import type { DailyPnLEntry, Trade, HistoryFilterState } from '../types'
 
@@ -39,6 +40,9 @@ function makeTrade(overrides: Partial<Trade> = {}): Trade {
     pnlPercent: 2,
     fee: 10,
     durationMin: 60,
+    leverage: 1,
+    fundingCost: 0,
+    isOvernight: false,
     openedAt: '2025-01-01T10:00:00.000Z',
     closedAt: '2025-01-01T11:00:00.000Z',
     ...overrides,
@@ -400,5 +404,83 @@ describe('buildMetricTimeSeries', () => {
     const val = result[0]['sub-a'] as number
     expect(val).toBeGreaterThanOrEqual(0)
     expect(val).toBeLessThanOrEqual(100)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// calculateFuturesMetrics
+// ---------------------------------------------------------------------------
+describe('calculateFuturesMetrics', () => {
+  it('returns zeros for empty trade array', () => {
+    const r = calculateFuturesMetrics([])
+    expect(r.totalFundingCost).toBe(0)
+    expect(r.averageLeverage).toBe(0)
+    expect(r.longShortRatio).toBe(0)
+    expect(r.liquidationDistancePct).toBe(0)
+    expect(r.overnightExposureCount).toBe(0)
+  })
+
+  it('sums fundingCost across futures trades only', () => {
+    const trades = [
+      makeTrade({ id: 't1', tradeType: 'futures', fundingCost: 100, leverage: 10 }),
+      makeTrade({ id: 't2', tradeType: 'futures', fundingCost: 200, leverage: 10 }),
+      makeTrade({ id: 't3', tradeType: 'spot',    fundingCost: 999, leverage: 1  }),
+    ]
+    const r = calculateFuturesMetrics(trades)
+    expect(r.totalFundingCost).toBe(300)
+  })
+
+  it('averageLeverage uses only futures trades', () => {
+    const trades = [
+      makeTrade({ id: 't1', tradeType: 'futures', leverage: 10, fundingCost: 0 }),
+      makeTrade({ id: 't2', tradeType: 'futures', leverage: 20, fundingCost: 0 }),
+      makeTrade({ id: 't3', tradeType: 'spot',    leverage: 1,  fundingCost: 0 }),
+    ]
+    const r = calculateFuturesMetrics(trades)
+    expect(r.averageLeverage).toBe(15)
+  })
+
+  it('longShortRatio is 100 when all futures are long', () => {
+    const trades = [
+      makeTrade({ id: 't1', tradeType: 'futures', side: 'long',  leverage: 5, fundingCost: 0 }),
+      makeTrade({ id: 't2', tradeType: 'futures', side: 'long',  leverage: 5, fundingCost: 0 }),
+    ]
+    expect(calculateFuturesMetrics(trades).longShortRatio).toBe(100)
+  })
+
+  it('longShortRatio is 0 when all futures are short', () => {
+    const trades = [
+      makeTrade({ id: 't1', tradeType: 'futures', side: 'short', leverage: 5, fundingCost: 0 }),
+    ]
+    expect(calculateFuturesMetrics(trades).longShortRatio).toBe(0)
+  })
+
+  it('longShortRatio is 50 for equal long/short split', () => {
+    const trades = [
+      makeTrade({ id: 't1', tradeType: 'futures', side: 'long',  leverage: 10, fundingCost: 0 }),
+      makeTrade({ id: 't2', tradeType: 'futures', side: 'short', leverage: 10, fundingCost: 0 }),
+    ]
+    expect(calculateFuturesMetrics(trades).longShortRatio).toBe(50)
+  })
+
+  it('liquidationDistancePct = 100/leverage for single trade', () => {
+    const trades = [
+      makeTrade({ id: 't1', tradeType: 'futures', leverage: 10, fundingCost: 0 }),
+    ]
+    expect(calculateFuturesMetrics(trades).liquidationDistancePct).toBe(10)
+  })
+
+  it('overnightExposureCount counts all trade types with isOvernight=true', () => {
+    const trades = [
+      makeTrade({ id: 't1', tradeType: 'spot',    isOvernight: true  }),
+      makeTrade({ id: 't2', tradeType: 'futures', isOvernight: true,  leverage: 5, fundingCost: 0 }),
+      makeTrade({ id: 't3', tradeType: 'futures', isOvernight: false, leverage: 5, fundingCost: 0 }),
+    ]
+    expect(calculateFuturesMetrics(trades).overnightExposureCount).toBe(2)
+  })
+
+  it('returns 0 averageLeverage when no futures trades exist', () => {
+    const trades = [makeTrade({ id: 't1', tradeType: 'spot' })]
+    expect(calculateFuturesMetrics(trades).averageLeverage).toBe(0)
   })
 })
