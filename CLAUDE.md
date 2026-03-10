@@ -82,12 +82,144 @@ crypto-dashboard/          ← project root (NOT src/)
 
 ### Next Steps (not yet built)
 
+- Pages 2–5 from Site Structure below (Performance Indicators, Trading Results, Trading History, API)
 - `lib/adapters/` — real exchange API adapters (Binance, Bybit, OKX)
-- `/api/` routes — server-side proxy for API keys (see Exchange API Notes below)
+- `/api/` routes — server-side proxy for API keys
 - Proper session auth (NextAuth or JWT cookies) to replace localStorage
-- Date range picker for custom PnL windows
-- CSV / PDF export for the orders table
-- Per-trade notes / tagging
+- Logo hover dropdown navigation
+- Period selector component (1D / Week / Month / Year / Manual) — global, shared across all pages
+
+---
+
+## Site Structure
+
+Five pages. All share: the same nav shell, the same period selector (1D / Week / Month / Year / Manual range picker), and the same exchange/sub-account filter state. Architecture must make adding a sixth page trivial — one new route + one new entry in the nav config.
+
+**Navigation:** hovering the logo opens a dropdown menu listing all five sections. No sidebar. Header stays sticky.
+
+**Responsiveness:** every page must work on mobile (stacked layout) and desktop (side-by-side panels). Use CSS Grid with responsive breakpoints — no layout-specific components.
+
+---
+
+### 1. Dashboard `/dashboard`
+
+**Purpose:** high-level portfolio health at a glance.
+
+**Layout:**
+- Top row: balance cards for each connected account (exchange + sub-account), total portfolio value
+- Middle row: 10 key metric cards (Sharpe, Sortino, Max Drawdown, Win Rate, Profit Factor, CAGR, Annual Yield, Risk/Reward, Avg Win/Loss, Total Fees)
+- Bottom: cumulative PnL equity curve chart (Area + period Bars), period selector
+
+**Filter:** exchange tabs + sub-account dropdown (already built). Selecting "All" aggregates across everything.
+
+**Data sources:** `calculateMetrics()`, `aggregateChartData()` from `lib/calculations.ts`.
+
+---
+
+### 2. Performance Indicators `/performance`
+
+**Purpose:** deep-dive into individual metrics over time; multi-account comparison.
+
+**Layout:**
+- Top: metric selector grid — all metrics displayed as tiles (spot + futures split where applicable); clicking a tile selects it
+- Bottom: dynamic line chart of the selected metric over time — one line per selected account/exchange
+
+**Multi-select:** user can toggle multiple accounts/exchanges on the chart simultaneously. Each line gets the exchange brand color; sub-accounts get shades of that color.
+
+**Period selector:** controls both the metric tiles (period snapshot) and the chart time range.
+
+**New components needed:**
+- `components/charts/MetricLineChart.tsx` — multi-line recharts LineChart, legend, hover tooltip showing all series values
+- `components/metrics/MetricSelector.tsx` — clickable tile grid for metric selection
+
+**Data:** metrics computed per account per time window; stored as a time series, not a single snapshot.
+
+---
+
+### 3. Trading Results `/results`
+
+**Purpose:** compare trading performance across accounts/exchanges visually and numerically.
+
+**Layout:**
+- Top (60%): overlay line chart — multiple equity curves on one canvas, one line per selected account. Each line starts at 0 so relative performance is comparable regardless of account size.
+- Bottom (40%): comparison table — one row per account, columns for each metric, plus a Δ (delta) column showing difference vs. the baseline account (first selected or best performer)
+
+**Filter:** token/pair search — narrows both the chart and the table to trades involving that pair (e.g., "BTC/USDT only").
+
+**Period selector:** controls the date range for both chart and table.
+
+**New components needed:**
+- `components/charts/OverlayLineChart.tsx` — normalized multi-series recharts LineChart (index all series to 0 at period start)
+- `components/orders/ComparisonTable.tsx` — responsive table with delta column, color-coded positive/negative delta
+
+**Key rule:** the overlay chart must normalize all series to index 100 at period start so accounts of different sizes are visually comparable.
+
+---
+
+### 4. Trading History `/history`
+
+**Purpose:** full trade log with deep filtering and export.
+
+**Layout:**
+- Filter bar (sticky below header): exchange, sub-account, token/pair, trade type (spot / futures / options), side (long / short / both), date range (up to 180 days)
+- Trade table: all columns (symbol, side, entry, exit, PnL, PnL%, fee, duration, opened, closed, exchange, account)
+- Footer: row count, total PnL of filtered set, total fees of filtered set
+- Export buttons: **CSV** and **PDF** — export the currently filtered set
+
+**Pagination:** 25 rows per page (more than dashboard's 15 because this is a dedicated history view).
+
+**Date limit:** hard cap at 180 days lookback, enforced in the date range picker.
+
+**New components needed:**
+- `components/orders/TradeFilters.tsx` — filter bar (replaces/extends current `FilterBar.tsx`)
+- `components/orders/ExportButton.tsx` — triggers CSV via `Blob` + `URL.createObjectURL`; PDF via `jsPDF` or `@react-pdf/renderer`
+
+**CSV export format:** header row + one row per trade, ISO dates, all numeric columns unformatted (raw numbers, not `$1.2K`).
+
+**PDF export format:** title + filter summary + table. One page per 40 rows. Exchange logo in header.
+
+---
+
+### 5. API Management `/api-settings`
+
+**Purpose:** connect exchanges, manage API keys, monitor connection health.
+
+**Layout:**
+- Three exchange cards (Binance, Bybit, OKX) — each shows:
+  - Connection status badge: `Connected` (green) / `Error` (red) / `Not configured` (muted)
+  - API Key field (masked, show/hide toggle)
+  - API Secret field (masked, show/hide toggle)
+  - Optional: passphrase field (OKX only)
+  - Sub-accounts list: auto-fetched after successful connection; user can enable/disable each
+  - "Test connection" button — fires a lightweight ping to the exchange (e.g., account balance endpoint)
+  - "Save" and "Remove" buttons
+- Global warning banner: "API keys are stored locally in your browser. Never use keys with withdrawal permissions."
+
+**Security rules (non-negotiable):**
+- API keys stored in `localStorage` (mock phase) — prefixed with exchange ID, AES-encrypted with a session-derived key
+- In production: keys go to `/api/keys` route (server-side), stored encrypted in DB, never returned to client after save
+- The client only ever sends keys *to* the server; the server never sends them *back*
+- "Test connection" goes through `/api/exchanges/[exchange]/ping` — never directly from browser to exchange
+
+**New components needed:**
+- `components/api/ExchangeCard.tsx` — single exchange connection card
+- `components/api/ApiKeyInput.tsx` — masked input with show/hide, copy-to-clipboard forbidden (security)
+- `components/api/StatusBadge.tsx` — Connected / Error / Not configured
+
+**Route:** named `/api-settings` (not `/api`) to avoid collision with Next.js `/app/api/` server routes.
+
+---
+
+### Global Rules (apply to all pages)
+
+| Rule | Detail |
+|---|---|
+| Period selector | Shared component `components/ui/PeriodSelector.tsx` — renders `1D / Week / Month / Year / Manual`. Manual opens a date range picker. State lives in the page, not the component. |
+| Navigation | `components/layout/NavDropdown.tsx` — renders on logo hover. Items: Dashboard, Performance, Results, History, API. Active item highlighted in `#FFD700`. |
+| Responsive | All pages use CSS Grid. Mobile: single column, charts min-height 200px. Desktop: multi-column. No layout-specific component variants. |
+| Loading states | Every data-fetching section shows a skeleton loader (pulsing gray bars), never a spinner blocking the full page. |
+| Empty states | When a filter returns no data, show an inline message in the affected panel — never a full-page empty state. |
+| Adding a new page | 1. Add route to `app/[page-name]/page.tsx`. 2. Add entry to nav config in `lib/nav.ts`. Done. No other files change. |
 
 ---
 
@@ -223,23 +355,48 @@ You have full authority to make architectural decisions. Act proactively:
 ## Architecture Rules
 
 ```
-src/
-├── app/                  # Next.js pages (login, dashboard)
-├── components/
-│   ├── ui/               # Reusable primitives (Button, Card, Badge)
-│   ├── charts/           # PnL charts, equity curves
-│   ├── metrics/          # Metric cards (Sharpe, Drawdown, etc.)
-│   ├── orders/           # Orders table, filters
-│   └── layout/           # Sidebar, header, nav
-├── lib/
-│   ├── types.ts          # ALL TypeScript interfaces
-│   ├── calculations.ts   # Sharpe, Sortino, CAGR, etc.
-│   ├── mock-data.ts      # Mock data (replace with real adapters later)
-│   └── adapters/         # Exchange API adapters (Binance, Bybit, OKX)
-└── hooks/                # Custom React hooks
+app/                               # Next.js App Router (no src/ wrapper)
+├── page.tsx                       # Redirect → /dashboard
+├── layout.tsx                     # Root layout: fonts, <Providers>
+├── providers.tsx                  # AuthProvider (client)
+├── login/page.tsx
+├── dashboard/page.tsx             # Page 1: Dashboard
+├── performance/page.tsx           # Page 2: Performance Indicators
+├── results/page.tsx               # Page 3: Trading Results
+├── history/page.tsx               # Page 4: Trading History
+├── api-settings/page.tsx          # Page 5: API Management
+└── api/                           # Server-side API routes
+    └── exchanges/[exchange]/ping/ # Connection health check
+
+components/
+├── ui/                # Primitives: Button, Card, Badge, PeriodSelector, Skeleton
+├── layout/            # Header, NavDropdown, FilterBar
+├── charts/            # PnLChart, MetricLineChart, OverlayLineChart
+├── metrics/           # MetricCard, MetricsGrid, MetricSelector
+├── orders/            # OrdersTable, TradeFilters, ComparisonTable, ExportButton
+└── api/               # ExchangeCard, ApiKeyInput, StatusBadge
+
+lib/
+├── types.ts           # ALL TypeScript interfaces
+├── utils.ts           # formatMoney, formatPercent, cn, …
+├── calculations.ts    # All metric formulas (TDD — tests first)
+├── mock-data.ts       # Seeded RNG mock data
+├── auth-context.tsx   # AuthProvider + useAuth
+├── nav.ts             # Navigation config — ONLY file to edit when adding a page
+└── adapters/          # Exchange API adapters
+    ├── types.ts        # ExchangeAdapter interface
+    └── mock.ts         # Mock implementation
+
+hooks/                 # Custom React hooks (usePeriod, useExchangeFilter, …)
+
+lib/__tests__/
+└── calculations.test.ts  # Jest tests — written BEFORE implementation
 ```
 
-**Golden rule**: To add a new exchange, you only need to add one file in `src/lib/adapters/`. Nothing else should change.
+**Golden rules:**
+- To add a new page: create `app/[name]/page.tsx` + add one entry to `lib/nav.ts`. Nothing else changes.
+- To add a new exchange: add one file to `lib/adapters/`. Nothing else changes.
+- Business logic lives in `lib/`. Components only render — no calculations inline.
 
 ---
 
