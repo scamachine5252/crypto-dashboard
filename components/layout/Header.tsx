@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import { useAuth } from '@/lib/auth-context'
 import { useRouter } from 'next/navigation'
 import { TrendingUp, LogOut, User, Activity, ChevronDown } from 'lucide-react'
@@ -17,6 +17,16 @@ export default function Header({ totalPnl, annualYield }: HeaderProps) {
   const router = useRouter()
   const [navOpen, setNavOpen] = useState(false)
   const navRef = useRef<HTMLDivElement>(null)
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const openNav  = useCallback(() => {
+    if (closeTimer.current) clearTimeout(closeTimer.current)
+    setNavOpen(true)
+  }, [])
+
+  const closeNav = useCallback(() => {
+    closeTimer.current = setTimeout(() => setNavOpen(false), 300)
+  }, [])
 
   const handleLogout = () => {
     logout()
@@ -38,8 +48,8 @@ export default function Header({ totalPnl, annualYield }: HeaderProps) {
       <div
         ref={navRef}
         className="relative flex items-center gap-3 cursor-pointer select-none"
-        onMouseEnter={() => setNavOpen(true)}
-        onMouseLeave={() => setNavOpen(false)}
+        onMouseEnter={openNav}
+        onMouseLeave={closeNav}
       >
         <div
           className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
