@@ -1,190 +1,339 @@
 'use client'
 
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo } from 'react'
 import type { Period, DateRange } from '@/lib/types'
-import { EXCHANGES, getAllDailyPnL, getAllTrades, ACCOUNT_COLORS } from '@/lib/mock-data'
+import {
+  EXCHANGES,
+  getAllDailyPnL,
+  ACCOUNT_PRIMARY_TOKEN,
+} from '@/lib/mock-data'
 import {
   resolveDateRange,
   filterByDateRange,
   calculateMetrics,
-  buildOverlayData,
-  buildComparisonRows,
+  aggregateChartData,
+  buildAccountSnapshots,
+  buildUsdtBalanceTimeSeries,
 } from '@/lib/calculations'
-import { useAccountToggles } from '@/hooks/useAccountToggles'
 import Header from '@/components/layout/Header'
 import PeriodSelector from '@/components/ui/PeriodSelector'
-import OverlayLineChart from '@/components/charts/OverlayLineChart'
-import ComparisonTable from '@/components/orders/ComparisonTable'
+import BalanceLineChart from '@/components/charts/BalanceLineChart'
+import PnlHistogramChart from '@/components/charts/PnlHistogramChart'
+import { formatMoney } from '@/lib/utils'
+
+// Exchange inline logos (reuse same SVGs as BalanceCards)
+function ExchangeLogo({ id }: { id: string }) {
+  if (id === 'binance') return (
+    <svg width="16" height="16" viewBox="0 0 32 32" fill="none" aria-hidden>
+      <path d="M16 4l3.09 3.09L12.18 14l-3.09-3.09L16 4z" fill="#F0B90B" />
+      <path d="M20.91 8.91L24 12l-7.09 7.09L9.82 12l3.09-3.09 4 4 4-4z" fill="#F0B90B" />
+      <path d="M4 16l3.09-3.09L10.18 16l-3.09 3.09L4 16z" fill="#F0B90B" />
+      <path d="M21.82 16l3.09-3.09L28 16l-3.09 3.09L21.82 16z" fill="#F0B90B" />
+      <path d="M16 28l-3.09-3.09L19.82 18l3.09 3.09L16 28z" fill="#F0B90B" />
+      <path d="M16 12.91L19.09 16 16 19.09 12.91 16 16 12.91z" fill="#F0B90B" />
+    </svg>
+  )
+  if (id === 'bybit') return (
+    <svg width="16" height="16" viewBox="0 0 32 32" fill="none" aria-hidden>
+      <rect width="32" height="32" rx="4" fill="#FF6B2C" fillOpacity="0.15" />
+      <text x="7" y="23" fontSize="18" fontWeight="800" fontFamily="Arial,sans-serif" fill="#FF6B2C">B</text>
+    </svg>
+  )
+  return (
+    <svg width="16" height="16" viewBox="0 0 32 32" fill="none" aria-hidden>
+      <rect x="2" y="2" width="12" height="12" rx="2" fill="#4F8EF7" />
+      <rect x="18" y="2" width="12" height="12" rx="2" fill="#4F8EF7" />
+      <rect x="10" y="10" width="12" height="12" rx="2" fill="#4F8EF7" fillOpacity="0.6" />
+      <rect x="2" y="18" width="12" height="12" rx="2" fill="#4F8EF7" />
+      <rect x="18" y="18" width="12" height="12" rx="2" fill="#4F8EF7" />
+    </svg>
+  )
+}
+
+const EXCHANGE_COLORS: Record<string, string> = {
+  binance: '#F0B90B',
+  bybit:   '#FF6B2C',
+  okx:     '#4F8EF7',
+}
+
+// Unique tokens available across all accounts for the filter dropdown
+const ALL_TOKENS = [...new Set(Object.values(ACCOUNT_PRIMARY_TOKEN))].sort()
+
+function Delta({ value, isToken = false }: { value: number; isToken?: boolean }) {
+  const isPos = value >= 0
+  const color = isPos ? 'var(--accent-profit)' : 'var(--accent-loss)'
+  const sign = isPos ? '+' : ''
+  const formatted = isToken
+    ? `${sign}${value.toFixed(4)}`
+    : `${sign}${formatMoney(value)}`
+  return (
+    <span className="font-mono text-xs tabular font-semibold" style={{ color }}>
+      {formatted}
+    </span>
+  )
+}
 
 export default function ResultsPage() {
-  const [period, setPeriod] = useState<Period>('1Y')
+  const [period, setPeriod]           = useState<Period>('1Y')
   const [customRange, setCustomRange] = useState<DateRange | undefined>()
-  const [symbolFilter, setSymbolFilter] = useState('')
-  const { activeIds, toggleAccount, toggleExchange, selectAll, reset } = useAccountToggles()
+  const [tokenFilter, setTokenFilter] = useState<string>('all')
 
-  const handlePeriodChange = useCallback((p: Period, range?: DateRange) => {
+  const handlePeriodChange = (p: Period, range?: DateRange) => {
     setPeriod(p)
     setCustomRange(range)
-  }, [])
-
-  const handleSymbol = useCallback((raw: string) => {
-    setSymbolFilter(raw.toUpperCase().trim())
-  }, [])
+  }
 
   const dateRange = useMemo<DateRange>(() => {
     if (period === 'manual' && customRange) return customRange
     return resolveDateRange(period, '2025-12-31')
   }, [period, customRange])
 
-  const filteredTrades = useMemo(() => {
-    const sym = symbolFilter
-    return getAllTrades().filter((t) => {
-      if (!activeIds.has(t.subAccountId)) return false
-      const d = t.closedAt.slice(0, 10)
-      if (d < dateRange.start || d > dateRange.end) return false
-      if (sym) return t.symbol.toUpperCase().includes(sym)
-      return true
-    })
-  }, [activeIds, dateRange, symbolFilter])
+  const snapshots = useMemo(() => {
+    const all = buildAccountSnapshots(dateRange)
+    return tokenFilter === 'all' ? all : all.filter((s) => s.token === tokenFilter)
+  }, [dateRange, tokenFilter])
 
-  // Overlay chart uses total daily PnL regardless of symbol filter
-  // (DailyPnLEntry has no symbol dimension — filtering would require
-  //  reconstructing daily series from trades, adding complexity for minimal gain)
-  const overlayData = useMemo(
-    () => buildOverlayData(getAllDailyPnL(), [...activeIds], dateRange),
-    [activeIds, dateRange],
-  )
-
-  // Comparison table: trade-derived metrics reflect symbol filter
-  const comparisonRows = useMemo(
-    () => buildComparisonRows(getAllDailyPnL(), filteredTrades, [...activeIds], dateRange),
-    [filteredTrades, activeIds, dateRange],
-  )
-
-  const headerMetrics = useMemo(() => {
-    const daily = filterByDateRange(
-      getAllDailyPnL().filter((e) => activeIds.has(e.subAccountId)),
-      dateRange,
+  // USDT balance time series for all 7 accounts (for chart)
+  const usdtSeries = useMemo(() => {
+    return EXCHANGES.flatMap((ex) =>
+      ex.subAccounts.map((sa) => ({
+        subAccountId: sa.id,
+        data: buildUsdtBalanceTimeSeries(sa.id, dateRange),
+      }))
     )
-    return calculateMetrics(daily, filteredTrades)
-  }, [activeIds, dateRange, filteredTrades])
+  }, [dateRange])
+
+  // Monthly PnL histogram data
+  const monthlyPnl = useMemo(() => {
+    const daily = filterByDateRange(getAllDailyPnL(), dateRange)
+    return aggregateChartData(daily, 'monthly').map((d) => ({ month: d.period, pnl: d.pnl }))
+  }, [dateRange])
+
+  // Header metrics
+  const headerMetrics = useMemo(() => {
+    const daily = filterByDateRange(getAllDailyPnL(), dateRange)
+    return calculateMetrics(daily, [])
+  }, [dateRange])
+
+  // Totals row
+  const totals = useMemo(() => ({
+    deltaUsdt: snapshots.reduce((s, r) => s + r.deltaUsdt, 0),
+    pnl:       snapshots.reduce((s, r) => s + r.pnl, 0),
+    depositUsdt:    snapshots.reduce((s, r) => s + r.depositUsdt, 0),
+    withdrawalUsdt: snapshots.reduce((s, r) => s + r.withdrawalUsdt, 0),
+  }), [snapshots])
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: 'var(--bg-primary)' }}>
       <Header totalPnl={headerMetrics.totalPnl} annualYield={headerMetrics.annualYield} />
 
       {/* Controls bar */}
-      <div style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-subtle)' }}>
+      <div
+        className="px-4 py-2 flex items-center gap-4 flex-wrap"
+        style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-subtle)' }}
+      >
+        <span className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>Period</span>
+        <PeriodSelector value={period} customRange={customRange} onChange={handlePeriodChange} />
 
-        {/* Row 1: Period selector + symbol search */}
-        <div
-          className="px-4 py-1.5 flex items-center gap-4 flex-wrap"
-          style={{ borderBottom: '1px solid var(--border-subtle)' }}
-        >
-          <span className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>Period</span>
-          <PeriodSelector value={period} customRange={customRange} onChange={handlePeriodChange} />
-
-          <div className="ml-auto flex items-center gap-2">
-            <span className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>Pair</span>
-            <input
-              type="text"
-              value={symbolFilter}
-              onChange={(e) => handleSymbol(e.target.value)}
-              placeholder="BTC/USDT"
-              className="text-xs px-2.5 py-1 outline-none w-36"
-              style={{
-                background: 'var(--bg-tertiary)',
-                border: '1px solid var(--border-medium)',
-                color: 'var(--text-primary)',
-                borderRadius: 2,
-              }}
-            />
-          </div>
-        </div>
-
-        {/* Row 2: Account toggles */}
-        <div className="px-4 py-2 flex items-center gap-3 flex-wrap">
-          <span className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>Accounts</span>
-
-          {EXCHANGES.map((ex) => {
-            const exAccounts = ex.subAccounts
-            const allOn = exAccounts.every((sa) => activeIds.has(sa.id))
-            const someOn = exAccounts.some((sa) => activeIds.has(sa.id))
-
-            return (
-              <div key={ex.id} className="flex items-center gap-1">
-                {/* Exchange group toggle */}
-                <button
-                  onClick={() => toggleExchange(ex.id)}
-                  className="text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 border transition-colors"
-                  style={{
-                    color: allOn ? ex.color : 'var(--text-muted)',
-                    borderColor: allOn ? ex.color : 'var(--border-subtle)',
-                    background: allOn ? `${ex.color}14` : 'transparent',
-                    opacity: someOn && !allOn ? 0.7 : 1,
-                  }}
-                >
-                  {ex.name}
-                </button>
-
-                {/* Per-account toggles */}
-                {exAccounts.map((sa) => {
-                  const on = activeIds.has(sa.id)
-                  const color = ACCOUNT_COLORS[sa.id] ?? ex.color
-                  return (
-                    <button
-                      key={sa.id}
-                      onClick={() => toggleAccount(sa.id)}
-                      className="flex items-center gap-1 text-[10px] px-2 py-0.5 border transition-colors"
-                      style={{
-                        color: on ? color : 'var(--text-muted)',
-                        borderColor: on ? color : 'var(--border-subtle)',
-                        background: on ? `${color}14` : 'transparent',
-                      }}
-                    >
-                      <span
-                        className="w-1.5 h-1.5 rounded-full"
-                        style={{ background: on ? color : 'var(--border-medium)' }}
-                      />
-                      {sa.name}
-                    </button>
-                  )
-                })}
-              </div>
-            )
-          })}
-
-          {/* Select all / reset */}
-          <div className="ml-auto flex items-center gap-2">
-            <button
-              className="text-[10px] uppercase tracking-widest transition-colors"
-              style={{ color: 'var(--text-muted)' }}
-              onClick={selectAll}
-            >
-              All
-            </button>
-            <span style={{ color: 'var(--border-medium)' }}>·</span>
-            <button
-              className="text-[10px] uppercase tracking-widest transition-colors"
-              style={{ color: 'var(--text-muted)' }}
-              onClick={reset}
-            >
-              Reset
-            </button>
-          </div>
+        <div className="ml-auto flex items-center gap-2">
+          <span className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>Token</span>
+          <select
+            value={tokenFilter}
+            onChange={(e) => setTokenFilter(e.target.value)}
+            className="text-xs px-2.5 py-1 outline-none cursor-pointer"
+            style={{
+              background: 'var(--bg-tertiary)',
+              border: '1px solid var(--border-medium)',
+              color: 'var(--text-primary)',
+              borderRadius: 2,
+            }}
+          >
+            <option value="all">All Tokens</option>
+            {ALL_TOKENS.map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
         </div>
       </div>
 
       <main className="flex-1 pb-6">
-        {/* Overlay equity curves — 60% visual weight */}
-        <OverlayLineChart
-          data={overlayData}
-          activeIds={[...activeIds]}
-          height={360}
-        />
+        {/* Charts row */}
+        <div className="px-4 pt-3 pb-2 grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* USDT Balance over period */}
+          <div style={{ border: '1px solid var(--border-subtle)' }}>
+            <div
+              className="px-4 py-2 flex items-center gap-3"
+              style={{ borderBottom: '1px solid var(--border-subtle)' }}
+            >
+              <p className="text-xs font-semibold tracking-wide font-heading" style={{ color: 'var(--text-primary)' }}>
+                USDT BALANCE
+              </p>
+              <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Balance over period per account</p>
+            </div>
+            <div className="px-3 py-3" style={{ background: 'var(--bg-secondary)' }}>
+              <BalanceLineChart series={usdtSeries} height={220} />
+            </div>
+          </div>
 
-        {/* Comparison table — 40% visual weight */}
-        <ComparisonTable rows={comparisonRows} />
+          {/* Monthly PnL histogram */}
+          <div style={{ border: '1px solid var(--border-subtle)' }}>
+            <div
+              className="px-4 py-2 flex items-center gap-3"
+              style={{ borderBottom: '1px solid var(--border-subtle)' }}
+            >
+              <p className="text-xs font-semibold tracking-wide font-heading" style={{ color: 'var(--text-primary)' }}>
+                MONTHLY P&L
+              </p>
+              <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>All accounts combined</p>
+            </div>
+            <div className="px-3 py-3" style={{ background: 'var(--bg-secondary)' }}>
+              <PnlHistogramChart data={monthlyPnl} height={220} />
+            </div>
+          </div>
+        </div>
+
+        {/* Balance table */}
+        <div className="px-4">
+          <div style={{ border: '1px solid var(--border-subtle)', overflowX: 'auto' }}>
+            <table className="w-full text-xs border-collapse" style={{ minWidth: 780 }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-secondary)' }}>
+                  {['Exchange', 'Account', 'Token', 'Opening', 'Closing', 'Δ Balance', 'Deposits', 'Withdrawals', 'Avg Price', 'PnL'].map((col) => (
+                    <th
+                      key={col}
+                      className="px-3 py-2 text-center text-[10px] uppercase tracking-widest font-semibold"
+                      style={{ color: 'var(--text-muted)', borderRight: '1px solid var(--border-subtle)', whiteSpace: 'nowrap' }}
+                    >
+                      {col}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {snapshots.length === 0 ? (
+                  <tr>
+                    <td colSpan={10} className="px-4 py-6 text-center text-xs" style={{ color: 'var(--text-muted)' }}>
+                      No accounts match the selected token filter
+                    </td>
+                  </tr>
+                ) : (
+                  snapshots.map((snap) => {
+                    const exColor = EXCHANGE_COLORS[snap.exchangeId] ?? 'var(--text-muted)'
+                    const ex = EXCHANGES.find((e) => e.id === snap.exchangeId)
+                    const cellStyle = {
+                      borderRight: '1px solid var(--border-subtle)',
+                      borderBottom: '1px solid var(--border-subtle)',
+                    }
+                    const numCell = 'px-3 py-1.5 text-center font-mono tabular'
+
+                    return (
+                      <>
+                        {/* USDT row */}
+                        <tr key={`${snap.subAccountId}-usdt`} style={{ background: 'var(--bg-secondary)' }}>
+                          <td className="px-3 py-1.5" style={{ ...cellStyle, borderBottom: 'none' }}>
+                            <div className="flex items-center gap-1.5">
+                              <ExchangeLogo id={snap.exchangeId} />
+                              <span className="font-bold text-[10px] uppercase tracking-widest" style={{ color: exColor }}>
+                                {ex?.name}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-3 py-1.5" style={{ ...cellStyle, borderBottom: 'none', color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>
+                            {snap.accountName}
+                          </td>
+                          <td className="px-3 py-1.5 text-center" style={{ ...cellStyle, borderBottom: 'none' }}>
+                            <span className="text-[10px] font-mono font-semibold px-1.5 py-0.5" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border-subtle)' }}>
+                              USDT
+                            </span>
+                          </td>
+                          <td className={numCell} style={{ ...cellStyle, borderBottom: 'none', color: 'var(--text-secondary)' }}>
+                            {formatMoney(snap.usdtOpen)}
+                          </td>
+                          <td className={numCell} style={{ ...cellStyle, borderBottom: 'none', color: 'var(--text-primary)' }}>
+                            {formatMoney(snap.usdtClose)}
+                          </td>
+                          <td className={numCell} style={{ ...cellStyle, borderBottom: 'none' }}>
+                            <Delta value={snap.deltaUsdt} />
+                          </td>
+                          <td className={numCell} style={{ ...cellStyle, borderBottom: 'none', color: 'var(--accent-profit)' }}>
+                            {snap.depositUsdt > 0 ? `+${formatMoney(snap.depositUsdt)}` : '—'}
+                          </td>
+                          <td className={numCell} style={{ ...cellStyle, borderBottom: 'none', color: 'var(--accent-loss)' }}>
+                            {snap.withdrawalUsdt > 0 ? `-${formatMoney(snap.withdrawalUsdt)}` : '—'}
+                          </td>
+                          <td className={numCell} style={{ ...cellStyle, borderBottom: 'none', color: 'var(--text-muted)' }}>
+                            —
+                          </td>
+                          <td className={numCell} style={{ ...cellStyle, borderBottom: 'none' }}>
+                            <Delta value={snap.pnl} />
+                          </td>
+                        </tr>
+
+                        {/* Token row */}
+                        <tr key={`${snap.subAccountId}-token`} style={{ background: 'var(--bg-primary)' }}>
+                          <td className="px-3 py-1.5" style={cellStyle} />
+                          <td className="px-3 py-1.5" style={{ ...cellStyle, color: 'var(--text-muted)' }} />
+                          <td className="px-3 py-1.5 text-center" style={cellStyle}>
+                            <span className="text-[10px] font-mono font-semibold px-1.5 py-0.5" style={{ background: 'var(--bg-tertiary)', color: exColor, border: `1px solid ${exColor}44` }}>
+                              {snap.token}
+                            </span>
+                          </td>
+                          <td className={numCell} style={{ ...cellStyle, color: 'var(--text-secondary)' }}>
+                            {snap.tokenOpen.toFixed(4)}
+                          </td>
+                          <td className={numCell} style={{ ...cellStyle, color: 'var(--text-primary)' }}>
+                            {snap.tokenClose.toFixed(4)}
+                          </td>
+                          <td className={numCell} style={cellStyle}>
+                            <Delta value={snap.deltaToken} isToken />
+                          </td>
+                          <td className={numCell} style={{ ...cellStyle, color: 'var(--accent-profit)' }}>
+                            {snap.depositToken > 0 ? `+${snap.depositToken.toFixed(4)}` : '—'}
+                          </td>
+                          <td className={numCell} style={{ ...cellStyle, color: 'var(--accent-loss)' }}>
+                            {snap.withdrawalToken > 0 ? `-${snap.withdrawalToken.toFixed(4)}` : '—'}
+                          </td>
+                          <td className={numCell} style={{ ...cellStyle, color: 'var(--text-secondary)' }}>
+                            {formatMoney(snap.avgPrice)}
+                          </td>
+                          <td className={numCell} style={cellStyle}>
+                            <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>—</span>
+                          </td>
+                        </tr>
+                      </>
+                    )
+                  })
+                )}
+
+                {/* Totals row */}
+                {snapshots.length > 0 && (
+                  <tr style={{ background: 'var(--bg-elevated)', borderTop: '1px solid var(--border-medium)' }}>
+                    <td
+                      colSpan={5}
+                      className="px-3 py-2 text-[10px] uppercase tracking-widest font-bold"
+                      style={{ color: 'var(--text-muted)', borderRight: '1px solid var(--border-subtle)' }}
+                    >
+                      Total — {snapshots.length} account{snapshots.length !== 1 ? 's' : ''}
+                    </td>
+                    <td className="px-3 py-2 text-center" style={{ borderRight: '1px solid var(--border-subtle)' }}>
+                      <Delta value={totals.deltaUsdt} />
+                    </td>
+                    <td className="px-3 py-2 text-center font-mono tabular text-xs" style={{ color: 'var(--accent-profit)', borderRight: '1px solid var(--border-subtle)' }}>
+                      {totals.depositUsdt > 0 ? `+${formatMoney(totals.depositUsdt)}` : '—'}
+                    </td>
+                    <td className="px-3 py-2 text-center font-mono tabular text-xs" style={{ color: 'var(--accent-loss)', borderRight: '1px solid var(--border-subtle)' }}>
+                      {totals.withdrawalUsdt > 0 ? `-${formatMoney(totals.withdrawalUsdt)}` : '—'}
+                    </td>
+                    <td className="px-3 py-2" style={{ borderRight: '1px solid var(--border-subtle)' }} />
+                    <td className="px-3 py-2 text-center">
+                      <Delta value={totals.pnl} />
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
       </main>
     </div>
   )

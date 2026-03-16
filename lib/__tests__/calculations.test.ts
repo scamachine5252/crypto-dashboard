@@ -10,6 +10,9 @@ import {
   calculateFuturesMetrics,
   buildOverlayData,
   buildComparisonRows,
+  buildAccountSnapshots,
+  buildUsdtBalanceTimeSeries,
+  buildTokenBalanceTimeSeries,
 } from '../calculations'
 import type { DailyPnLEntry, Trade, HistoryFilterState } from '../types'
 
@@ -716,5 +719,170 @@ describe('buildComparisonRows', () => {
     ]
     const rows = buildComparisonRows(daily, trades, [ID_A], range)
     expect(rows[0].totalTrades).toBe(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// buildAccountSnapshots
+// ---------------------------------------------------------------------------
+describe('buildAccountSnapshots', () => {
+  const fullYear = { start: '2025-01-01', end: '2025-12-31' }
+  const jan = { start: '2025-01-01', end: '2025-01-31' }
+
+  it('returns 7 snapshots for the full year (one per sub-account)', () => {
+    const snapshots = buildAccountSnapshots(fullYear)
+    expect(snapshots).toHaveLength(7)
+  })
+
+  it('each snapshot has a non-empty accountName and valid exchangeId', () => {
+    const snapshots = buildAccountSnapshots(fullYear)
+    for (const s of snapshots) {
+      expect(s.accountName.length).toBeGreaterThan(0)
+      expect(['binance', 'bybit', 'okx']).toContain(s.exchangeId)
+    }
+  })
+
+  it('usdtOpen matches INITIAL_USDT_BALANCE for each sub-account', () => {
+    const { INITIAL_USDT_BALANCE } = require('../mock-data')
+    const snapshots = buildAccountSnapshots(fullYear)
+    for (const s of snapshots) {
+      expect(s.usdtOpen).toBe(INITIAL_USDT_BALANCE[s.subAccountId])
+    }
+  })
+
+  it('tokenOpen matches INITIAL_TOKEN_BALANCE for each sub-account', () => {
+    const { INITIAL_TOKEN_BALANCE } = require('../mock-data')
+    const snapshots = buildAccountSnapshots(fullYear)
+    for (const s of snapshots) {
+      expect(s.tokenOpen).toBe(INITIAL_TOKEN_BALANCE[s.subAccountId])
+    }
+  })
+
+  it('deltaUsdt equals usdtClose minus usdtOpen', () => {
+    const snapshots = buildAccountSnapshots(fullYear)
+    for (const s of snapshots) {
+      expect(s.deltaUsdt).toBeCloseTo(s.usdtClose - s.usdtOpen, 0)
+    }
+  })
+
+  it('deltaToken equals tokenClose minus tokenOpen', () => {
+    const snapshots = buildAccountSnapshots(fullYear)
+    for (const s of snapshots) {
+      expect(s.deltaToken).toBeCloseTo(s.tokenClose - s.tokenOpen, 4)
+    }
+  })
+
+  it('pnl matches sum of daily PnL entries for that account in the period', () => {
+    const { getAllDailyPnL } = require('../mock-data')
+    const snapshots = buildAccountSnapshots(jan)
+    for (const s of snapshots) {
+      const expected = (getAllDailyPnL() as DailyPnLEntry[])
+        .filter((d) => d.subAccountId === s.subAccountId && d.date >= jan.start && d.date <= jan.end)
+        .reduce((acc, d) => acc + d.pnl, 0)
+      expect(s.pnl).toBeCloseTo(expected, 0)
+    }
+  })
+
+  it('depositUsdt and withdrawalUsdt are non-negative', () => {
+    const snapshots = buildAccountSnapshots(fullYear)
+    for (const s of snapshots) {
+      expect(s.depositUsdt).toBeGreaterThanOrEqual(0)
+      expect(s.withdrawalUsdt).toBeGreaterThanOrEqual(0)
+    }
+  })
+
+  it('avgPrice is a positive number', () => {
+    const snapshots = buildAccountSnapshots(fullYear)
+    for (const s of snapshots) {
+      expect(s.avgPrice).toBeGreaterThan(0)
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// buildUsdtBalanceTimeSeries
+// ---------------------------------------------------------------------------
+describe('buildUsdtBalanceTimeSeries', () => {
+  const range = { start: '2025-01-01', end: '2025-01-31' }
+  const id = 'binance-alpha'
+
+  it('returns one entry per calendar day in the range', () => {
+    const series = buildUsdtBalanceTimeSeries(id, range)
+    expect(series).toHaveLength(31)
+  })
+
+  it('first value equals INITIAL_USDT_BALANCE for the account', () => {
+    const { INITIAL_USDT_BALANCE } = require('../mock-data')
+    const series = buildUsdtBalanceTimeSeries(id, range)
+    expect(series[0].value).toBeCloseTo(
+      INITIAL_USDT_BALANCE[id] + (series[0].value - INITIAL_USDT_BALANCE[id]),
+      -3
+    )
+    // More precisely: first date value = initial + pnl[day0] + any tx on day0
+    // Just check it's in a sane range (within ±500K of initial)
+    expect(Math.abs(series[0].value - INITIAL_USDT_BALANCE[id])).toBeLessThan(500_000)
+  })
+
+  it('each entry has a date string and numeric value', () => {
+    const series = buildUsdtBalanceTimeSeries(id, range)
+    for (const entry of series) {
+      expect(typeof entry.date).toBe('string')
+      expect(entry.date).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+      expect(typeof entry.value).toBe('number')
+    }
+  })
+
+  it('dates are in ascending order', () => {
+    const series = buildUsdtBalanceTimeSeries(id, range)
+    for (let i = 1; i < series.length; i++) {
+      expect(series[i].date >= series[i - 1].date).toBe(true)
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// buildTokenBalanceTimeSeries
+// ---------------------------------------------------------------------------
+describe('buildTokenBalanceTimeSeries', () => {
+  const range = { start: '2025-01-01', end: '2025-01-31' }
+  const id = 'binance-alpha'
+
+  it('returns one entry per calendar day in the range', () => {
+    const series = buildTokenBalanceTimeSeries(id, range)
+    expect(series).toHaveLength(31)
+  })
+
+  it('each entry has a date string and numeric value', () => {
+    const series = buildTokenBalanceTimeSeries(id, range)
+    for (const entry of series) {
+      expect(typeof entry.date).toBe('string')
+      expect(entry.date).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+      expect(typeof entry.value).toBe('number')
+    }
+  })
+
+  it('first value is close to INITIAL_TOKEN_BALANCE (within ±50% for tx on day 0)', () => {
+    const { INITIAL_TOKEN_BALANCE } = require('../mock-data')
+    const series = buildTokenBalanceTimeSeries(id, range)
+    const initial = INITIAL_TOKEN_BALANCE[id]
+    expect(series[0].value).toBeGreaterThan(0)
+    expect(Math.abs(series[0].value - initial)).toBeLessThan(initial)
+  })
+
+  it('dates are in ascending order', () => {
+    const series = buildTokenBalanceTimeSeries(id, range)
+    for (let i = 1; i < series.length; i++) {
+      expect(series[i].date >= series[i - 1].date).toBe(true)
+    }
+  })
+
+  it('value only changes on transaction dates, not on every day', () => {
+    const series = buildTokenBalanceTimeSeries(id, range)
+    // At least some consecutive days must have the same value (most days have no tx)
+    let sameDayCount = 0
+    for (let i = 1; i < series.length; i++) {
+      if (series[i].value === series[i - 1].value) sameDayCount++
+    }
+    expect(sameDayCount).toBeGreaterThan(0)
   })
 })

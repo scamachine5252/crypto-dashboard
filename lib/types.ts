@@ -121,6 +121,35 @@ export interface ApiKeyConfig {
   passphrase?: string  // OKX only
 }
 
+export interface BalanceTransaction {
+  date: string          // YYYY-MM-DD
+  subAccountId: string
+  exchangeId: ExchangeId
+  usdtAmount: number    // always positive; sign determined by type
+  tokenAmount: number   // always positive
+  token: string         // e.g. "BTC"
+  type: 'deposit' | 'withdrawal'
+}
+
+export interface AccountSnapshot {
+  subAccountId: string
+  exchangeId: ExchangeId
+  accountName: string
+  token: string
+  usdtOpen: number
+  usdtClose: number
+  deltaUsdt: number
+  tokenOpen: number
+  tokenClose: number
+  deltaToken: number
+  depositUsdt: number
+  withdrawalUsdt: number
+  depositToken: number
+  withdrawalToken: number
+  avgPrice: number
+  pnl: number
+}
+
 export interface ComparisonRow {
   // Identity
   subAccountId: string

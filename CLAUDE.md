@@ -15,11 +15,14 @@
 - `/dashboard` — balance cards, 10 metric cards, equity-curve chart (Area + period Bars), PeriodSelector embedded in chart header; FilterBar removed; Fund value badge in header
 - `/performance` — metric selector tiles (spot + futures split), per-account toggle bar, multi-line chart (`MetricLineChart`) showing any metric over time per account, weekly/monthly timeframe toggle
 - `/history` — sticky TradeFilters bar (exchange, sub-account, symbol, type, side, 180-day date range), 50-row paginated OrdersTable, ExportButton (CSV + PDF), footer with total PnL + fees
-- `/results` — normalized overlay equity curves (`OverlayLineChart`), per-account metric comparison table (`ComparisonTable`) with Δ vs baseline, period selector, pair filter, account toggles
+- `/results` — Trading Results investor view: USDT balance line chart (`BalanceLineChart`) + monthly PnL histogram (`PnlHistogramChart`), balance table with 2 rows per account (USDT + token), deposits/withdrawals, Δ balance, avg price, PnL, totals row; token filter dropdown
 - `/api-settings` — three exchange cards (Binance, Bybit, OKX); API key + secret fields (masked, show/hide); OKX passphrase field; mock Test Connection (600ms delay); Save/Remove; localStorage persistence via `api-key-store.ts`; global withdrawal-warning banner
 
 **Infrastructure complete:**
 - Renamed from Nexus Fund → Cicada Foundation across app/layout.tsx, LoginForm, Header
+- `lib/mock-data.ts`: `INITIAL_USDT_BALANCE`, `INITIAL_TOKEN_BALANCE`, `ACCOUNT_PRIMARY_TOKEN`, `getAllTransactions()` (seeded 3–5 deposits/withdrawals per sub-account)
+- `lib/calculations.ts`: `buildAccountSnapshots`, `buildUsdtBalanceTimeSeries`, `buildTokenBalanceTimeSeries`
+- `components/charts/BalanceLineChart.tsx`, `PnlHistogramChart.tsx`
 - Dark/light theme toggle (ThemeProvider, localStorage, anti-flash `<Script>` in layout)
 - Logo-hover nav dropdown (NavDropdown, reads from `lib/nav.ts`)
 - `PeriodSelector` shared component (1D / Week / Month / Year / Manual with date picker)

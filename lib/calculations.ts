@@ -1,5 +1,5 @@
-import type { DailyPnLEntry, Metrics, Trade, ChartDataPoint, Timeframe, Period, DateRange, HistoryFilterState, MetricTimeSeries, FuturesMetrics, ComparisonRow } from './types'
-import { EXCHANGES } from './mock-data'
+import type { DailyPnLEntry, Metrics, Trade, ChartDataPoint, Timeframe, Period, DateRange, HistoryFilterState, MetricTimeSeries, FuturesMetrics, ComparisonRow, AccountSnapshot } from './types'
+import { EXCHANGES, INITIAL_USDT_BALANCE, INITIAL_TOKEN_BALANCE, ACCOUNT_PRIMARY_TOKEN, getAllDailyPnL, getAllTrades, getAllTransactions } from './mock-data'
 
 const INITIAL_CAPITAL = 6_800_000
 const RISK_FREE_DAILY = 0.05 / 252
@@ -506,4 +506,166 @@ export function buildComparisonRows(
       isBaseline: id === baselineId,
     }
   })
+}
+
+// ---------------------------------------------------------------------------
+// buildAccountSnapshots
+// Returns one AccountSnapshot per sub-account summarising the given period.
+// ---------------------------------------------------------------------------
+export function buildAccountSnapshots(dateRange: DateRange): AccountSnapshot[] {
+  const daily = getAllDailyPnL()
+  const trades = getAllTrades()
+  const transactions = getAllTransactions()
+
+  // Price range midpoints for fallback avgPrice
+  const PRICE_MID: Record<string, number> = {
+    BTC: (38_000 + 72_000) / 2,
+    ETH: (1_800 + 4_200) / 2,
+    SOL: (60 + 220) / 2,
+    BNB: (220 + 620) / 2,
+    XRP: (0.45 + 1.50) / 2,
+    AVAX: (18 + 65) / 2,
+    DOGE: (0.07 + 0.28) / 2,
+    MATIC: (0.50 + 2.10) / 2,
+  }
+
+  const snapshots: AccountSnapshot[] = []
+
+  for (const ex of EXCHANGES) {
+    for (const sa of ex.subAccounts) {
+      const id = sa.id
+      const token = ACCOUNT_PRIMARY_TOKEN[id]
+
+      // PnL: sum daily entries in range
+      const pnl = daily
+        .filter((d) => d.subAccountId === id && d.date >= dateRange.start && d.date <= dateRange.end)
+        .reduce((s, d) => s + d.pnl, 0)
+
+      // Transactions in range
+      const txInRange = transactions.filter(
+        (t) => t.subAccountId === id && t.date >= dateRange.start && t.date <= dateRange.end,
+      )
+      const depositUsdt     = txInRange.filter((t) => t.type === 'deposit').reduce((s, t) => s + t.usdtAmount, 0)
+      const withdrawalUsdt  = txInRange.filter((t) => t.type === 'withdrawal').reduce((s, t) => s + t.usdtAmount, 0)
+      const depositToken    = txInRange.filter((t) => t.type === 'deposit').reduce((s, t) => s + t.tokenAmount, 0)
+      const withdrawalToken = txInRange.filter((t) => t.type === 'withdrawal').reduce((s, t) => s + t.tokenAmount, 0)
+
+      const usdtOpen  = INITIAL_USDT_BALANCE[id]
+      const usdtClose = usdtOpen + pnl + depositUsdt - withdrawalUsdt
+      const deltaUsdt = usdtClose - usdtOpen
+
+      const tokenOpen  = INITIAL_TOKEN_BALANCE[id]
+      const tokenClose = tokenOpen + depositToken - withdrawalToken
+      const deltaToken = tokenClose - tokenOpen
+
+      // avgPrice: mean mid-price from trades for the primary token in the period
+      const tokenTrades = trades.filter(
+        (t) => t.subAccountId === id
+          && t.symbol.startsWith(token + '/')
+          && t.closedAt.slice(0, 10) >= dateRange.start
+          && t.closedAt.slice(0, 10) <= dateRange.end,
+      )
+      const avgPrice = tokenTrades.length > 0
+        ? tokenTrades.reduce((s, t) => s + (t.entryPrice + t.exitPrice) / 2, 0) / tokenTrades.length
+        : PRICE_MID[token] ?? 0
+
+      snapshots.push({
+        subAccountId: id,
+        exchangeId: ex.id,
+        accountName: sa.name,
+        token,
+        usdtOpen,
+        usdtClose,
+        deltaUsdt,
+        tokenOpen,
+        tokenClose,
+        deltaToken,
+        depositUsdt,
+        withdrawalUsdt,
+        depositToken,
+        withdrawalToken,
+        avgPrice,
+        pnl,
+      })
+    }
+  }
+
+  return snapshots
+}
+
+// ---------------------------------------------------------------------------
+// buildUsdtBalanceTimeSeries
+// Returns daily USDT balance for one sub-account: starts at initial balance,
+// updated each day by daily PnL and any USDT transactions on that date.
+// ---------------------------------------------------------------------------
+export function buildUsdtBalanceTimeSeries(
+  subAccountId: string,
+  dateRange: DateRange,
+): { date: string; value: number }[] {
+  const daily = getAllDailyPnL()
+  const transactions = getAllTransactions()
+
+  // Build lookup: date → daily pnl
+  const pnlByDate = new Map<string, number>()
+  for (const d of daily) {
+    if (d.subAccountId === subAccountId) pnlByDate.set(d.date, d.pnl)
+  }
+
+  // Build lookup: date → net USDT change from transactions
+  const txByDate = new Map<string, number>()
+  for (const t of transactions) {
+    if (t.subAccountId !== subAccountId) continue
+    const delta = t.type === 'deposit' ? t.usdtAmount : -t.usdtAmount
+    txByDate.set(t.date, (txByDate.get(t.date) ?? 0) + delta)
+  }
+
+  const result: { date: string; value: number }[] = []
+  let balance = INITIAL_USDT_BALANCE[subAccountId] ?? 0
+
+  const cursor = new Date(dateRange.start + 'T00:00:00Z')
+  const endMs  = new Date(dateRange.end   + 'T00:00:00Z').getTime()
+  while (cursor.getTime() <= endMs) {
+    const date = cursor.toISOString().slice(0, 10)
+    balance += pnlByDate.get(date) ?? 0
+    balance += txByDate.get(date) ?? 0
+    result.push({ date, value: Math.round(balance) })
+    cursor.setUTCDate(cursor.getUTCDate() + 1)
+  }
+
+  return result
+}
+
+// ---------------------------------------------------------------------------
+// buildTokenBalanceTimeSeries
+// Returns daily token balance for one sub-account: starts at initial token
+// balance, updated only on transaction dates (trading PnL is in USD, not
+// token units).
+// ---------------------------------------------------------------------------
+export function buildTokenBalanceTimeSeries(
+  subAccountId: string,
+  dateRange: DateRange,
+): { date: string; value: number }[] {
+  const transactions = getAllTransactions()
+
+  // Build lookup: date → net token change
+  const txByDate = new Map<string, number>()
+  for (const t of transactions) {
+    if (t.subAccountId !== subAccountId) continue
+    const delta = t.type === 'deposit' ? t.tokenAmount : -t.tokenAmount
+    txByDate.set(t.date, (txByDate.get(t.date) ?? 0) + delta)
+  }
+
+  const result: { date: string; value: number }[] = []
+  let balance = INITIAL_TOKEN_BALANCE[subAccountId] ?? 0
+
+  const cursor = new Date(dateRange.start + 'T00:00:00Z')
+  const endMs  = new Date(dateRange.end   + 'T00:00:00Z').getTime()
+  while (cursor.getTime() <= endMs) {
+    const date = cursor.toISOString().slice(0, 10)
+    balance += txByDate.get(date) ?? 0
+    result.push({ date, value: Math.round(balance * 1_000_000) / 1_000_000 })
+    cursor.setUTCDate(cursor.getUTCDate() + 1)
+  }
+
+  return result
 }

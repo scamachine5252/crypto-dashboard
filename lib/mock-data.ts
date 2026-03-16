@@ -1,4 +1,4 @@
-import type { ExchangeConfig, Trade, DailyPnLEntry, ExchangeId, TradeType } from './types'
+import type { ExchangeConfig, Trade, DailyPnLEntry, ExchangeId, TradeType, BalanceTransaction } from './types'
 
 // ---------------------------------------------------------------------------
 // Seeded deterministic RNG (mulberry32)
@@ -249,10 +249,80 @@ function generateTrades(): Trade[] {
 }
 
 // ---------------------------------------------------------------------------
+// Initial balances and primary tokens per sub-account
+// ---------------------------------------------------------------------------
+export const INITIAL_USDT_BALANCE: Record<string, number> = {
+  'binance-alpha': 1_100_000,
+  'binance-beta':    950_000,
+  'binance-gamma':   800_000,
+  'bybit-delta':   1_000_000,
+  'bybit-epsilon':   850_000,
+  'okx-zeta':        900_000,
+  'okx-eta':         750_000,
+}
+
+export const ACCOUNT_PRIMARY_TOKEN: Record<string, string> = {
+  'binance-alpha': 'BTC',
+  'binance-beta':  'ETH',
+  'binance-gamma': 'BNB',
+  'bybit-delta':   'SOL',
+  'bybit-epsilon': 'XRP',
+  'okx-zeta':      'AVAX',
+  'okx-eta':       'BTC',
+}
+
+export const INITIAL_TOKEN_BALANCE: Record<string, number> = {
+  'binance-alpha':    5,
+  'binance-beta':    80,
+  'binance-gamma':  200,
+  'bybit-delta':   1000,
+  'bybit-epsilon': 50000,
+  'okx-zeta':       800,
+  'okx-eta':          3,
+}
+
+// ---------------------------------------------------------------------------
+// Transaction generation
+// ---------------------------------------------------------------------------
+function generateTransactions(): BalanceTransaction[] {
+  const result: BalanceTransaction[] = []
+  const rng = createRng(hashStr('transactions'))
+
+  for (const ex of EXCHANGES) {
+    for (const sa of ex.subAccounts) {
+      const token = ACCOUNT_PRIMARY_TOKEN[sa.id]
+      const count = rng.int(3, 5)
+
+      for (let i = 0; i < count; i++) {
+        const dateIdx = rng.int(0, ALL_DATES.length - 1)
+        const date = ALL_DATES[dateIdx]
+        const type: 'deposit' | 'withdrawal' = rng.bool(0.6) ? 'deposit' : 'withdrawal'
+        const usdtAmount = Math.round(rng.int(50_000, 200_000) / 1000) * 1000
+        const tokenPct = 0.05 + rng.next() * 0.1  // 5–15% of initial token balance
+        const tokenAmount = Math.round(INITIAL_TOKEN_BALANCE[sa.id] * tokenPct * 10000) / 10000
+
+        result.push({
+          date,
+          subAccountId: sa.id,
+          exchangeId: ex.id as ExchangeId,
+          usdtAmount,
+          tokenAmount,
+          token,
+          type,
+        })
+      }
+    }
+  }
+
+  return result.sort((a, b) => a.date.localeCompare(b.date))
+}
+
+// ---------------------------------------------------------------------------
 // Memoized singletons
 // ---------------------------------------------------------------------------
 let _daily: DailyPnLEntry[] | null = null
 let _trades: Trade[] | null = null
+let _transactions: BalanceTransaction[] | null = null
 
 export function getAllDailyPnL(): DailyPnLEntry[] {
   if (!_daily) _daily = generateDailyPnL()
@@ -262,6 +332,11 @@ export function getAllDailyPnL(): DailyPnLEntry[] {
 export function getAllTrades(): Trade[] {
   if (!_trades) _trades = generateTrades()
   return _trades
+}
+
+export function getAllTransactions(): BalanceTransaction[] {
+  if (!_transactions) _transactions = generateTransactions()
+  return _transactions
 }
 
 export function filterDailyPnL(exchangeId: string, subAccountId: string): DailyPnLEntry[] {
