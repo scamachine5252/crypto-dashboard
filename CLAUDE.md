@@ -442,7 +442,7 @@ components/
 ├── layout/            # Header ✅, NavDropdown ✅, FilterBar ✅, AuthGuard ✅
 ├── charts/            # PnLChart ✅, MetricLineChart ✅ | (OverlayLineChart — not yet built)
 ├── metrics/           # MetricCard ✅, MetricsGrid ✅, BalanceCards ✅, MetricSelector ✅, FuturesMetricsTiles ✅
-├── orders/            # OrdersTable ✅ | (TradeFilters, ComparisonTable, ExportButton — not yet built)
+├── orders/            # OrdersTable ✅, TradeFilters ✅ | (ComparisonTable, ExportButton — not yet built)
 └── api/               # (ExchangeCard, ApiKeyInput, StatusBadge — not yet built)
 
 lib/
