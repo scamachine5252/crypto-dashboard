@@ -5,7 +5,7 @@
 ## Project State
 *Update this section after every major change.*
 
-### Status: Performance page rebuilt — dual tabs, spot/futures metrics table, equity curves
+### Status: Performance page complete — spot/futures tabs, metrics tables, equity curves
 
 ### What has been built
 
@@ -13,7 +13,7 @@
 
 **Pages complete:**
 - `/dashboard` — balance cards, 10 metric cards, equity-curve chart (Area + period Bars), PeriodSelector embedded in chart header; FilterBar removed; Fund value badge in header
-- `/performance` — metric selector tiles (spot + futures split), per-account toggle bar, multi-line chart (`MetricLineChart`) showing any metric over time per account, weekly/monthly timeframe toggle
+- `/performance` — PeriodSelector + accounts checkbox dropdown (click-outside aware); **L1 tabs** SPOT/FUTURES (active = green filled pill); **L2 tabs** (active = green border-bottom): SPOT has Overview/Returns/Risk/Costs, FUTURES has Overview/Returns/Risk & Exposure/Cost/Execution; per-account metrics table with polarity-aware best (green) / worst (red) cell highlighting and Total/Avg footer row; `OverlayLineChart` equity curves with D/W/M switcher embedded in chart header, normalized to 0 at period start for all timeframes
 - `/history` — sticky header strip (Export button) + TradeFilters bar (exchange/account/section/side dropdowns, symbol input, date range with Day/Week/Month/180D shortcuts); OrdersTable with Bybit-standard columns (Date/Time, Symbol, Order Type, Side, Filled Qty, Filled Value, Realized PnL, Fee, Exchange/Account); all CSS variables (full light/dark support)
 - `/results` — Trading Results investor view: USDT balance line chart (`BalanceLineChart`) + PnL histogram (`PnlHistogramChart`, Day/Week/Month timeframe), balance table with 2 rows per account (USDT + token), checkbox column, Difference/Fees/Avg Price/PnL columns, totals row; pair filter dropdown; charts filter by checked accounts
 - `/api-settings` — three exchange cards (Binance, Bybit, OKX); API key + secret fields (masked, show/hide); OKX passphrase field; mock Test Connection (600ms delay); Save/Remove; localStorage persistence via `api-key-store.ts`; global withdrawal-warning banner
@@ -51,7 +51,7 @@ crypto-dashboard/          ← project root (NOT src/)
 │   │   └── page.tsx       ← filter state (FilterState + DateRange), renders BalanceCards, MetricsGrid, PnLChart, OrdersTable
 │   ├── performance/
 │   │   ├── layout.tsx     ← wraps children in <AuthGuard>
-│   │   └── page.tsx       ← account toggle state, MetricSelector, FuturesMetricsTiles, MetricLineChart
+│   │   └── page.tsx       ← PeriodSelector + accounts checkbox dropdown; L1 SPOT/FUTURES tabs; L2 category tabs; per-account metrics table (buildPerAccountMetrics); OverlayLineChart equity curves
 │   ├── results/
 │   │   ├── layout.tsx     ← wraps children in <AuthGuard>
 │   │   └── page.tsx       ← full Trading Results page; OverlayLineChart + ComparisonTable; period selector, pair filter, account toggles
@@ -81,7 +81,7 @@ crypto-dashboard/          ← project root (NOT src/)
 │   ├── charts/
 │   │   ├── PnLChart.tsx       ← recharts ComposedChart; Area (cumulative PnL, left Y) + colored Bars (period PnL, right Y); daily/weekly/monthly timeframe tabs
 │   │   ├── MetricLineChart.tsx← recharts LineChart; one Line per active sub-account; custom tooltip shows all series sorted by value
-│   │   └── OverlayLineChart.tsx← recharts LineChart; normalized equity curves (all start at 0); ReferenceLine y=0; +/- prefix in tooltip
+│   │   └── OverlayLineChart.tsx← recharts LineChart; internal D/W/M timeframe state (default weekly); calls aggregateOverlayData then re-normalizes so first point is always 0; ReferenceLine y=0; +/- prefix in tooltip; D/W/M switcher in chart header
 │   └── orders/
 │       ├── TradeFilters.tsx   ← sticky filter bar for /history; exchange tabs, sub-account, symbol, trade type (spot/futures), side, Day/Week/Month/180D quick-select + manual date range (180-day cap); MOCK_TODAY = '2025-12-31'
 │       ├── ExportButton.tsx   ← CSV (Blob + createObjectURL) + PDF (jspdf@4 + jspdf-autotable@5 standalone API) export; two independent loading states
@@ -98,6 +98,8 @@ crypto-dashboard/          ← project root (NOT src/)
 │
 ├── lib/
 │   ├── types.ts           ← ALL shared interfaces: ExchangeId, Trade, DailyPnLEntry, Metrics, FuturesMetrics,
+│   │                         ExtendedMetrics (extends Metrics + recoveryFactor/avgFeePerTrade/feesAsPctOfPnl),
+│   │                         AccountMetricsRow (per-account metrics + futuresMetrics + extras Record),
 │   │                         FilterState, HistoryFilterState, MetricTimeSeries, AccountSummary, ApiKeyConfig,
 │   │                         ChartDataPoint, DateRange, Period, Timeframe, SubAccount, ExchangeConfig, ConnectionStatus
 │   │                         TradeType = 'spot' | 'futures' (options removed)
@@ -110,7 +112,9 @@ crypto-dashboard/          ← project root (NOT src/)
 │   ├── calculations.ts    ← calculateMetrics(), aggregateChartData(), resolveDateRange(), filterByDateRange(),
 │   │                         normalizeEquityCurve(), filterTradesAdvanced(), summarizeFilteredTrades(),
 │   │                         buildMetricTimeSeries(), calculateFuturesMetrics(),
-│   │                         buildOverlayData(), buildComparisonRows()
+│   │                         buildOverlayData(), buildComparisonRows(),
+│   │                         calculateRecoveryFactor(), calculateAvgFeePerTrade(), calculateFeesAsPctOfPnl(),
+│   │                         buildPerAccountMetrics(), aggregateOverlayData()
 │   ├── api-key-store.ts   ← loadApiKey(), saveApiKey(), removeApiKey(), loadAllApiKeys(); SSR-safe; localStorage namespace nexus:apikeys:{id}
 │   ├── adapters/
 │   │   ├── types.ts       ← ExchangeAdapter interface: getDailyPnL(), getTrades(), testConnection()
