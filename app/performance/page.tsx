@@ -18,7 +18,7 @@ import OverlayLineChart from '@/components/charts/OverlayLineChart'
 import { ChevronDown, Check } from 'lucide-react'
 
 type L1Tab = 'spot' | 'futures'
-type SpotL2 = 'returns' | 'risk' | 'execution'
+type SpotL2 = 'overview' | 'returns' | 'risk' | 'costs'
 type FuturesL2 = 'overview' | 'risk'
 type ChartTimeframe = 'daily' | 'weekly' | 'monthly'
 
@@ -31,9 +31,10 @@ interface ColDef {
 }
 
 const SPOT_L2_TABS: { id: SpotL2; label: string }[] = [
-  { id: 'returns',   label: 'Returns' },
-  { id: 'risk',      label: 'Risk' },
-  { id: 'execution', label: 'Execution' },
+  { id: 'overview', label: 'Overview' },
+  { id: 'returns',  label: 'Returns' },
+  { id: 'risk',     label: 'Risk' },
+  { id: 'costs',    label: 'Costs' },
 ]
 
 const FUTURES_L2_TABS: { id: FuturesL2; label: string }[] = [
@@ -42,28 +43,40 @@ const FUTURES_L2_TABS: { id: FuturesL2; label: string }[] = [
 ]
 
 const SPOT_COLS: Record<SpotL2, ColDef[]> = {
+  overview: [
+    { key: 'totalPnl',       label: 'Total PnL',      format: (v) => formatMoney(v),        sum: true },
+    { key: 'annualYield',    label: 'Annual Yield',    format: (v) => `${v.toFixed(1)}%` },
+    { key: 'sharpeRatio',    label: 'Sharpe',          format: (v) => v.toFixed(2) },
+    { key: 'winRate',        label: 'Win Rate',        format: (v) => `${v.toFixed(1)}%` },
+    { key: 'profitFactor',   label: 'Profit Factor',   format: (v) => v.toFixed(2) },
+    { key: 'riskReward',     label: 'R/R',             format: (v) => v.toFixed(2) },
+    { key: 'maxDrawdownPct', label: 'Max DD %',        format: (v) => `${v.toFixed(1)}%`,   lowerBetter: true },
+    { key: 'recoveryFactor', label: 'Recovery Factor', format: (v) => v.toFixed(2) },
+    { key: 'totalFees',      label: 'Total Fees',      format: (v) => formatMoney(v),        lowerBetter: true, sum: true },
+    { key: 'feesAsPctOfPnl', label: 'Fees % PnL',     format: (v) => `${v.toFixed(1)}%`,   lowerBetter: true },
+  ],
   returns: [
-    { key: 'totalPnl',     label: 'Total PnL',    format: (v) => formatMoney(v),          sum: true },
+    { key: 'totalPnl',     label: 'Total PnL',    format: (v) => formatMoney(v),        sum: true },
     { key: 'annualYield',  label: 'Annual Yield',  format: (v) => `${v.toFixed(1)}%` },
     { key: 'cagr',         label: 'CAGR',          format: (v) => `${v.toFixed(1)}%` },
+    { key: 'sharpeRatio',  label: 'Sharpe',        format: (v) => v.toFixed(2) },
+    { key: 'sortinoRatio', label: 'Sortino',       format: (v) => v.toFixed(2) },
     { key: 'winRate',      label: 'Win Rate',      format: (v) => `${v.toFixed(1)}%` },
     { key: 'profitFactor', label: 'Profit Factor', format: (v) => v.toFixed(2) },
+    { key: 'riskReward',   label: 'R/R',           format: (v) => v.toFixed(2) },
+    { key: 'averageWin',   label: 'Avg Win',       format: (v) => formatMoney(v) },
+    { key: 'averageLoss',  label: 'Avg Loss',      format: (v) => formatMoney(v) },
   ],
   risk: [
-    { key: 'sharpeRatio',    label: 'Sharpe',      format: (v) => v.toFixed(2) },
-    { key: 'sortinoRatio',   label: 'Sortino',     format: (v) => v.toFixed(2) },
-    { key: 'maxDrawdownPct', label: 'Max DD %',    format: (v) => `${v.toFixed(1)}%`, lowerBetter: true },
-    { key: 'maxDrawdown',    label: 'Max DD $',    format: (v) => formatMoney(v),     lowerBetter: true, sum: true },
-    { key: 'riskReward',     label: 'Risk/Reward', format: (v) => v.toFixed(2) },
-    { key: 'recoveryFactor', label: 'Recovery',    format: (v) => v.toFixed(2) },
+    { key: 'maxDrawdown',    label: 'Max DD $',        format: (v) => formatMoney(v),      lowerBetter: true, sum: true },
+    { key: 'maxDrawdownPct', label: 'Max DD %',        format: (v) => `${v.toFixed(1)}%`, lowerBetter: true },
+    { key: 'riskReward',     label: 'R/R',             format: (v) => v.toFixed(2) },
+    { key: 'recoveryFactor', label: 'Recovery Factor', format: (v) => v.toFixed(2) },
   ],
-  execution: [
-    { key: 'totalTrades',    label: 'Trades',       format: (v) => v.toLocaleString(),   sum: true },
-    { key: 'averageWin',     label: 'Avg Win',      format: (v) => formatMoney(v) },
-    { key: 'averageLoss',    label: 'Avg Loss',     format: (v) => formatMoney(v) },
-    { key: 'totalFees',      label: 'Total Fees',   format: (v) => formatMoney(v),       lowerBetter: true, sum: true },
-    { key: 'avgFeePerTrade', label: 'Fee/Trade',    format: (v) => formatMoney(v),       lowerBetter: true },
-    { key: 'feesAsPctOfPnl', label: 'Fees % PnL',  format: (v) => `${v.toFixed(1)}%`,   lowerBetter: true },
+  costs: [
+    { key: 'totalFees',      label: 'Total Fees',      format: (v) => formatMoney(v),      lowerBetter: true, sum: true },
+    { key: 'avgFeePerTrade', label: 'Avg Fee/Trade',   format: (v) => formatMoney(v),      lowerBetter: true },
+    { key: 'feesAsPctOfPnl', label: 'Fees % PnL',     format: (v) => `${v.toFixed(1)}%`,  lowerBetter: true },
   ],
 }
 
@@ -96,7 +109,7 @@ export default function PerformancePage() {
   const [period, setPeriod]           = useState<Period>('1Y')
   const [customRange, setCustomRange] = useState<DateRange | undefined>()
   const [l1, setL1]                   = useState<L1Tab>('spot')
-  const [spotL2, setSpotL2]           = useState<SpotL2>('returns')
+  const [spotL2, setSpotL2]           = useState<SpotL2>('overview')
   const [futuresL2, setFuturesL2]     = useState<FuturesL2>('overview')
   const [chartTf, setChartTf]         = useState<ChartTimeframe>('weekly')
   const [acctOpen, setAcctOpen]       = useState(false)
