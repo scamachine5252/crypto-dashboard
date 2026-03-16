@@ -361,16 +361,14 @@ export default function ApiSettingsPage() {
             placeholder="Enter secret key"
           />
 
-          {/* PassPhrase — OKX only */}
-          {form.exchangeId === 'okx' && (
-            <FieldInput
-              label="PassPhrase"
-              type="password"
-              value={form.passphrase}
-              onChange={(v) => patch('passphrase', v)}
-              placeholder="OKX passphrase"
-            />
-          )}
+          {/* PassPhrase */}
+          <FieldInput
+            label="PassPhrase (Password)"
+            type="password"
+            value={form.passphrase}
+            onChange={(v) => patch('passphrase', v)}
+            placeholder="Enter passphrase"
+          />
 
           {/* AccountID / Memo */}
           <FieldInput
