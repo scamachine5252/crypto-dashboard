@@ -10,6 +10,7 @@ import {
   aggregateChartData,
   buildAccountSnapshots,
   buildUsdtBalanceTimeSeries,
+  buildTokenBalanceTimeSeries,
 } from '@/lib/calculations'
 import Header from '@/components/layout/Header'
 import PeriodSelector from '@/components/ui/PeriodSelector'
@@ -126,6 +127,15 @@ export default function ResultsPage() {
     [checkedIds, dateRange],
   )
 
+  // Token balance series — only checked accounts
+  const tokenSeries = useMemo(
+    () => [...checkedIds].map((id) => ({
+      subAccountId: id,
+      data: buildTokenBalanceTimeSeries(id, dateRange),
+    })),
+    [checkedIds, dateRange],
+  )
+
   // PnL histogram — only checked accounts, selected timeframe
   const histogramData = useMemo(() => {
     const daily = filterByDateRange(
@@ -185,6 +195,7 @@ export default function ResultsPage() {
 
       <main className="flex-1 pb-6">
         {/* Charts row */}
+        {/* Balance charts — side by side */}
         <div className="px-4 pt-3 pb-2 grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* USDT Balance */}
           <div style={{ border: '1px solid var(--border-subtle)' }}>
@@ -197,7 +208,20 @@ export default function ResultsPage() {
             </div>
           </div>
 
-          {/* Monthly PnL histogram */}
+          {/* Token Balance */}
+          <div style={{ border: '1px solid var(--border-subtle)' }}>
+            <div className="px-4 py-2 flex items-center gap-3" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+              <p className="text-xs font-semibold tracking-wide font-heading" style={{ color: 'var(--text-primary)' }}>TOKEN BALANCE</p>
+              <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Token holdings over period per account</p>
+            </div>
+            <div className="px-3 py-3" style={{ background: 'var(--bg-secondary)' }}>
+              <BalanceLineChart series={tokenSeries} height={220} />
+            </div>
+          </div>
+        </div>
+
+        {/* PnL histogram — full width */}
+        <div className="px-4 pb-2">
           <div style={{ border: '1px solid var(--border-subtle)' }}>
             <div className="px-4 py-2 flex items-center gap-3" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
               <p className="text-xs font-semibold tracking-wide font-heading" style={{ color: 'var(--text-primary)' }}>P&L</p>
