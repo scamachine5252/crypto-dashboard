@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import React, { useState, useMemo } from 'react'
 import type { Period, DateRange, Timeframe } from '@/lib/types'
 import { EXCHANGES, getAllDailyPnL, ACCOUNT_PRIMARY_TOKEN } from '@/lib/mock-data'
 import {
@@ -271,7 +271,7 @@ export default function ResultsPage() {
                     const rowAlpha = checked ? 1 : 0.4
 
                     return (
-                      <>
+                      <React.Fragment key={snap.subAccountId}>
                         {/* USDT row */}
                         <tr
                           key={`${snap.subAccountId}-usdt`}
@@ -334,7 +334,7 @@ export default function ResultsPage() {
                           <td className={numCell} style={{ ...cellBorder, color: 'var(--text-secondary)' }}>{formatMoney(snap.avgPrice)}</td>
                           <td className={numCell} style={cellBorder}><span style={{ color: 'var(--text-muted)' }}>—</span></td>
                         </tr>
-                      </>
+                      </React.Fragment>
                     )
                   })
                 )}
