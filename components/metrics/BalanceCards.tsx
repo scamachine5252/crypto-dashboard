@@ -67,7 +67,7 @@ export default function BalanceCards() {
   }, [])
 
   return (
-    <div className="flex flex-wrap gap-4 px-4 py-4" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+    <div className="flex flex-wrap gap-2 px-4 py-2" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
       {summaries.map(({ ex, balance, pnl, pnlPct }) => {
         const Logo = EXCHANGE_LOGOS[ex.id]
         return (
@@ -104,12 +104,13 @@ function ExCard({ name, accentColor, logo, balance, pnl, pnlPct }: ExCardProps) 
 
   return (
     <div
-      className="flex-1 min-w-[200px] flex flex-col gap-3 px-4 py-3"
+      className="flex-1 min-w-[200px] flex flex-col gap-2 px-3.5 py-2.5"
       style={{
         background: 'var(--bg-secondary)',
         border: '1px solid var(--border-subtle)',
         borderTop: `3px solid ${accentColor}`,
-        borderRadius: 2,
+        borderRadius: 4,
+        alignSelf: 'flex-start',
       }}
     >
       {/* Header: logo + exchange name */}
@@ -125,7 +126,7 @@ function ExCard({ name, accentColor, logo, balance, pnl, pnlPct }: ExCardProps) 
 
       {/* Balance */}
       <div
-        className="font-mono text-2xl font-bold leading-none tabular"
+        className="font-mono text-[22px] font-bold leading-none tabular"
         style={{ color: 'var(--text-primary)', letterSpacing: '-0.02em' }}
       >
         {formatMoney(balance)}

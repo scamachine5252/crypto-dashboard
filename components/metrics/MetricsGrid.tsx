@@ -87,7 +87,7 @@ export default function MetricsGrid({ metrics }: MetricsGridProps) {
   ] as const
 
   return (
-    <div className="px-4 pt-2 pb-1">
+    <div className="px-4 pt-1 pb-1">
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-px" style={{ background: 'var(--border-subtle)' }}>
         {cards.map((c) => (
           <MetricCard

@@ -31,7 +31,7 @@ export default function MetricCard({
 }: MetricCardProps) {
   return (
     <div
-      className="px-3 py-2.5 flex flex-col gap-1.5 transition-colors"
+      className="px-3 py-2 flex flex-col gap-1 transition-colors"
       style={{
         background: 'var(--bg-secondary)',
         borderTop: `1px solid var(--border-subtle)`,
@@ -64,7 +64,7 @@ export default function MetricCard({
       {/* Value row */}
       <div className="flex items-baseline gap-1.5">
         <span
-          className="font-mono text-xl font-bold leading-none tabular"
+          className="font-mono text-base font-bold leading-none tabular"
           style={{ color: TREND_COLOR[trend] }}
         >
           {value}
