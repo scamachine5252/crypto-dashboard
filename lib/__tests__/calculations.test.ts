@@ -783,11 +783,10 @@ describe('buildAccountSnapshots', () => {
     }
   })
 
-  it('depositUsdt and withdrawalUsdt are non-negative', () => {
+  it('fees is a non-negative number for each snapshot', () => {
     const snapshots = buildAccountSnapshots(fullYear)
     for (const s of snapshots) {
-      expect(s.depositUsdt).toBeGreaterThanOrEqual(0)
-      expect(s.withdrawalUsdt).toBeGreaterThanOrEqual(0)
+      expect(s.fees).toBeGreaterThanOrEqual(0)
     }
   })
 

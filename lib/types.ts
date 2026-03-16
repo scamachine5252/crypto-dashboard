@@ -142,10 +142,7 @@ export interface AccountSnapshot {
   tokenOpen: number
   tokenClose: number
   deltaToken: number
-  depositUsdt: number
-  withdrawalUsdt: number
-  depositToken: number
-  withdrawalToken: number
+  fees: number
   avgPrice: number
   pnl: number
 }

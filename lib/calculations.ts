@@ -515,7 +515,6 @@ export function buildComparisonRows(
 export function buildAccountSnapshots(dateRange: DateRange): AccountSnapshot[] {
   const daily = getAllDailyPnL()
   const trades = getAllTrades()
-  const transactions = getAllTransactions()
 
   // Price range midpoints for fallback avgPrice
   const PRICE_MID: Record<string, number> = {
@@ -541,30 +540,26 @@ export function buildAccountSnapshots(dateRange: DateRange): AccountSnapshot[] {
         .filter((d) => d.subAccountId === id && d.date >= dateRange.start && d.date <= dateRange.end)
         .reduce((s, d) => s + d.pnl, 0)
 
-      // Transactions in range
-      const txInRange = transactions.filter(
-        (t) => t.subAccountId === id && t.date >= dateRange.start && t.date <= dateRange.end,
-      )
-      const depositUsdt     = txInRange.filter((t) => t.type === 'deposit').reduce((s, t) => s + t.usdtAmount, 0)
-      const withdrawalUsdt  = txInRange.filter((t) => t.type === 'withdrawal').reduce((s, t) => s + t.usdtAmount, 0)
-      const depositToken    = txInRange.filter((t) => t.type === 'deposit').reduce((s, t) => s + t.tokenAmount, 0)
-      const withdrawalToken = txInRange.filter((t) => t.type === 'withdrawal').reduce((s, t) => s + t.tokenAmount, 0)
-
-      const usdtOpen  = INITIAL_USDT_BALANCE[id]
-      const usdtClose = usdtOpen + pnl + depositUsdt - withdrawalUsdt
-      const deltaUsdt = usdtClose - usdtOpen
-
-      const tokenOpen  = INITIAL_TOKEN_BALANCE[id]
-      const tokenClose = tokenOpen + depositToken - withdrawalToken
-      const deltaToken = tokenClose - tokenOpen
-
-      // avgPrice: mean mid-price from trades for the primary token in the period
-      const tokenTrades = trades.filter(
+      // Trades in range for this account
+      const accountTrades = trades.filter(
         (t) => t.subAccountId === id
-          && t.symbol.startsWith(token + '/')
           && t.closedAt.slice(0, 10) >= dateRange.start
           && t.closedAt.slice(0, 10) <= dateRange.end,
       )
+
+      // Fees: sum of all trade fees in period
+      const fees = accountTrades.reduce((s, t) => s + t.fee, 0)
+
+      const usdtOpen  = INITIAL_USDT_BALANCE[id]
+      const usdtClose = usdtOpen + pnl
+      const deltaUsdt = usdtClose - usdtOpen
+
+      const tokenOpen  = INITIAL_TOKEN_BALANCE[id]
+      const tokenClose = tokenOpen
+      const deltaToken = 0
+
+      // avgPrice: mean mid-price from trades for the primary token in the period
+      const tokenTrades = accountTrades.filter((t) => t.symbol.startsWith(token + '/'))
       const avgPrice = tokenTrades.length > 0
         ? tokenTrades.reduce((s, t) => s + (t.entryPrice + t.exitPrice) / 2, 0) / tokenTrades.length
         : PRICE_MID[token] ?? 0
@@ -580,10 +575,7 @@ export function buildAccountSnapshots(dateRange: DateRange): AccountSnapshot[] {
         tokenOpen,
         tokenClose,
         deltaToken,
-        depositUsdt,
-        withdrawalUsdt,
-        depositToken,
-        withdrawalToken,
+        fees,
         avgPrice,
         pnl,
       })

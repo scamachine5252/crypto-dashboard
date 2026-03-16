@@ -15,7 +15,7 @@
 - `/dashboard` — balance cards, 10 metric cards, equity-curve chart (Area + period Bars), PeriodSelector embedded in chart header; FilterBar removed; Fund value badge in header
 - `/performance` — metric selector tiles (spot + futures split), per-account toggle bar, multi-line chart (`MetricLineChart`) showing any metric over time per account, weekly/monthly timeframe toggle
 - `/history` — sticky TradeFilters bar (exchange, sub-account, symbol, type, side, 180-day date range), 50-row paginated OrdersTable, ExportButton (CSV + PDF), footer with total PnL + fees
-- `/results` — Trading Results investor view: USDT balance line chart (`BalanceLineChart`) + monthly PnL histogram (`PnlHistogramChart`), balance table with 2 rows per account (USDT + token), deposits/withdrawals, Δ balance, avg price, PnL, totals row; token filter dropdown
+- `/results` — Trading Results investor view: USDT balance line chart (`BalanceLineChart`) + PnL histogram (`PnlHistogramChart`, Day/Week/Month timeframe), balance table with 2 rows per account (USDT + token), checkbox column, Difference/Fees/Avg Price/PnL columns, totals row; pair filter dropdown; charts filter by checked accounts
 - `/api-settings` — three exchange cards (Binance, Bybit, OKX); API key + secret fields (masked, show/hide); OKX passphrase field; mock Test Connection (600ms delay); Save/Remove; localStorage persistence via `api-key-store.ts`; global withdrawal-warning banner
 
 **Infrastructure complete:**
