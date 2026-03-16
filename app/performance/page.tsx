@@ -19,7 +19,7 @@ import { ChevronDown, Check } from 'lucide-react'
 
 type L1Tab = 'spot' | 'futures'
 type SpotL2 = 'overview' | 'returns' | 'risk' | 'costs'
-type FuturesL2 = 'overview' | 'risk'
+type FuturesL2 = 'overview' | 'returns' | 'risk-exposure' | 'cost' | 'execution'
 type ChartTimeframe = 'daily' | 'weekly' | 'monthly'
 
 interface ColDef {
@@ -38,8 +38,11 @@ const SPOT_L2_TABS: { id: SpotL2; label: string }[] = [
 ]
 
 const FUTURES_L2_TABS: { id: FuturesL2; label: string }[] = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'risk',     label: 'Risk' },
+  { id: 'overview',      label: 'Overview' },
+  { id: 'returns',       label: 'Returns' },
+  { id: 'risk-exposure', label: 'Risk & Exposure' },
+  { id: 'cost',          label: 'Cost' },
+  { id: 'execution',     label: 'Execution' },
 ]
 
 const SPOT_COLS: Record<SpotL2, ColDef[]> = {
@@ -82,18 +85,51 @@ const SPOT_COLS: Record<SpotL2, ColDef[]> = {
 
 const FUTURES_COLS: Record<FuturesL2, ColDef[]> = {
   overview: [
-    { key: 'totalFundingCost', label: 'Funding Cost', format: (v) => formatMoney(v),  lowerBetter: true, sum: true },
-    { key: 'averageLeverage',  label: 'Avg Leverage', format: (v) => `${v.toFixed(1)}x` },
-    { key: 'longShortRatio',   label: 'Long %',       format: (v) => `${v.toFixed(1)}%` },
+    { key: 'totalPnl',               label: 'Total PnL',        format: (v) => formatMoney(v),        sum: true },
+    { key: 'annualYield',            label: 'Annual Yield',     format: (v) => `${v.toFixed(1)}%` },
+    { key: 'winRate',                label: 'Win Rate',         format: (v) => `${v.toFixed(1)}%` },
+    { key: 'riskReward',             label: 'R/R',              format: (v) => v.toFixed(2) },
+    { key: 'averageLeverage',        label: 'Avg Leverage',     format: (v) => `${v.toFixed(1)}x` },
+    { key: 'longShortRatio',         label: 'Long/Short',       format: (v) => `${v.toFixed(1)}%` },
+    { key: 'liquidationDistancePct', label: 'Liq. Distance',    format: (v) => `${v.toFixed(1)}%` },
+    { key: 'totalFundingCost',       label: 'Funding Cost',     format: (v) => formatMoney(v),        lowerBetter: true, sum: true },
+    { key: 'avgFundingPerTrade',     label: 'Avg Funding/Trade',format: (v) => formatMoney(v),        lowerBetter: true },
+    { key: 'rolloverCosts',          label: 'Rollover Costs',   format: (v) => formatMoney(v),        lowerBetter: true, sum: true },
+    { key: 'avgHoldingMin',          label: 'Avg Holding Time', format: (v) => `${v.toFixed(0)}m` },
+    { key: 'openInterest',           label: 'Open Interest',    format: (v) => formatMoney(v) },
+    { key: 'liquidationsCount',      label: 'Liquidations',     format: (v) => v.toFixed(0),          lowerBetter: true, sum: true },
   ],
-  risk: [
-    { key: 'liquidationDistancePct', label: 'Liq Distance', format: (v) => `${v.toFixed(1)}%` },
-    { key: 'overnightExposureCount', label: 'Overnight',    format: (v) => v.toFixed(0),       sum: true },
+  returns: [
+    { key: 'totalPnl',    label: 'Total PnL',   format: (v) => formatMoney(v),        sum: true },
+    { key: 'annualYield', label: 'Annual Yield', format: (v) => `${v.toFixed(1)}%` },
+    { key: 'winRate',     label: 'Win Rate',     format: (v) => `${v.toFixed(1)}%` },
+    { key: 'riskReward',  label: 'Risk/Reward',  format: (v) => v.toFixed(2) },
+  ],
+  'risk-exposure': [
+    { key: 'averageLeverage',        label: 'Avg Leverage',  format: (v) => `${v.toFixed(1)}x` },
+    { key: 'longShortRatio',         label: 'Long/Short',    format: (v) => `${v.toFixed(1)}%` },
+    { key: 'liquidationDistancePct', label: 'Liq. Distance', format: (v) => `${v.toFixed(1)}%` },
+  ],
+  cost: [
+    { key: 'totalFundingCost',   label: 'Funding Rate Costs', format: (v) => formatMoney(v), lowerBetter: true, sum: true },
+    { key: 'avgFundingPerTrade', label: 'Avg Funding/Trade',  format: (v) => formatMoney(v), lowerBetter: true },
+    { key: 'rolloverCosts',      label: 'Rollover Costs',     format: (v) => formatMoney(v), lowerBetter: true, sum: true },
+  ],
+  execution: [
+    { key: 'avgHoldingMin',     label: 'Avg Holding Time',   format: (v) => `${v.toFixed(0)}m` },
+    { key: 'openInterest',      label: 'Open Interest',      format: (v) => formatMoney(v) },
+    { key: 'liquidationsCount', label: 'Liquidations Count', format: (v) => v.toFixed(0),       lowerBetter: true, sum: true },
   ],
 }
 
 function getValue(row: AccountMetricsRow, key: string, l1: L1Tab): number {
-  if (l1 === 'futures') return (row.futuresMetrics as unknown as Record<string, number>)[key] ?? 0
+  if (l1 === 'futures') {
+    const fromFutures = (row.futuresMetrics as unknown as Record<string, number>)[key]
+    if (fromFutures !== undefined) return fromFutures
+    const fromMetrics = (row.metrics as unknown as Record<string, number>)[key]
+    if (fromMetrics !== undefined) return fromMetrics
+    return row.extras[key] ?? 0
+  }
   return (row.metrics as unknown as Record<string, number>)[key] ?? 0
 }
 

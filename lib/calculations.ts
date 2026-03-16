@@ -749,6 +749,8 @@ export function buildPerAccountMetrics(
           avgHoldingMin,
           totalNotional,
           liquidationsCount: 0, // no liquidation data in mock
+          rolloverCosts:     0, // not available in mock data
+          openInterest:      0, // not available in mock data
         },
       })
     }
