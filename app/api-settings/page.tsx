@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { AlertTriangle } from 'lucide-react'
 import type { AccountConfig, ExchangeId } from '@/lib/types'
 import { EXCHANGES } from '@/lib/mock-data'
 import {
@@ -258,21 +257,6 @@ export default function ApiSettingsPage() {
   return (
     <div className="min-h-screen flex flex-col" style={{ background: 'var(--bg-primary)' }}>
       <Header totalPnl={0} annualYield={0} />
-
-      {/* Warning banner */}
-      <div
-        className="px-6 py-2.5 flex items-center gap-2.5 text-xs"
-        style={{
-          background: 'rgba(255,179,0,0.08)',
-          borderBottom: '1px solid rgba(255,179,0,0.25)',
-          color: '#FFB300',
-        }}
-      >
-        <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-        <span>
-          API keys are stored locally in your browser. Never use keys with withdrawal permissions.
-        </span>
-      </div>
 
       {/* Two-column body */}
       <div className="flex gap-6 px-6 py-5 flex-1 items-start">
