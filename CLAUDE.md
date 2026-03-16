@@ -5,7 +5,7 @@
 ## Project State
 *Update this section after every major change.*
 
-### Status: Phase 3 in progress — Trading History page complete
+### Status: Phase 4 in progress — 4 of 5 pages complete
 
 ### What has been built
 
@@ -15,9 +15,10 @@
 - `/dashboard` — balance cards, 10 metric cards, equity-curve chart (Area + period Bars), orders table, period selector, exchange/sub-account filter
 - `/performance` — metric selector tiles (spot + futures split), per-account toggle bar, multi-line chart (`MetricLineChart`) showing any metric over time per account, weekly/monthly timeframe toggle
 - `/history` — sticky TradeFilters bar (exchange, sub-account, symbol, type, side, 180-day date range), 50-row paginated OrdersTable, ExportButton (CSV + PDF), footer with total PnL + fees
+- `/results` — normalized overlay equity curves (`OverlayLineChart`), per-account metric comparison table (`ComparisonTable`) with Δ vs baseline, period selector, pair filter, account toggles
 
 **Pages stubbed (routing works, UI shows "Coming soon"):**
-- `/results`, `/api-settings`
+- `/api-settings`
 
 **Infrastructure complete:**
 - Dark/light theme toggle (ThemeProvider, localStorage, anti-flash `<Script>` in layout)
@@ -51,7 +52,7 @@ crypto-dashboard/          ← project root (NOT src/)
 │   │   └── page.tsx       ← account toggle state, MetricSelector, FuturesMetricsTiles, MetricLineChart
 │   ├── results/
 │   │   ├── layout.tsx     ← wraps children in <AuthGuard>
-│   │   └── page.tsx       ← STUB ("Coming soon")
+│   │   └── page.tsx       ← full Trading Results page; OverlayLineChart + ComparisonTable; period selector, pair filter, account toggles
 │   ├── history/
 │   │   ├── layout.tsx     ← wraps children in <AuthGuard>
 │   │   └── page.tsx       ← full Trading History page; TradeFilters + OrdersTable(pageSize=50) + ExportButton + footer
@@ -77,11 +78,16 @@ crypto-dashboard/          ← project root (NOT src/)
 │   │   └── FuturesMetricsTiles.tsx← 5-tile row: funding cost, avg leverage, L/S ratio, liq. distance, overnight exposure
 │   ├── charts/
 │   │   ├── PnLChart.tsx       ← recharts ComposedChart; Area (cumulative PnL, left Y) + colored Bars (period PnL, right Y); daily/weekly/monthly timeframe tabs
-│   │   └── MetricLineChart.tsx← recharts LineChart; one Line per active sub-account; custom tooltip shows all series sorted by value
+│   │   ├── MetricLineChart.tsx← recharts LineChart; one Line per active sub-account; custom tooltip shows all series sorted by value
+│   │   └── OverlayLineChart.tsx← recharts LineChart; normalized equity curves (all start at 0); ReferenceLine y=0; +/- prefix in tooltip
 │   └── orders/
 │       ├── TradeFilters.tsx   ← sticky filter bar for /history; exchange tabs, sub-account, symbol, trade type (spot/futures), side, Day/Week/Month/180D quick-select + manual date range (180-day cap); MOCK_TODAY = '2025-12-31'
 │       ├── ExportButton.tsx   ← CSV (Blob + createObjectURL) + PDF (jspdf@4 + jspdf-autotable@5 standalone API) export; two independent loading states
-│       └── OrdersTable.tsx    ← sortable by symbol/pnl/fee/pnlPercent/closedAt; client-side search; configurable pageSize (default 15)
+│       ├── OrdersTable.tsx    ← sortable by symbol/pnl/fee/pnlPercent/closedAt; client-side search; configurable pageSize (default 15)
+│       └── ComparisonTable.tsx← one row per account; 12 metric columns; Δ vs baseline with polarity-aware color; sticky Account column; baseline row gold border + badge
+│
+├── hooks/
+│   └── useAccountToggles.ts  ← toggleAccount, toggleExchange, selectAll, reset; enforces min 1 active; used by /performance and /results
 │
 ├── lib/
 │   ├── types.ts           ← ALL shared interfaces: ExchangeId, Trade, DailyPnLEntry, Metrics, FuturesMetrics,
@@ -96,7 +102,8 @@ crypto-dashboard/          ← project root (NOT src/)
 │   │                         filterDailyPnL(), filterTrades(), getAllDailyPnL(), getAllTrades()
 │   ├── calculations.ts    ← calculateMetrics(), aggregateChartData(), resolveDateRange(), filterByDateRange(),
 │   │                         normalizeEquityCurve(), filterTradesAdvanced(), summarizeFilteredTrades(),
-│   │                         buildMetricTimeSeries(), calculateFuturesMetrics()
+│   │                         buildMetricTimeSeries(), calculateFuturesMetrics(),
+│   │                         buildOverlayData(), buildComparisonRows()
 │   ├── adapters/
 │   │   ├── types.ts       ← ExchangeAdapter interface: getDailyPnL(), getTrades(), testConnection()
 │   │   └── mock.ts        ← MockAdapter implements ExchangeAdapter using mock-data.ts
