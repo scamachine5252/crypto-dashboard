@@ -20,7 +20,6 @@ import { ChevronDown, Check } from 'lucide-react'
 type L1Tab = 'spot' | 'futures'
 type SpotL2 = 'overview' | 'returns' | 'risk' | 'costs'
 type FuturesL2 = 'overview' | 'returns' | 'risk-exposure' | 'cost' | 'execution'
-type ChartTimeframe = 'daily' | 'weekly' | 'monthly'
 
 interface ColDef {
   key: string
@@ -147,7 +146,6 @@ export default function PerformancePage() {
   const [l1, setL1]                   = useState<L1Tab>('spot')
   const [spotL2, setSpotL2]           = useState<SpotL2>('overview')
   const [futuresL2, setFuturesL2]     = useState<FuturesL2>('overview')
-  const [chartTf, setChartTf]         = useState<ChartTimeframe>('weekly')
   const [acctOpen, setAcctOpen]       = useState(false)
   const dropdownRef                   = useRef<HTMLDivElement>(null)
 
@@ -315,23 +313,6 @@ export default function PerformancePage() {
           )}
         </div>
 
-        {/* Chart timeframe */}
-        <div className="ml-auto flex items-center gap-px" style={{ border: '1px solid var(--border-subtle)' }}>
-          {(['daily', 'weekly', 'monthly'] as ChartTimeframe[]).map((tf, i, arr) => (
-            <button
-              key={tf}
-              onClick={() => setChartTf(tf)}
-              className="px-3 py-1 text-[10px] font-semibold tracking-wider uppercase transition-colors"
-              style={{
-                background: chartTf === tf ? 'var(--bg-elevated)' : 'transparent',
-                color:      chartTf === tf ? 'var(--text-primary)' : 'var(--text-muted)',
-                borderRight: i < arr.length - 1 ? '1px solid var(--border-subtle)' : 'none',
-              }}
-            >
-              {tf === 'daily' ? 'D' : tf === 'weekly' ? 'W' : 'M'}
-            </button>
-          ))}
-        </div>
       </div>
 
       {/* L1 tabs: SPOT / FUTURES */}
@@ -489,7 +470,6 @@ export default function PerformancePage() {
           <OverlayLineChart
             data={overlayData}
             activeIds={[...activeIds]}
-            timeframe={chartTf}
             height={280}
           />
         </div>

@@ -1,5 +1,6 @@
 'use client'
 
+import { useState } from 'react'
 import {
   LineChart,
   Line,
@@ -15,10 +16,11 @@ import { ACCOUNT_COLORS, EXCHANGES } from '@/lib/mock-data'
 import { formatMoney } from '@/lib/utils'
 import { aggregateOverlayData } from '@/lib/calculations'
 
+type ChartTimeframe = 'daily' | 'weekly' | 'monthly'
+
 interface OverlayLineChartProps {
   data: MetricTimeSeries[]  // output of buildOverlayData — date + one key per active account
   activeIds: string[]       // controls which Lines are rendered and in what order
-  timeframe?: 'daily' | 'weekly' | 'monthly'  // default 'daily'
   height?: number           // chart area height in px, default 320
 }
 
@@ -78,8 +80,24 @@ function CustomTooltip({ active, payload, label }: CustomTooltipProps) {
   )
 }
 
-export default function OverlayLineChart({ data, activeIds, timeframe = 'daily', height = 320 }: OverlayLineChartProps) {
-  const chartData = aggregateOverlayData(data, timeframe)
+export default function OverlayLineChart({ data, activeIds, height = 320 }: OverlayLineChartProps) {
+  const [timeframe, setTimeframe] = useState<ChartTimeframe>('weekly')
+
+  // Aggregate into the selected timeframe
+  const aggregated = aggregateOverlayData(data, timeframe)
+
+  // Re-normalize so the first point is always 0 for every account,
+  // regardless of timeframe (weekly/monthly buckets don't start at 0 after aggregation)
+  const chartData: MetricTimeSeries[] = aggregated.map((row, i) => {
+    if (i === 0) return row
+    const first = aggregated[0]
+    const normalized: MetricTimeSeries = { date: row.date }
+    for (const key of Object.keys(row)) {
+      if (key === 'date') continue
+      normalized[key] = (row[key] as number) - (first[key] as number ?? 0)
+    }
+    return normalized
+  })
 
   if (data.length === 0 || activeIds.length === 0) {
     return (
@@ -96,7 +114,7 @@ export default function OverlayLineChart({ data, activeIds, timeframe = 'daily',
     <div className="mx-4 mb-4" style={{ border: '1px solid var(--border-subtle)' }}>
       {/* Chart header */}
       <div
-        className="px-4 py-2.5 flex items-center gap-3"
+        className="px-4 py-2.5 flex items-center gap-3 flex-wrap"
         style={{ borderBottom: '1px solid var(--border-subtle)' }}
       >
         <p
@@ -105,7 +123,24 @@ export default function OverlayLineChart({ data, activeIds, timeframe = 'daily',
         >
           Equity Curves
         </p>
-        <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>normalized to period start</span>
+
+        {/* D/W/M timeframe switcher */}
+        <div className="flex items-center gap-px" style={{ border: '1px solid var(--border-subtle)' }}>
+          {(['daily', 'weekly', 'monthly'] as ChartTimeframe[]).map((tf, i, arr) => (
+            <button
+              key={tf}
+              onClick={() => setTimeframe(tf)}
+              className="px-2.5 py-0.5 text-[10px] font-semibold tracking-wider uppercase transition-colors"
+              style={{
+                background:  timeframe === tf ? 'var(--bg-elevated)' : 'transparent',
+                color:       timeframe === tf ? 'var(--text-primary)' : 'var(--text-muted)',
+                borderRight: i < arr.length - 1 ? '1px solid var(--border-subtle)' : 'none',
+              }}
+            >
+              {tf === 'daily' ? 'D' : tf === 'weekly' ? 'W' : 'M'}
+            </button>
+          ))}
+        </div>
 
         {/* Inline legend */}
         <div className="ml-auto flex items-center gap-3 flex-wrap">
