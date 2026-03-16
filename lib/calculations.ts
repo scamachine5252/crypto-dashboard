@@ -345,3 +345,75 @@ export function calculateFuturesMetrics(trades: Trade[]): FuturesMetrics {
     overnightExposureCount,
   }
 }
+
+// ---------------------------------------------------------------------------
+// buildOverlayData
+// Normalizes multiple equity curves to a common baseline (0 at period start)
+// so accounts of different absolute sizes can be compared on the same axis.
+// ---------------------------------------------------------------------------
+export function buildOverlayData(
+  dailyPnL: DailyPnLEntry[],
+  subAccountIds: string[],
+  dateRange: DateRange,
+): MetricTimeSeries[] {
+  if (subAccountIds.length === 0 || dailyPnL.length === 0) return []
+
+  // Filter to date range and sort ascending
+  const inRange = dailyPnL
+    .filter((e) => e.date >= dateRange.start && e.date <= dateRange.end)
+    .sort((a, b) => (a.date < b.date ? -1 : 1))
+
+  if (inRange.length === 0) return []
+
+  // Build unified date axis — every calendar day in the range
+  const dates: string[] = []
+  const cursor = new Date(dateRange.start + 'T00:00:00Z')
+  const endMs = new Date(dateRange.end + 'T00:00:00Z').getTime()
+  while (cursor.getTime() <= endMs) {
+    dates.push(cursor.toISOString().slice(0, 10))
+    cursor.setUTCDate(cursor.getUTCDate() + 1)
+  }
+
+  // For each account: build date → cumulativePnl lookup, find baseline
+  type AccountData = { lookup: Map<string, number>; baseline: number }
+  const accountMap = new Map<string, AccountData>()
+
+  for (const id of subAccountIds) {
+    const entries = inRange.filter((e) => e.subAccountId === id)
+    if (entries.length === 0) continue  // omit accounts with no data in range
+
+    const lookup = new Map<string, number>()
+    entries.forEach((e) => lookup.set(e.date, e.cumulativePnl))
+
+    // Baseline = cumulativePnl on the first date that has data for this account
+    const firstDate = dates.find((d) => lookup.has(d))!
+    const baseline = lookup.get(firstDate)!
+
+    accountMap.set(id, { lookup, baseline })
+  }
+
+  if (accountMap.size === 0) return []
+
+  // Assemble output — one row per date, carry forward last known value per account
+  const result: MetricTimeSeries[] = []
+  const lastKnown = new Map<string, number>()  // tracks last normalized value per account
+
+  for (const date of dates) {
+    const row: MetricTimeSeries = { date }
+
+    for (const [id, { lookup, baseline }] of accountMap) {
+      if (lookup.has(date)) {
+        const normalized = lookup.get(date)! - baseline
+        lastKnown.set(id, normalized)
+        row[id] = normalized
+      } else {
+        // Carry forward; default to 0 if no prior value exists
+        row[id] = lastKnown.get(id) ?? 0
+      }
+    }
+
+    result.push(row)
+  }
+
+  return result
+}
