@@ -73,7 +73,7 @@ function tradeToTableRow(t: Trade): (string | number | boolean)[] {
 
 async function exportPdf(trades: Trade[], filename: string) {
   const { jsPDF } = await import('jspdf')
-  await import('jspdf-autotable')
+  const { default: autoTable } = await import('jspdf-autotable')
 
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })
 
@@ -87,8 +87,7 @@ async function exportPdf(trades: Trade[], filename: string) {
   doc.text(filename, 14, 22)
   doc.setTextColor(0)
 
-  // @ts-expect-error — jspdf-autotable patches jsPDF prototype at runtime
-  doc.autoTable({
+  autoTable(doc, {
     head: [PDF_HEADERS],
     body: trades.map(tradeToTableRow),
     startY: 27,
