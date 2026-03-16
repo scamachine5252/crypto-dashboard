@@ -120,3 +120,47 @@ export interface ApiKeyConfig {
   apiSecret: string
   passphrase?: string  // OKX only
 }
+
+export interface ComparisonRow {
+  // Identity
+  subAccountId: string
+  exchangeId: ExchangeId
+  name: string          // human-readable sub-account name (e.g. "Alpha Fund")
+
+  // Snapshot metrics for the selected period (same fields as Metrics)
+  sharpeRatio: number
+  sortinoRatio: number
+  maxDrawdown: number
+  maxDrawdownPct: number
+  winRate: number
+  profitFactor: number
+  cagr: number
+  annualYield: number
+  riskReward: number
+  averageWin: number
+  averageLoss: number
+  totalFees: number
+  totalPnl: number
+  totalTrades: number
+
+  // Delta vs baseline (positive = better than baseline, negative = worse)
+  // null for the baseline row itself
+  delta: {
+    sharpeRatio: number | null
+    sortinoRatio: number | null
+    maxDrawdown: number | null
+    maxDrawdownPct: number | null
+    winRate: number | null
+    profitFactor: number | null
+    cagr: number | null
+    annualYield: number | null
+    riskReward: number | null
+    averageWin: number | null
+    averageLoss: number | null
+    totalFees: number | null
+    totalPnl: number | null
+    totalTrades: number | null
+  }
+
+  isBaseline: boolean   // true for the reference row; its delta fields are all null
+}
