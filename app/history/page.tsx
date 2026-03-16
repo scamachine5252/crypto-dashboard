@@ -19,7 +19,7 @@ const DEFAULT_FILTER: HistoryFilterState = {
   exchangeId: 'all',
   subAccountId: 'all',
   symbol: '',
-  tradeType: 'all',
+  tradeType: 'spot',
   side: 'all',
   dateRange: { start: '2025-07-04', end: '2025-12-31' }, // last 180 days of mock data
   page: 1,
@@ -58,8 +58,18 @@ export default function HistoryPage() {
     <div className="min-h-screen flex flex-col" style={{ background: 'var(--bg-primary)' }}>
       <Header totalPnl={headerMetrics.totalPnl} annualYield={headerMetrics.annualYield} />
 
-      {/* Sticky filter bar */}
+      {/* Sticky filter area */}
       <div className="sticky z-40" style={{ top: 56 }}>
+        {/* Header strip: title + export */}
+        <div
+          className="px-4 py-2 flex items-center justify-between"
+          style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-subtle)' }}
+        >
+          <p className="text-xs font-semibold uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>
+            Order History
+          </p>
+          <ExportButton trades={filteredTrades} filename={exportFilename} />
+        </div>
         <TradeFilters filter={filter} onChange={handleFilterChange} />
       </div>
 
@@ -97,9 +107,6 @@ export default function HistoryPage() {
               -{formatMoney(summary.totalFees)}
             </span>
           </span>
-          <div className="ml-auto">
-            <ExportButton trades={filteredTrades} filename={exportFilename} />
-          </div>
         </div>
       </main>
     </div>
