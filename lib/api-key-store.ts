@@ -1,4 +1,4 @@
-import type { ApiKeyConfig, ExchangeId } from './types'
+import type { ApiKeyConfig, AccountConfig, ExchangeId } from './types'
 
 const NS = 'nexus:apikeys'
 
@@ -34,4 +34,37 @@ export function loadAllApiKeys(): Partial<Record<ExchangeId, ApiKeyConfig>> {
     if (config) result[id] = config
   }
   return result
+}
+
+// ---------------------------------------------------------------------------
+// AccountConfig store — multiple accounts, keyed by id
+// ---------------------------------------------------------------------------
+const ACCOUNTS_KEY = 'cicada:accounts'
+
+export function loadAllAccountConfigs(): AccountConfig[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = localStorage.getItem(ACCOUNTS_KEY)
+    return raw ? (JSON.parse(raw) as AccountConfig[]) : []
+  } catch {
+    return []
+  }
+}
+
+export function saveAccountConfig(config: AccountConfig): void {
+  if (typeof window === 'undefined') return
+  const all = loadAllAccountConfigs()
+  const idx = all.findIndex((a) => a.id === config.id)
+  if (idx >= 0) {
+    all[idx] = config
+  } else {
+    all.push(config)
+  }
+  localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(all))
+}
+
+export function removeAccountConfig(id: string): void {
+  if (typeof window === 'undefined') return
+  const all = loadAllAccountConfigs().filter((a) => a.id !== id)
+  localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(all))
 }

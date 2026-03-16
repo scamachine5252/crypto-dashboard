@@ -136,6 +136,19 @@ export interface ApiKeyConfig {
   passphrase?: string  // OKX only
 }
 
+export interface AccountConfig {
+  id: string                // unique key, e.g. Date.now().toString()
+  fund: string              // e.g. "Cicada Foundation"
+  exchangeId: ExchangeId
+  accountName: string
+  instrument: string        // e.g. "BTCUSDT"
+  apiKey: string
+  apiSecret: string
+  passphrase?: string       // OKX only
+  accountIdMemo?: string    // optional
+  status: ConnectionStatus
+}
+
 export interface BalanceTransaction {
   date: string          // YYYY-MM-DD
   subAccountId: string

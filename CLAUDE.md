@@ -5,7 +5,7 @@
 ## Project State
 *Update this section after every major change.*
 
-### Status: Performance page complete — spot/futures tabs, metrics tables, equity curves
+### Status: API Settings page rebuilt — create account form, accounts list table
 
 ### What has been built
 
@@ -16,7 +16,7 @@
 - `/performance` — PeriodSelector + accounts checkbox dropdown (click-outside aware); **L1 tabs** SPOT/FUTURES (active = green filled pill); **L2 tabs** (active = green border-bottom): SPOT has Overview/Returns/Risk/Costs, FUTURES has Overview/Returns/Risk & Exposure/Cost/Execution; per-account metrics table with polarity-aware best (green) / worst (red) cell highlighting and Total/Avg footer row; `OverlayLineChart` equity curves with D/W/M switcher embedded in chart header, normalized to 0 at period start for all timeframes
 - `/history` — sticky header strip (Export button) + TradeFilters bar (exchange/account/section/side dropdowns, symbol input, date range with Day/Week/Month/180D shortcuts); OrdersTable with Bybit-standard columns (Date/Time, Symbol, Order Type, Side, Filled Qty, Filled Value, Realized PnL, Fee, Exchange/Account); all CSS variables (full light/dark support)
 - `/results` — Trading Results investor view: USDT balance line chart (`BalanceLineChart`) + PnL histogram (`PnlHistogramChart`, Day/Week/Month timeframe), balance table with 2 rows per account (USDT + token), checkbox column, Difference/Fees/Avg Price/PnL columns, totals row; pair filter dropdown; charts filter by checked accounts
-- `/api-settings` — three exchange cards (Binance, Bybit, OKX); API key + secret fields (masked, show/hide); OKX passphrase field; mock Test Connection (600ms delay); Save/Remove; localStorage persistence via `api-key-store.ts`; global withdrawal-warning banner
+- `/api-settings` — two-column layout: left (280px) Create Account form (Fund/Exchange/Account Name/Instrument/API Key/Secret/PassPhrase OKX-only/AccountID Memo) with green CREATE ACCOUNT button; right column Accounts List table (Account Name/Fund/Exchange/Instrument/Status/Actions); Test (600ms mock)/Edit/Remove per row; 7 mock accounts seeded from EXCHANGES; localStorage persistence via `AccountConfig` in `cicada:accounts`; amber warning banner
 
 **Infrastructure complete:**
 - Renamed from Nexus Fund → Cicada Foundation across app/layout.tsx, LoginForm, Header
@@ -100,6 +100,7 @@ crypto-dashboard/          ← project root (NOT src/)
 │   ├── types.ts           ← ALL shared interfaces: ExchangeId, Trade, DailyPnLEntry, Metrics, FuturesMetrics,
 │   │                         ExtendedMetrics (extends Metrics + recoveryFactor/avgFeePerTrade/feesAsPctOfPnl),
 │   │                         AccountMetricsRow (per-account metrics + futuresMetrics + extras Record),
+│   │                         AccountConfig (id, fund, exchangeId, accountName, instrument, apiKey, apiSecret, passphrase?, accountIdMemo?, status),
 │   │                         FilterState, HistoryFilterState, MetricTimeSeries, AccountSummary, ApiKeyConfig,
 │   │                         ChartDataPoint, DateRange, Period, Timeframe, SubAccount, ExchangeConfig, ConnectionStatus
 │   │                         TradeType = 'spot' | 'futures' (options removed)
@@ -115,7 +116,7 @@ crypto-dashboard/          ← project root (NOT src/)
 │   │                         buildOverlayData(), buildComparisonRows(),
 │   │                         calculateRecoveryFactor(), calculateAvgFeePerTrade(), calculateFeesAsPctOfPnl(),
 │   │                         buildPerAccountMetrics(), aggregateOverlayData()
-│   ├── api-key-store.ts   ← loadApiKey(), saveApiKey(), removeApiKey(), loadAllApiKeys(); SSR-safe; localStorage namespace nexus:apikeys:{id}
+│   ├── api-key-store.ts   ← loadApiKey(), saveApiKey(), removeApiKey(), loadAllApiKeys(); plus loadAllAccountConfigs(), saveAccountConfig(), removeAccountConfig(); SSR-safe; AccountConfig stored at cicada:accounts
 │   ├── adapters/
 │   │   ├── types.ts       ← ExchangeAdapter interface: getDailyPnL(), getTrades(), testConnection()
 │   │   └── mock.ts        ← MockAdapter implements ExchangeAdapter using mock-data.ts
