@@ -8,12 +8,12 @@ import { ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight } fro
 
 interface OrdersTableProps {
   trades: Trade[]
+  pageSize?: number
 }
 
 type SortKey = 'closedAt' | 'symbol' | 'pnl' | 'fee' | 'pnlPercent'
 type SortDir = 'asc' | 'desc'
 
-const PAGE_SIZE = 15
 
 const EXCHANGE_COLORS: Record<string, string> = {
   binance: '#F0B90B',
@@ -38,7 +38,8 @@ function getSubAccountName(id: string): string {
   return id
 }
 
-export default function OrdersTable({ trades }: OrdersTableProps) {
+export default function OrdersTable({ trades, pageSize = 15 }: OrdersTableProps) {
+  const PAGE_SIZE = pageSize
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: 'closedAt', dir: 'desc' })
   const [page, setPage] = useState(1)
   const [search, setSearch] = useState('')
