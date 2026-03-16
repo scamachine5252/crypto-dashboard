@@ -5,7 +5,7 @@
 ## Project State
 *Update this section after every major change.*
 
-### Status: Phase 2 complete — Dashboard and Performance Indicators pages fully built
+### Status: Phase 3 in progress — Trading History page complete
 
 ### What has been built
 
@@ -14,9 +14,10 @@
 **Pages complete:**
 - `/dashboard` — balance cards, 10 metric cards, equity-curve chart (Area + period Bars), orders table, period selector, exchange/sub-account filter
 - `/performance` — metric selector tiles (spot + futures split), per-account toggle bar, multi-line chart (`MetricLineChart`) showing any metric over time per account, weekly/monthly timeframe toggle
+- `/history` — sticky TradeFilters bar (exchange, sub-account, symbol, type, side, 180-day date range), 50-row paginated OrdersTable, ExportButton (CSV + PDF), footer with total PnL + fees
 
 **Pages stubbed (routing works, UI shows "Coming soon"):**
-- `/results`, `/history`, `/api-settings`
+- `/results`, `/api-settings`
 
 **Infrastructure complete:**
 - Dark/light theme toggle (ThemeProvider, localStorage, anti-flash `<Script>` in layout)
@@ -53,7 +54,7 @@ crypto-dashboard/          ← project root (NOT src/)
 │   │   └── page.tsx       ← STUB ("Coming soon")
 │   ├── history/
 │   │   ├── layout.tsx     ← wraps children in <AuthGuard>
-│   │   └── page.tsx       ← STUB ("Coming soon")
+│   │   └── page.tsx       ← full Trading History page; TradeFilters + OrdersTable(pageSize=50) + ExportButton + footer
 │   └── api-settings/
 │       ├── layout.tsx     ← wraps children in <AuthGuard>
 │       └── page.tsx       ← STUB ("Coming soon")
