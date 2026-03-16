@@ -148,6 +148,7 @@ export default function ApiSettingsPage() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [testingId, setTestingId] = useState<string | null>(null)
   const [form, setForm] = useState(EMPTY_FORM)
+  const [newFundDraft, setNewFundDraft] = useState('')
 
   // Merge mock defaults with localStorage on mount
   useEffect(() => {
@@ -165,17 +166,19 @@ export default function ApiSettingsPage() {
 
   const resetForm = useCallback(() => {
     setForm(EMPTY_FORM)
+    setNewFundDraft('')
     setEditingId(null)
   }, [])
 
   const handleSubmit = useCallback(() => {
     if (!form.exchangeId || !form.accountName.trim()) return
+    const resolvedFund = form.fund === '__new__' ? newFundDraft.trim() || 'Cicada Foundation' : form.fund
 
     if (editingId) {
       // Update existing
       const updated: AccountConfig = {
         id:            editingId,
-        fund:          form.fund,
+        fund:          resolvedFund,
         exchangeId:    form.exchangeId as ExchangeId,
         accountName:   form.accountName.trim(),
         instrument:    form.instrument.trim(),
@@ -191,7 +194,7 @@ export default function ApiSettingsPage() {
     } else {
       const created: AccountConfig = {
         id:            Date.now().toString(),
-        fund:          form.fund,
+        fund:          resolvedFund,
         exchangeId:    form.exchangeId as ExchangeId,
         accountName:   form.accountName.trim(),
         instrument:    form.instrument.trim(),
@@ -205,7 +208,7 @@ export default function ApiSettingsPage() {
       setAccounts((prev) => [...prev, created])
       resetForm()
     }
-  }, [form, editingId, resetForm])
+  }, [form, newFundDraft, editingId, resetForm])
 
   const handleEdit = useCallback((account: AccountConfig) => {
     setForm({
@@ -288,10 +291,30 @@ export default function ApiSettingsPage() {
           </p>
 
           {/* Fund */}
-          <FieldSelect label="Fund" value={form.fund} onChange={(v) => patch('fund', v)}>
-            {FUNDS.map((f) => <option key={f} value={f}>{f}</option>)}
-            <option value="__new__">+ Add new fund</option>
-          </FieldSelect>
+          {form.fund === '__new__' ? (
+            <div>
+              <FieldInput
+                label="Fund"
+                value={newFundDraft}
+                onChange={setNewFundDraft}
+                placeholder="Enter fund name"
+              />
+              <button
+                onClick={() => { patch('fund', 'Cicada Foundation'); setNewFundDraft('') }}
+                className="mt-1 text-[10px] transition-colors"
+                style={{ color: 'var(--text-muted)' }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = 'var(--text-secondary)' }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)' }}
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <FieldSelect label="Fund" value={form.fund} onChange={(v) => patch('fund', v)}>
+              {FUNDS.map((f) => <option key={f} value={f}>{f}</option>)}
+              <option value="__new__">+ Add new fund</option>
+            </FieldSelect>
+          )}
 
           {/* Exchange */}
           <FieldSelect label="Exchange" value={form.exchangeId} onChange={(v) => patch('exchangeId', v)}>
