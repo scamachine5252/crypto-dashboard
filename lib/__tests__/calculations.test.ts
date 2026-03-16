@@ -9,6 +9,7 @@ import {
   buildMetricTimeSeries,
   calculateFuturesMetrics,
   buildOverlayData,
+  buildComparisonRows,
 } from '../calculations'
 import type { DailyPnLEntry, Trade, HistoryFilterState } from '../types'
 
@@ -610,5 +611,110 @@ describe('buildOverlayData', () => {
     expect(result[0]['acc-1']).toBe(0)
     expect(result[1]['acc-1']).toBe(-150)
     expect(result[2]['acc-1']).toBe(100)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// buildComparisonRows
+// ---------------------------------------------------------------------------
+describe('buildComparisonRows', () => {
+  const range = { start: '2025-01-01', end: '2025-01-31' }
+
+  // Use real sub-account IDs from mock-data so name/exchange lookups work
+  const ID_A = 'binance-alpha'
+  const ID_B = 'bybit-delta'
+
+  function makeDailyFor(id: string, exId: 'binance' | 'bybit', pnl: number, days = 31): DailyPnLEntry[] {
+    return makeDaily(days, pnl, id, exId)
+  }
+
+  it('returns empty array when activeIds is empty', () => {
+    expect(buildComparisonRows([], [], [], range)).toEqual([])
+  })
+
+  it('returns one row for a single account with isBaseline true and all deltas null', () => {
+    const daily = makeDailyFor(ID_A, 'binance', 100)
+    const rows = buildComparisonRows(daily, [], [ID_A], range)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].subAccountId).toBe(ID_A)
+    expect(rows[0].isBaseline).toBe(true)
+    expect(rows[0].delta.totalPnl).toBeNull()
+    expect(rows[0].delta.sharpeRatio).toBeNull()
+    expect(rows[0].delta.winRate).toBeNull()
+  })
+
+  it('populates name and exchangeId from EXCHANGES config', () => {
+    const daily = makeDailyFor(ID_A, 'binance', 100)
+    const rows = buildComparisonRows(daily, [], [ID_A], range)
+    expect(rows[0].name).toBe('Alpha Fund')
+    expect(rows[0].exchangeId).toBe('binance')
+  })
+
+  it('first account in activeIds is always the baseline', () => {
+    const daily = [
+      ...makeDailyFor(ID_A, 'binance', 100),
+      ...makeDailyFor(ID_B, 'bybit', 200),
+    ]
+    const rows = buildComparisonRows(daily, [], [ID_A, ID_B], range)
+    expect(rows[0].isBaseline).toBe(true)
+    expect(rows[1].isBaseline).toBe(false)
+  })
+
+  it('preserves activeIds order in output', () => {
+    const daily = [
+      ...makeDailyFor(ID_A, 'binance', 100),
+      ...makeDailyFor(ID_B, 'bybit', 200),
+    ]
+    const rows = buildComparisonRows(daily, [], [ID_A, ID_B], range)
+    expect(rows[0].subAccountId).toBe(ID_A)
+    expect(rows[1].subAccountId).toBe(ID_B)
+  })
+
+  it('computes totalPnl delta as non-baseline minus baseline', () => {
+    const daily = [
+      ...makeDailyFor(ID_A, 'binance', 100),  // 31 × 100 = 3100
+      ...makeDailyFor(ID_B, 'bybit',   200),  // 31 × 200 = 6200
+    ]
+    const rows = buildComparisonRows(daily, [], [ID_A, ID_B], range)
+    expect(rows[0].totalPnl).toBe(3100)
+    expect(rows[1].totalPnl).toBe(6200)
+    expect(rows[1].delta.totalPnl).toBe(3100)   // 6200 − 3100
+  })
+
+  it('delta is negative when non-baseline performs worse', () => {
+    const daily = [
+      ...makeDailyFor(ID_A, 'binance', 200),  // baseline: 6200
+      ...makeDailyFor(ID_B, 'bybit',   100),  // worse:    3100
+    ]
+    const rows = buildComparisonRows(daily, [], [ID_A, ID_B], range)
+    expect(rows[1].delta.totalPnl).toBe(-3100)  // 3100 − 6200
+  })
+
+  it('returns all-zero metrics for an account with no data in range', () => {
+    const daily = makeDailyFor(ID_A, 'binance', 100)
+    // ID_B has no daily entries at all
+    const rows = buildComparisonRows(daily, [], [ID_A, ID_B], range)
+    expect(rows[1].totalPnl).toBe(0)
+    expect(rows[1].totalTrades).toBe(0)
+  })
+
+  it('includes trade-derived metrics (totalTrades, winRate) when trades provided', () => {
+    const daily = makeDailyFor(ID_A, 'binance', 100)
+    const trades = [
+      makeTrade({ id: 't1', subAccountId: ID_A, exchangeId: 'binance', pnl: 200, closedAt: '2025-01-10T12:00:00.000Z' }),
+      makeTrade({ id: 't2', subAccountId: ID_A, exchangeId: 'binance', pnl: -50, closedAt: '2025-01-15T12:00:00.000Z' }),
+    ]
+    const rows = buildComparisonRows(daily, trades, [ID_A], range)
+    expect(rows[0].totalTrades).toBe(2)
+    expect(rows[0].winRate).toBeGreaterThan(0)
+  })
+
+  it('excludes trades outside the date range', () => {
+    const daily = makeDailyFor(ID_A, 'binance', 100)
+    const trades = [
+      makeTrade({ id: 't1', subAccountId: ID_A, exchangeId: 'binance', pnl: 200, closedAt: '2024-12-01T12:00:00.000Z' }),
+    ]
+    const rows = buildComparisonRows(daily, trades, [ID_A], range)
+    expect(rows[0].totalTrades).toBe(0)
   })
 })

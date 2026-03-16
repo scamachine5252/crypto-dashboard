@@ -1,4 +1,5 @@
-import type { DailyPnLEntry, Metrics, Trade, ChartDataPoint, Timeframe, Period, DateRange, HistoryFilterState, MetricTimeSeries, FuturesMetrics } from './types'
+import type { DailyPnLEntry, Metrics, Trade, ChartDataPoint, Timeframe, Period, DateRange, HistoryFilterState, MetricTimeSeries, FuturesMetrics, ComparisonRow } from './types'
+import { EXCHANGES } from './mock-data'
 
 const INITIAL_CAPITAL = 6_800_000
 const RISK_FREE_DAILY = 0.05 / 252
@@ -416,4 +417,93 @@ export function buildOverlayData(
   }
 
   return result
+}
+
+// ---------------------------------------------------------------------------
+// buildComparisonRows
+// Produces one ComparisonRow per active account, with metrics and deltas vs
+// the first account (baseline). Order matches activeIds exactly.
+// ---------------------------------------------------------------------------
+export function buildComparisonRows(
+  dailyPnL: DailyPnLEntry[],
+  trades: Trade[],
+  activeIds: string[],
+  dateRange: DateRange,
+): ComparisonRow[] {
+  if (activeIds.length === 0) return []
+
+  // Build id → name and id → exchangeId lookups from EXCHANGES config
+  const nameMap = new Map<string, string>()
+  const exchangeMap = new Map<string, string>()
+  EXCHANGES.forEach((ex) => {
+    ex.subAccounts.forEach((sa) => {
+      nameMap.set(sa.id, sa.name)
+      exchangeMap.set(sa.id, ex.id)
+    })
+  })
+
+  // Compute metrics per account
+  const metricsMap = new Map<string, Metrics>()
+  for (const id of activeIds) {
+    const accountDaily = filterByDateRange(
+      dailyPnL.filter((e) => e.subAccountId === id),
+      dateRange,
+    )
+    const accountTrades = trades.filter((t) => {
+      if (t.subAccountId !== id) return false
+      const d = t.closedAt.slice(0, 10)
+      return d >= dateRange.start && d <= dateRange.end
+    })
+    metricsMap.set(id, calculateMetrics(accountDaily, accountTrades))
+  }
+
+  const baselineId = activeIds[0]
+  const baseline = metricsMap.get(baselineId)!
+
+  // Helper to compute delta or null for baseline
+  function delta(id: string, key: keyof Metrics): number | null {
+    if (id === baselineId) return null
+    const m = metricsMap.get(id)!
+    return m[key] - baseline[key]
+  }
+
+  return activeIds.map((id) => {
+    const m = metricsMap.get(id)!
+    return {
+      subAccountId: id,
+      exchangeId: (exchangeMap.get(id) ?? 'binance') as ComparisonRow['exchangeId'],
+      name: nameMap.get(id) ?? id,
+      sharpeRatio:    m.sharpeRatio,
+      sortinoRatio:   m.sortinoRatio,
+      maxDrawdown:    m.maxDrawdown,
+      maxDrawdownPct: m.maxDrawdownPct,
+      winRate:        m.winRate,
+      profitFactor:   m.profitFactor,
+      cagr:           m.cagr,
+      annualYield:    m.annualYield,
+      riskReward:     m.riskReward,
+      averageWin:     m.averageWin,
+      averageLoss:    m.averageLoss,
+      totalFees:      m.totalFees,
+      totalPnl:       m.totalPnl,
+      totalTrades:    m.totalTrades,
+      delta: {
+        sharpeRatio:    delta(id, 'sharpeRatio'),
+        sortinoRatio:   delta(id, 'sortinoRatio'),
+        maxDrawdown:    delta(id, 'maxDrawdown'),
+        maxDrawdownPct: delta(id, 'maxDrawdownPct'),
+        winRate:        delta(id, 'winRate'),
+        profitFactor:   delta(id, 'profitFactor'),
+        cagr:           delta(id, 'cagr'),
+        annualYield:    delta(id, 'annualYield'),
+        riskReward:     delta(id, 'riskReward'),
+        averageWin:     delta(id, 'averageWin'),
+        averageLoss:    delta(id, 'averageLoss'),
+        totalFees:      delta(id, 'totalFees'),
+        totalPnl:       delta(id, 'totalPnl'),
+        totalTrades:    delta(id, 'totalTrades'),
+      },
+      isBaseline: id === baselineId,
+    }
+  })
 }
