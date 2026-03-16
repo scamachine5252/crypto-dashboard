@@ -9,8 +9,6 @@ import FilterBar from '@/components/layout/FilterBar'
 import BalanceCards from '@/components/metrics/BalanceCards'
 import MetricsGrid from '@/components/metrics/MetricsGrid'
 import PnLChart from '@/components/charts/PnLChart'
-import OrdersTable from '@/components/orders/OrdersTable'
-import PeriodSelector from '@/components/ui/PeriodSelector'
 
 export default function DashboardPage() {
   const [filter, setFilter] = useState<FilterState>({
@@ -58,23 +56,16 @@ export default function DashboardPage() {
     <div className="min-h-screen flex flex-col" style={{ background: 'var(--bg-primary)' }}>
       <Header totalPnl={metrics.totalPnl} annualYield={metrics.annualYield} />
 
-      <FilterBar filter={filter} onChange={setFilter} />
+      <FilterBar
+        filter={filter}
+        onChange={setFilter}
+        period={filter.period}
+        customRange={customRange}
+        onPeriodChange={handlePeriodChange}
+      />
 
       {/* Balance cards */}
       <BalanceCards />
-
-      {/* Period selector */}
-      <div
-        className="px-4 py-1.5 flex items-center gap-3"
-        style={{ borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-secondary)' }}
-      >
-        <span className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>Period</span>
-        <PeriodSelector
-          value={filter.period}
-          customRange={customRange}
-          onChange={handlePeriodChange}
-        />
-      </div>
 
       <main className="flex-1 pt-2 pb-4">
         <MetricsGrid metrics={metrics} />
@@ -84,7 +75,6 @@ export default function DashboardPage() {
           onTimeframeChange={(t) => setFilter((f) => ({ ...f, timeframe: t }))}
           totalPnl={metrics.totalPnl}
         />
-        <OrdersTable trades={trades} />
       </main>
     </div>
   )
