@@ -1,4 +1,4 @@
-import type { DailyPnLEntry, Metrics, Trade, ChartDataPoint, Timeframe, Period, DateRange, HistoryFilterState, MetricTimeSeries, FuturesMetrics, ComparisonRow, AccountSnapshot } from './types'
+import type { DailyPnLEntry, Metrics, Trade, ChartDataPoint, Timeframe, Period, DateRange, HistoryFilterState, MetricTimeSeries, FuturesMetrics, ComparisonRow, AccountSnapshot, ExtendedMetrics, AccountMetricsRow } from './types'
 import { EXCHANGES, INITIAL_USDT_BALANCE, INITIAL_TOKEN_BALANCE, ACCOUNT_PRIMARY_TOKEN, getAllDailyPnL, getAllTrades, getAllTransactions } from './mock-data'
 
 const INITIAL_CAPITAL = 6_800_000
@@ -660,4 +660,141 @@ export function buildTokenBalanceTimeSeries(
   }
 
   return result
+}
+
+// ---------------------------------------------------------------------------
+// calculateRecoveryFactor
+// ---------------------------------------------------------------------------
+export function calculateRecoveryFactor(totalPnl: number, maxDrawdown: number): number {
+  if (maxDrawdown === 0) return 0
+  return totalPnl / Math.abs(maxDrawdown)
+}
+
+// ---------------------------------------------------------------------------
+// calculateAvgFeePerTrade
+// ---------------------------------------------------------------------------
+export function calculateAvgFeePerTrade(totalFees: number, totalTrades: number): number {
+  if (totalTrades === 0) return 0
+  return totalFees / totalTrades
+}
+
+// ---------------------------------------------------------------------------
+// calculateFeesAsPctOfPnl
+// ---------------------------------------------------------------------------
+export function calculateFeesAsPctOfPnl(totalFees: number, totalPnl: number): number {
+  if (totalPnl === 0) return 0
+  return (totalFees / totalPnl) * 100
+}
+
+// ---------------------------------------------------------------------------
+// buildPerAccountMetrics
+// Returns one AccountMetricsRow per sub-account in activeIds, filtered by
+// tradeType ('spot' | 'futures') and dateRange.
+// ---------------------------------------------------------------------------
+export function buildPerAccountMetrics(
+  activeIds: string[],
+  dateRange: DateRange,
+  tradeType: 'spot' | 'futures',
+): AccountMetricsRow[] {
+  if (activeIds.length === 0) return []
+
+  const allDaily  = getAllDailyPnL()
+  const allTrades = getAllTrades()
+
+  const rows: AccountMetricsRow[] = []
+
+  for (const ex of EXCHANGES) {
+    for (const sa of ex.subAccounts) {
+      if (!activeIds.includes(sa.id)) continue
+
+      const daily = allDaily.filter(
+        (d) => d.subAccountId === sa.id && d.date >= dateRange.start && d.date <= dateRange.end,
+      )
+
+      const trades = allTrades.filter(
+        (t) =>
+          t.subAccountId === sa.id &&
+          t.tradeType === tradeType &&
+          t.closedAt.slice(0, 10) >= dateRange.start &&
+          t.closedAt.slice(0, 10) <= dateRange.end,
+      )
+
+      const base = calculateMetrics(daily, trades)
+      const fut  = calculateFuturesMetrics(trades)
+
+      const extended: ExtendedMetrics = {
+        ...base,
+        recoveryFactor: calculateRecoveryFactor(base.totalPnl, base.maxDrawdown),
+        avgFeePerTrade: calculateAvgFeePerTrade(base.totalFees, base.totalTrades),
+        feesAsPctOfPnl: calculateFeesAsPctOfPnl(base.totalFees, base.totalPnl),
+      }
+
+      // Extras: additional derived values for futures execution / cost tabs
+      const avgFundingPerTrade = base.totalTrades > 0
+        ? fut.totalFundingCost / base.totalTrades
+        : 0
+      const avgHoldingMin = trades.length > 0
+        ? trades.reduce((s, t) => s + t.durationMin, 0) / trades.length
+        : 0
+      const totalNotional = trades.reduce((s, t) => s + t.quantity * t.entryPrice, 0)
+
+      rows.push({
+        subAccountId: sa.id,
+        exchangeId:   ex.id,
+        accountName:  sa.name,
+        metrics:      extended,
+        futuresMetrics: fut,
+        extras: {
+          avgFundingPerTrade,
+          avgHoldingMin,
+          totalNotional,
+          liquidationsCount: 0, // no liquidation data in mock
+        },
+      })
+    }
+  }
+
+  return rows
+}
+
+// ---------------------------------------------------------------------------
+// aggregateOverlayData
+// Merges daily MetricTimeSeries points into weekly or monthly buckets by
+// taking the LAST value in each bucket (end-of-period equity snapshot).
+// ---------------------------------------------------------------------------
+export function aggregateOverlayData(
+  data: MetricTimeSeries[],
+  timeframe: 'daily' | 'weekly' | 'monthly',
+): MetricTimeSeries[] {
+  if (data.length === 0) return []
+  if (timeframe === 'daily') return data
+
+  // For weekly: bucket relative to the first date (0, 7, 14, …) so 7 consecutive
+  // days always form exactly one bucket regardless of ISO calendar week boundaries.
+  const sorted = [...data].sort((a, b) => (a.date < b.date ? -1 : 1))
+  const epochMs = new Date(sorted[0].date + 'T00:00:00Z').getTime()
+
+  function bucketKey(date: string): string {
+    if (timeframe === 'monthly') return date.slice(0, 7) // "YYYY-MM"
+    // weekly: relative week index from first point
+    const ms = new Date(date + 'T00:00:00Z').getTime()
+    const weekIdx = Math.floor((ms - epochMs) / (7 * 24 * 60 * 60 * 1000))
+    return String(weekIdx)
+  }
+
+  // Group points by bucket, keeping last point per bucket
+  const buckets = new Map<string, MetricTimeSeries>()
+  for (const point of sorted) {
+    const key = bucketKey(point.date)
+    buckets.set(key, point) // overwrite → last point wins
+  }
+
+  // Return in chronological order (sort by numeric week index or YYYY-MM string)
+  return [...buckets.entries()]
+    .sort(([a], [b]) => {
+      const na = Number(a), nb = Number(b)
+      if (!isNaN(na) && !isNaN(nb)) return na - nb
+      return a < b ? -1 : 1
+    })
+    .map(([, point]) => point)
 }

@@ -5,7 +5,7 @@
 ## Project State
 *Update this section after every major change.*
 
-### Status: Phase 5 complete — branding + dashboard UI polish
+### Status: Performance page rebuilt — dual tabs, spot/futures metrics table, equity curves
 
 ### What has been built
 

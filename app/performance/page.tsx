@@ -1,30 +1,119 @@
 'use client'
 
-import { useState, useMemo, useCallback } from 'react'
-import type { Metrics, Period, DateRange } from '@/lib/types'
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
+import type { Period, DateRange, AccountMetricsRow } from '@/lib/types'
 import { EXCHANGES, getAllDailyPnL, getAllTrades, ACCOUNT_COLORS } from '@/lib/mock-data'
 import { useAccountToggles } from '@/hooks/useAccountToggles'
 import {
-  calculateMetrics,
-  calculateFuturesMetrics,
   resolveDateRange,
   filterByDateRange,
-  buildMetricTimeSeries,
+  buildOverlayData,
+  buildPerAccountMetrics,
+  calculateMetrics,
 } from '@/lib/calculations'
+import { formatMoney } from '@/lib/utils'
 import Header from '@/components/layout/Header'
 import PeriodSelector from '@/components/ui/PeriodSelector'
-import MetricSelector from '@/components/metrics/MetricSelector'
-import FuturesMetricsTiles from '@/components/metrics/FuturesMetricsTiles'
-import MetricLineChart from '@/components/charts/MetricLineChart'
+import OverlayLineChart from '@/components/charts/OverlayLineChart'
+import { ChevronDown, Check } from 'lucide-react'
 
-type ChartTimeframe = 'weekly' | 'monthly'
+type L1Tab = 'spot' | 'futures'
+type SpotL2 = 'returns' | 'risk' | 'execution'
+type FuturesL2 = 'overview' | 'risk'
+type ChartTimeframe = 'daily' | 'weekly' | 'monthly'
+
+interface ColDef {
+  key: string
+  label: string
+  format: (v: number) => string
+  lowerBetter?: boolean
+  sum?: boolean  // sum in totals row; otherwise avg
+}
+
+const SPOT_L2_TABS: { id: SpotL2; label: string }[] = [
+  { id: 'returns',   label: 'Returns' },
+  { id: 'risk',      label: 'Risk' },
+  { id: 'execution', label: 'Execution' },
+]
+
+const FUTURES_L2_TABS: { id: FuturesL2; label: string }[] = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'risk',     label: 'Risk' },
+]
+
+const SPOT_COLS: Record<SpotL2, ColDef[]> = {
+  returns: [
+    { key: 'totalPnl',     label: 'Total PnL',    format: (v) => formatMoney(v),          sum: true },
+    { key: 'annualYield',  label: 'Annual Yield',  format: (v) => `${v.toFixed(1)}%` },
+    { key: 'cagr',         label: 'CAGR',          format: (v) => `${v.toFixed(1)}%` },
+    { key: 'winRate',      label: 'Win Rate',      format: (v) => `${v.toFixed(1)}%` },
+    { key: 'profitFactor', label: 'Profit Factor', format: (v) => v.toFixed(2) },
+  ],
+  risk: [
+    { key: 'sharpeRatio',    label: 'Sharpe',      format: (v) => v.toFixed(2) },
+    { key: 'sortinoRatio',   label: 'Sortino',     format: (v) => v.toFixed(2) },
+    { key: 'maxDrawdownPct', label: 'Max DD %',    format: (v) => `${v.toFixed(1)}%`, lowerBetter: true },
+    { key: 'maxDrawdown',    label: 'Max DD $',    format: (v) => formatMoney(v),     lowerBetter: true, sum: true },
+    { key: 'riskReward',     label: 'Risk/Reward', format: (v) => v.toFixed(2) },
+    { key: 'recoveryFactor', label: 'Recovery',    format: (v) => v.toFixed(2) },
+  ],
+  execution: [
+    { key: 'totalTrades',    label: 'Trades',       format: (v) => v.toLocaleString(),   sum: true },
+    { key: 'averageWin',     label: 'Avg Win',      format: (v) => formatMoney(v) },
+    { key: 'averageLoss',    label: 'Avg Loss',     format: (v) => formatMoney(v) },
+    { key: 'totalFees',      label: 'Total Fees',   format: (v) => formatMoney(v),       lowerBetter: true, sum: true },
+    { key: 'avgFeePerTrade', label: 'Fee/Trade',    format: (v) => formatMoney(v),       lowerBetter: true },
+    { key: 'feesAsPctOfPnl', label: 'Fees % PnL',  format: (v) => `${v.toFixed(1)}%`,   lowerBetter: true },
+  ],
+}
+
+const FUTURES_COLS: Record<FuturesL2, ColDef[]> = {
+  overview: [
+    { key: 'totalFundingCost', label: 'Funding Cost', format: (v) => formatMoney(v),  lowerBetter: true, sum: true },
+    { key: 'averageLeverage',  label: 'Avg Leverage', format: (v) => `${v.toFixed(1)}x` },
+    { key: 'longShortRatio',   label: 'Long %',       format: (v) => `${v.toFixed(1)}%` },
+  ],
+  risk: [
+    { key: 'liquidationDistancePct', label: 'Liq Distance', format: (v) => `${v.toFixed(1)}%` },
+    { key: 'overnightExposureCount', label: 'Overnight',    format: (v) => v.toFixed(0),       sum: true },
+  ],
+}
+
+function getValue(row: AccountMetricsRow, key: string, l1: L1Tab): number {
+  if (l1 === 'futures') return (row.futuresMetrics as unknown as Record<string, number>)[key] ?? 0
+  return (row.metrics as unknown as Record<string, number>)[key] ?? 0
+}
+
+function extremes(rows: AccountMetricsRow[], key: string, l1: L1Tab, lowerBetter = false) {
+  if (rows.length < 2) return { best: NaN, worst: NaN }
+  const vals = rows.map((r) => getValue(r, key, l1))
+  return lowerBetter
+    ? { best: Math.min(...vals), worst: Math.max(...vals) }
+    : { best: Math.max(...vals), worst: Math.min(...vals) }
+}
 
 export default function PerformancePage() {
-  const [selectedMetric, setSelectedMetric] = useState<keyof Metrics>('sharpeRatio')
-  const [period, setPeriod] = useState<Period>('1Y')
+  const [period, setPeriod]           = useState<Period>('1Y')
   const [customRange, setCustomRange] = useState<DateRange | undefined>()
-  const [chartTimeframe, setChartTimeframe] = useState<ChartTimeframe>('monthly')
+  const [l1, setL1]                   = useState<L1Tab>('spot')
+  const [spotL2, setSpotL2]           = useState<SpotL2>('returns')
+  const [futuresL2, setFuturesL2]     = useState<FuturesL2>('overview')
+  const [chartTf, setChartTf]         = useState<ChartTimeframe>('weekly')
+  const [acctOpen, setAcctOpen]       = useState(false)
+  const dropdownRef                   = useRef<HTMLDivElement>(null)
+
   const { activeIds, toggleAccount, toggleExchange, selectAll, reset } = useAccountToggles()
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    function handler(e: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setAcctOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
 
   const dateRange = useMemo<DateRange>(() => {
     if (period === 'manual' && customRange) return customRange
@@ -36,155 +125,326 @@ export default function PerformancePage() {
     setCustomRange(range)
   }, [])
 
-  // Aggregate metrics for the selector tiles (all active accounts, full period)
-  const { aggregateMetrics, futuresMetrics } = useMemo(() => {
+  const rows = useMemo(
+    () => buildPerAccountMetrics([...activeIds], dateRange, l1),
+    [activeIds, dateRange, l1],
+  )
+
+  const overlayData = useMemo(
+    () => buildOverlayData(getAllDailyPnL(), [...activeIds], dateRange),
+    [activeIds, dateRange],
+  )
+
+  const headerMetrics = useMemo(() => {
     const daily = filterByDateRange(
       getAllDailyPnL().filter((e) => activeIds.has(e.subAccountId)),
       dateRange,
     )
-    const trades = getAllTrades().filter((t) => {
-      if (!activeIds.has(t.subAccountId)) return false
-      const d = t.closedAt.slice(0, 10)
-      return d >= dateRange.start && d <= dateRange.end
-    })
-    return {
-      aggregateMetrics: calculateMetrics(daily, trades),
-      futuresMetrics: calculateFuturesMetrics(trades),
-    }
+    const trades = getAllTrades().filter(
+      (t) =>
+        activeIds.has(t.subAccountId) &&
+        t.closedAt.slice(0, 10) >= dateRange.start &&
+        t.closedAt.slice(0, 10) <= dateRange.end,
+    )
+    return calculateMetrics(daily, trades)
   }, [activeIds, dateRange])
 
-  // Chart time series
-  const chartData = useMemo(
-    () =>
-      buildMetricTimeSeries(
-        getAllDailyPnL(),
-        getAllTrades(),
-        [...activeIds],
-        chartTimeframe,
-        selectedMetric,
-        dateRange,
-      ),
-    [activeIds, chartTimeframe, selectedMetric, dateRange],
+  const cols      = l1 === 'spot' ? SPOT_COLS[spotL2] : FUTURES_COLS[futuresL2]
+  const l2Tabs    = l1 === 'spot' ? SPOT_L2_TABS : FUTURES_L2_TABS
+  const currentL2 = l1 === 'spot' ? spotL2 : futuresL2
+
+  const colExtremes = useMemo(
+    () => cols.map((col) => extremes(rows, col.key, l1, col.lowerBetter)),
+    [cols, rows, l1],
   )
+
+  const totalsRow = useMemo(() => {
+    if (rows.length === 0) return null
+    const result: Record<string, number> = {}
+    for (const col of cols) {
+      const vals = rows.map((r) => getValue(r, col.key, l1))
+      result[col.key] = col.sum
+        ? vals.reduce((a, b) => a + b, 0)
+        : vals.reduce((a, b) => a + b, 0) / vals.length
+    }
+    return result
+  }, [rows, cols, l1])
+
+  const totalAccounts = EXCHANGES.reduce((s, ex) => s + ex.subAccounts.length, 0)
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: 'var(--bg-primary)' }}>
-      <Header totalPnl={aggregateMetrics.totalPnl} annualYield={aggregateMetrics.annualYield} />
+      <Header totalPnl={headerMetrics.totalPnl} annualYield={headerMetrics.annualYield} />
 
       {/* Controls bar */}
-      <div style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-subtle)' }}>
-        {/* Period + chart timeframe */}
-        <div className="px-4 py-1.5 flex items-center gap-4 flex-wrap" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-          <span className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>Period</span>
-          <PeriodSelector value={period} customRange={customRange} onChange={handlePeriodChange} />
+      <div
+        className="px-4 py-2 flex items-center gap-3 flex-wrap"
+        style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-subtle)' }}
+      >
+        <PeriodSelector value={period} customRange={customRange} onChange={handlePeriodChange} />
 
-          <div className="ml-4 flex items-center gap-px" style={{ border: '1px solid var(--border-subtle)' }}>
-            {(['weekly', 'monthly'] as ChartTimeframe[]).map((tf) => (
-              <button
-                key={tf}
-                onClick={() => setChartTimeframe(tf)}
-                className="px-3 py-1 text-[10px] font-semibold tracking-wider uppercase transition-colors capitalize"
-                style={{
-                  background: chartTimeframe === tf ? 'var(--bg-elevated)' : 'transparent',
-                  color: chartTimeframe === tf ? 'var(--text-primary)' : 'var(--text-muted)',
-                  borderRight: tf === 'weekly' ? '1px solid var(--border-subtle)' : 'none',
-                }}
-              >
-                {tf}
-              </button>
-            ))}
-          </div>
+        <div style={{ width: 1, height: 16, background: 'var(--border-subtle)' }} />
+
+        {/* Accounts dropdown */}
+        <div className="relative" ref={dropdownRef}>
+          <button
+            onClick={() => setAcctOpen((v) => !v)}
+            className="flex items-center gap-2 text-xs px-3 py-1.5"
+            style={{
+              background: 'var(--bg-elevated)',
+              border: '1px solid var(--border-medium)',
+              color: 'var(--text-primary)',
+              borderRadius: 2,
+            }}
+          >
+            <span>Accounts</span>
+            <span
+              className="text-[10px] font-bold px-1.5 rounded"
+              style={{ background: 'var(--accent-blue)', color: '#fff' }}
+            >
+              {activeIds.size}/{totalAccounts}
+            </span>
+            <ChevronDown className="w-3 h-3" style={{ color: 'var(--text-muted)', transform: acctOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+          </button>
+
+          {acctOpen && (
+            <div
+              className="absolute top-full left-0 mt-1 z-50 py-1"
+              style={{
+                background: 'var(--bg-elevated)',
+                border: '1px solid var(--border-medium)',
+                minWidth: 220,
+                borderRadius: 2,
+                boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+              }}
+            >
+              <div className="flex items-center gap-3 px-3 py-1.5" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                <button onClick={selectAll} className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--accent-blue)' }}>All</button>
+                <button onClick={reset}    className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>Reset</button>
+              </div>
+              {EXCHANGES.map((ex) => (
+                <div key={ex.id}>
+                  <button
+                    onClick={() => toggleExchange(ex.id)}
+                    className="w-full flex items-center gap-2 px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-left"
+                    style={{ color: ex.color }}
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-secondary)' }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full" style={{ background: ex.color }} />
+                    {ex.name}
+                  </button>
+                  {ex.subAccounts.map((sa) => {
+                    const on    = activeIds.has(sa.id)
+                    const color = ACCOUNT_COLORS[sa.id] ?? ex.color
+                    return (
+                      <button
+                        key={sa.id}
+                        onClick={() => toggleAccount(sa.id)}
+                        className="w-full flex items-center gap-2 px-5 py-1.5 text-xs text-left"
+                        style={{ color: on ? 'var(--text-primary)' : 'var(--text-muted)' }}
+                        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-secondary)' }}
+                        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+                      >
+                        <span
+                          className="w-3 h-3 border flex items-center justify-center shrink-0"
+                          style={{
+                            borderColor: on ? color : 'var(--border-medium)',
+                            background:  on ? color : 'transparent',
+                            borderRadius: 2,
+                          }}
+                        >
+                          {on && <Check className="w-2 h-2" style={{ color: '#000' }} />}
+                        </span>
+                        {sa.name}
+                      </button>
+                    )
+                  })}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
-        {/* Account toggles */}
-        <div className="px-4 py-2 flex items-center gap-3 flex-wrap">
-          <span className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>Accounts</span>
-
-          {EXCHANGES.map((ex) => {
-            const exAccounts = ex.subAccounts
-            const allOn = exAccounts.every((sa) => activeIds.has(sa.id))
-            const someOn = exAccounts.some((sa) => activeIds.has(sa.id))
-
-            return (
-              <div key={ex.id} className="flex items-center gap-1">
-                {/* Exchange group toggle */}
-                <button
-                  onClick={() => toggleExchange(ex.id)}
-                  className="text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 border transition-colors"
-                  style={{
-                    color: allOn ? ex.color : 'var(--text-muted)',
-                    borderColor: allOn ? ex.color : 'var(--border-subtle)',
-                    background: allOn ? `${ex.color}14` : 'transparent',
-                    opacity: someOn && !allOn ? 0.7 : 1,
-                  }}
-                >
-                  {ex.name}
-                </button>
-
-                {/* Per-account toggles */}
-                {exAccounts.map((sa) => {
-                  const on = activeIds.has(sa.id)
-                  const color = ACCOUNT_COLORS[sa.id] ?? ex.color
-                  return (
-                    <button
-                      key={sa.id}
-                      onClick={() => toggleAccount(sa.id)}
-                      className="flex items-center gap-1 text-[10px] px-2 py-0.5 border transition-colors"
-                      style={{
-                        color: on ? color : 'var(--text-muted)',
-                        borderColor: on ? color : 'var(--border-subtle)',
-                        background: on ? `${color}14` : 'transparent',
-                      }}
-                    >
-                      <span
-                        className="w-1.5 h-1.5 rounded-full"
-                        style={{ background: on ? color : 'var(--border-medium)' }}
-                      />
-                      {sa.name}
-                    </button>
-                  )
-                })}
-              </div>
-            )
-          })}
-
-          {/* Select all / none */}
-          <div className="ml-auto flex items-center gap-2">
+        {/* Chart timeframe */}
+        <div className="ml-auto flex items-center gap-px" style={{ border: '1px solid var(--border-subtle)' }}>
+          {(['daily', 'weekly', 'monthly'] as ChartTimeframe[]).map((tf, i, arr) => (
             <button
-              className="text-[10px] uppercase tracking-widest transition-colors"
-              style={{ color: 'var(--text-muted)' }}
-              onClick={selectAll}
+              key={tf}
+              onClick={() => setChartTf(tf)}
+              className="px-3 py-1 text-[10px] font-semibold tracking-wider uppercase transition-colors"
+              style={{
+                background: chartTf === tf ? 'var(--bg-elevated)' : 'transparent',
+                color:      chartTf === tf ? 'var(--text-primary)' : 'var(--text-muted)',
+                borderRight: i < arr.length - 1 ? '1px solid var(--border-subtle)' : 'none',
+              }}
             >
-              All
+              {tf === 'daily' ? 'D' : tf === 'weekly' ? 'W' : 'M'}
             </button>
-            <span style={{ color: 'var(--border-medium)' }}>·</span>
-            <button
-              className="text-[10px] uppercase tracking-widest transition-colors"
-              style={{ color: 'var(--text-muted)' }}
-              onClick={reset}
-            >
-              Reset
-            </button>
-          </div>
+          ))}
         </div>
       </div>
 
-      {/* Spot metric selector tiles */}
-      <MetricSelector
-        metrics={aggregateMetrics}
-        selected={selectedMetric}
-        onSelect={setSelectedMetric}
-      />
+      {/* L1 tabs: SPOT / FUTURES */}
+      <div
+        className="px-4 flex items-center gap-1"
+        style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-subtle)' }}
+      >
+        {(['spot', 'futures'] as L1Tab[]).map((tab) => (
+          <button
+            key={tab}
+            onClick={() => setL1(tab)}
+            className="px-4 py-2 text-xs font-bold uppercase tracking-widest transition-all my-1"
+            style={{
+              background: l1 === tab ? 'var(--accent-profit)' : 'transparent',
+              color:      l1 === tab ? '#000' : 'var(--text-muted)',
+              borderRadius: 2,
+            }}
+          >
+            {tab}
+          </button>
+        ))}
+      </div>
 
-      {/* Futures metrics section */}
-      <FuturesMetricsTiles metrics={futuresMetrics} />
+      {/* L2 tabs */}
+      <div
+        className="px-4 flex items-center"
+        style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-subtle)' }}
+      >
+        {(l2Tabs as { id: string; label: string }[]).map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() =>
+              l1 === 'spot'
+                ? setSpotL2(tab.id as SpotL2)
+                : setFuturesL2(tab.id as FuturesL2)
+            }
+            className="px-3 py-2.5 text-xs font-medium transition-colors"
+            style={{
+              color:        currentL2 === tab.id ? 'var(--text-primary)' : 'var(--text-muted)',
+              borderBottom: currentL2 === tab.id ? '2px solid var(--accent-profit)' : '2px solid transparent',
+              marginBottom: -1,
+            }}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
 
-      {/* Multi-line chart */}
-      <MetricLineChart
-        data={chartData}
-        metric={selectedMetric}
-        activeIds={[...activeIds]}
-      />
+      <main className="flex-1 pb-6">
+        {/* Per-account metrics table */}
+        {rows.length > 0 ? (
+          <div
+            className="mx-6 mt-4 overflow-x-auto"
+            style={{ border: '1px solid var(--border-subtle)', background: 'var(--bg-secondary)' }}
+          >
+            <table className="w-full text-xs">
+              <thead>
+                <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                  <th
+                    className="px-4 py-2.5 text-left font-medium whitespace-nowrap"
+                    style={{ color: 'var(--text-muted)', minWidth: 160, background: 'var(--bg-secondary)' }}
+                  >
+                    Account
+                  </th>
+                  {cols.map((col) => (
+                    <th
+                      key={col.key}
+                      className="px-4 py-2.5 text-right font-medium whitespace-nowrap"
+                      style={{ color: 'var(--text-muted)' }}
+                    >
+                      {col.label}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => {
+                  const exColor   = EXCHANGES.find((e) => e.id === row.exchangeId)?.color ?? '#888'
+                  const acctColor = ACCOUNT_COLORS[row.subAccountId] ?? exColor
+                  return (
+                    <tr
+                      key={row.subAccountId}
+                      style={{ borderBottom: '1px solid var(--border-subtle)' }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-elevated)' }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+                    >
+                      <td className="px-4 py-2.5 whitespace-nowrap">
+                        <span className="flex items-center gap-2">
+                          <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: acctColor }} />
+                          <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{row.accountName}</span>
+                          <span className="text-[9px] uppercase font-bold" style={{ color: exColor }}>{row.exchangeId}</span>
+                        </span>
+                      </td>
+                      {cols.map((col, ci) => {
+                        const val     = getValue(row, col.key, l1)
+                        const { best, worst } = colExtremes[ci]
+                        const isBest  = rows.length > 1 && val === best
+                        const isWorst = rows.length > 1 && val === worst && best !== worst
+                        return (
+                          <td
+                            key={col.key}
+                            className="px-4 py-2.5 text-right tabular-nums whitespace-nowrap"
+                            style={{
+                              fontFamily: 'var(--font-geist-mono)',
+                              color:      isBest  ? 'var(--accent-profit)'
+                                        : isWorst ? 'var(--accent-loss)'
+                                        : 'var(--text-secondary)',
+                              background: isBest  ? 'rgba(0,255,136,0.06)'
+                                        : isWorst ? 'rgba(255,59,59,0.06)'
+                                        : 'transparent',
+                            }}
+                          >
+                            {col.format(val)}
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  )
+                })}
+
+                {/* Totals / averages row */}
+                {totalsRow && (
+                  <tr style={{ borderTop: '1px solid var(--border-medium)', background: 'var(--bg-elevated)' }}>
+                    <td
+                      className="px-4 py-2.5 text-[10px] font-bold uppercase tracking-widest"
+                      style={{ color: 'var(--text-muted)' }}
+                    >
+                      {rows.length > 1 ? 'Total / Avg' : 'Total'}
+                    </td>
+                    {cols.map((col) => (
+                      <td
+                        key={col.key}
+                        className="px-4 py-2.5 text-right tabular-nums whitespace-nowrap font-semibold"
+                        style={{ fontFamily: 'var(--font-geist-mono)', color: 'var(--text-primary)' }}
+                      >
+                        {col.format(totalsRow[col.key])}
+                      </td>
+                    ))}
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div
+            className="mx-6 mt-4 flex items-center justify-center py-10"
+            style={{ border: '1px solid var(--border-subtle)', background: 'var(--bg-secondary)' }}
+          >
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>No data for selected period</p>
+          </div>
+        )}
+
+        {/* Equity curves chart */}
+        <div className="mt-4">
+          <OverlayLineChart
+            data={overlayData}
+            activeIds={[...activeIds]}
+            timeframe={chartTf}
+            height={280}
+          />
+        </div>
+      </main>
     </div>
   )
 }

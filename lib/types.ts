@@ -83,6 +83,21 @@ export interface Metrics {
   totalTrades: number
 }
 
+export interface ExtendedMetrics extends Metrics {
+  recoveryFactor: number   // totalPnl / abs(maxDrawdown); 0 if maxDrawdown is 0
+  avgFeePerTrade: number   // totalFees / totalTrades; 0 if totalTrades is 0
+  feesAsPctOfPnl: number   // (totalFees / totalPnl) × 100; 0 if totalPnl is 0
+}
+
+export interface AccountMetricsRow {
+  subAccountId: string
+  exchangeId: ExchangeId
+  accountName: string
+  metrics: ExtendedMetrics
+  futuresMetrics: FuturesMetrics
+  extras: Record<string, number>  // derived values: avgFundingPerTrade, avgHoldingMin, etc.
+}
+
 export interface FilterState {
   exchangeId: ExchangeId | 'all'
   subAccountId: string | 'all'

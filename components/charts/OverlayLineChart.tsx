@@ -13,10 +13,12 @@ import {
 import type { MetricTimeSeries } from '@/lib/types'
 import { ACCOUNT_COLORS, EXCHANGES } from '@/lib/mock-data'
 import { formatMoney } from '@/lib/utils'
+import { aggregateOverlayData } from '@/lib/calculations'
 
 interface OverlayLineChartProps {
   data: MetricTimeSeries[]  // output of buildOverlayData — date + one key per active account
   activeIds: string[]       // controls which Lines are rendered and in what order
+  timeframe?: 'daily' | 'weekly' | 'monthly'  // default 'daily'
   height?: number           // chart area height in px, default 320
 }
 
@@ -76,7 +78,9 @@ function CustomTooltip({ active, payload, label }: CustomTooltipProps) {
   )
 }
 
-export default function OverlayLineChart({ data, activeIds, height = 320 }: OverlayLineChartProps) {
+export default function OverlayLineChart({ data, activeIds, timeframe = 'daily', height = 320 }: OverlayLineChartProps) {
+  const chartData = aggregateOverlayData(data, timeframe)
+
   if (data.length === 0 || activeIds.length === 0) {
     return (
       <div
@@ -117,7 +121,7 @@ export default function OverlayLineChart({ data, activeIds, height = 320 }: Over
       {/* Chart */}
       <div className="px-2 py-3" style={{ background: 'var(--bg-secondary)' }}>
         <ResponsiveContainer width="100%" height={height}>
-          <LineChart data={data} margin={{ top: 6, right: 12, left: 0, bottom: 0 }}>
+          <LineChart data={chartData} margin={{ top: 6, right: 12, left: 0, bottom: 0 }}>
             <CartesianGrid strokeDasharray="2 4" stroke="var(--border-subtle)" vertical={false} />
 
             <XAxis

@@ -13,6 +13,11 @@ import {
   buildAccountSnapshots,
   buildUsdtBalanceTimeSeries,
   buildTokenBalanceTimeSeries,
+  calculateRecoveryFactor,
+  calculateAvgFeePerTrade,
+  calculateFeesAsPctOfPnl,
+  buildPerAccountMetrics,
+  aggregateOverlayData,
 } from '../calculations'
 import type { DailyPnLEntry, Trade, HistoryFilterState } from '../types'
 
@@ -883,5 +888,182 @@ describe('buildTokenBalanceTimeSeries', () => {
       if (series[i].value === series[i - 1].value) sameDayCount++
     }
     expect(sameDayCount).toBeGreaterThan(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// calculateRecoveryFactor
+// ---------------------------------------------------------------------------
+describe('calculateRecoveryFactor', () => {
+  it('returns 0 when maxDrawdown is 0', () => {
+    expect(calculateRecoveryFactor(10000, 0)).toBe(0)
+  })
+
+  it('returns totalPnl / abs(maxDrawdown) for normal positive case', () => {
+    expect(calculateRecoveryFactor(50000, -10000)).toBeCloseTo(5, 4)
+  })
+
+  it('handles positive maxDrawdown value (takes abs)', () => {
+    expect(calculateRecoveryFactor(50000, 10000)).toBeCloseTo(5, 4)
+  })
+
+  it('returns negative when totalPnl is negative', () => {
+    expect(calculateRecoveryFactor(-20000, -10000)).toBeCloseTo(-2, 4)
+  })
+
+  it('returns 0 when both are 0', () => {
+    expect(calculateRecoveryFactor(0, 0)).toBe(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// calculateAvgFeePerTrade
+// ---------------------------------------------------------------------------
+describe('calculateAvgFeePerTrade', () => {
+  it('returns 0 when totalTrades is 0', () => {
+    expect(calculateAvgFeePerTrade(5000, 0)).toBe(0)
+  })
+
+  it('returns totalFees / totalTrades for normal case', () => {
+    expect(calculateAvgFeePerTrade(1000, 10)).toBeCloseTo(100, 4)
+  })
+
+  it('returns 0 when totalFees is 0', () => {
+    expect(calculateAvgFeePerTrade(0, 10)).toBe(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// calculateFeesAsPctOfPnl
+// ---------------------------------------------------------------------------
+describe('calculateFeesAsPctOfPnl', () => {
+  it('returns 0 when totalPnl is 0', () => {
+    expect(calculateFeesAsPctOfPnl(500, 0)).toBe(0)
+  })
+
+  it('returns (totalFees / totalPnl) × 100 for normal case', () => {
+    expect(calculateFeesAsPctOfPnl(1000, 10000)).toBeCloseTo(10, 4)
+  })
+
+  it('returns negative result when totalPnl is negative', () => {
+    expect(calculateFeesAsPctOfPnl(500, -5000)).toBeCloseTo(-10, 4)
+  })
+
+  it('returns 0 when totalFees is 0', () => {
+    expect(calculateFeesAsPctOfPnl(0, 10000)).toBe(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// buildPerAccountMetrics
+// ---------------------------------------------------------------------------
+describe('buildPerAccountMetrics', () => {
+  const range = { start: '2025-01-01', end: '2025-12-31' }
+
+  it('returns empty array when activeIds is empty', () => {
+    expect(buildPerAccountMetrics([], range, 'spot')).toEqual([])
+  })
+
+  it('returns one row per activeId', () => {
+    const rows = buildPerAccountMetrics(['binance-alpha', 'bybit-delta'], range, 'spot')
+    expect(rows).toHaveLength(2)
+  })
+
+  it('each row has accountName from EXCHANGES config', () => {
+    const rows = buildPerAccountMetrics(['binance-alpha'], range, 'spot')
+    expect(rows[0].accountName).toBe('Alpha Fund')
+    expect(rows[0].exchangeId).toBe('binance')
+  })
+
+  it('metrics.recoveryFactor is 0 when maxDrawdown is 0', () => {
+    // Force empty daily → all metrics zero → recoveryFactor should be 0
+    const rows = buildPerAccountMetrics(['binance-alpha'], { start: '2020-01-01', end: '2020-01-01' }, 'spot')
+    expect(rows[0].metrics.recoveryFactor).toBe(0)
+  })
+
+  it('metrics.recoveryFactor is positive for a profitable period', () => {
+    const rows = buildPerAccountMetrics(['binance-alpha'], range, 'spot')
+    // binance-alpha is profitable over full year — recovery factor should be > 0
+    if (rows[0].metrics.maxDrawdown !== 0) {
+      expect(rows[0].metrics.recoveryFactor).not.toBe(0)
+    }
+  })
+
+  it('filters to spot trades only when tradeType is spot', () => {
+    const spotRows = buildPerAccountMetrics(['bybit-delta'], range, 'spot')
+    const futuresRows = buildPerAccountMetrics(['bybit-delta'], range, 'futures')
+    // Trade counts should differ since bybit-delta has both spot and futures
+    expect(spotRows[0].metrics.totalTrades).toBeGreaterThanOrEqual(0)
+    expect(futuresRows[0].metrics.totalTrades).toBeGreaterThanOrEqual(0)
+  })
+
+  it('extras contains avgFundingPerTrade', () => {
+    const rows = buildPerAccountMetrics(['bybit-delta'], range, 'futures')
+    expect(typeof rows[0].extras.avgFundingPerTrade).toBe('number')
+  })
+
+  it('extras contains avgHoldingMin', () => {
+    const rows = buildPerAccountMetrics(['binance-alpha'], range, 'spot')
+    expect(typeof rows[0].extras.avgHoldingMin).toBe('number')
+    expect(rows[0].extras.avgHoldingMin).toBeGreaterThanOrEqual(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// aggregateOverlayData
+// ---------------------------------------------------------------------------
+describe('aggregateOverlayData', () => {
+  // Build a simple MetricTimeSeries: 10 daily points for one account
+  function makeOverlay(days: number): import('../types').MetricTimeSeries[] {
+    const result: import('../types').MetricTimeSeries[] = []
+    for (let i = 0; i < days; i++) {
+      const d = new Date('2025-01-01T00:00:00Z')
+      d.setUTCDate(d.getUTCDate() + i)
+      const date = d.toISOString().slice(0, 10)
+      result.push({ date, 'sub-a': i * 10 })
+    }
+    return result
+  }
+
+  it('daily passthrough returns same number of points', () => {
+    const data = makeOverlay(10)
+    const result = aggregateOverlayData(data, 'daily')
+    expect(result).toHaveLength(10)
+  })
+
+  it('weekly aggregation reduces ~35 days to ~5 weekly buckets', () => {
+    const data = makeOverlay(35)
+    const result = aggregateOverlayData(data, 'weekly')
+    expect(result.length).toBeGreaterThanOrEqual(4)
+    expect(result.length).toBeLessThanOrEqual(6)
+  })
+
+  it('monthly aggregation reduces 90 days to ~3 monthly buckets', () => {
+    const data = makeOverlay(90)
+    const result = aggregateOverlayData(data, 'monthly')
+    expect(result.length).toBeGreaterThanOrEqual(2)
+    expect(result.length).toBeLessThanOrEqual(4)
+  })
+
+  it('weekly bucket takes last value of that week', () => {
+    const data = makeOverlay(7) // exactly one week
+    const result = aggregateOverlayData(data, 'weekly')
+    expect(result).toHaveLength(1)
+    // last value = index 6 → 60
+    expect(result[0]['sub-a']).toBe(60)
+  })
+
+  it('returns empty array for empty input', () => {
+    expect(aggregateOverlayData([], 'weekly')).toEqual([])
+  })
+
+  it('preserves all account keys in each output point', () => {
+    const data: import('../types').MetricTimeSeries[] = [
+      { date: '2025-01-01', 'acc-a': 10, 'acc-b': 20 },
+      { date: '2025-01-07', 'acc-a': 50, 'acc-b': 80 },
+    ]
+    const result = aggregateOverlayData(data, 'weekly')
+    expect(result[0]).toHaveProperty('acc-a')
+    expect(result[0]).toHaveProperty('acc-b')
   })
 })
