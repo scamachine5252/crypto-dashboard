@@ -50,8 +50,8 @@ export default function LoginForm() {
             <TrendingUp className="w-5 h-5 text-white" />
           </div>
           <div>
-            <p className="text-white font-bold text-xl tracking-tight">NEXUS FUND</p>
-            <p className="text-[#4d6b8e] text-xs tracking-widest uppercase">Portfolio Management</p>
+            <p className="text-white font-bold text-xl tracking-tight">CICADA FOUNDATION</p>
+            <p className="text-[#4d6b8e] text-xs tracking-widest uppercase">Portfolio Intelligence</p>
           </div>
         </div>
 

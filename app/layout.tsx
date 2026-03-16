@@ -18,7 +18,7 @@ const dmSans = DM_Sans({
 })
 
 export const metadata: Metadata = {
-  title: 'Nexus Fund — PnL Dashboard',
+  title: 'Cicada Foundation — PnL Dashboard',
   description: 'Professional crypto hedge fund portfolio dashboard',
 }
 

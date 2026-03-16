@@ -12,14 +12,18 @@ import {
   Cell,
   ReferenceLine,
 } from 'recharts'
-import type { ChartDataPoint, Timeframe } from '@/lib/types'
+import type { ChartDataPoint, Timeframe, Period, DateRange } from '@/lib/types'
 import { formatMoney } from '@/lib/utils'
+import PeriodSelector from '@/components/ui/PeriodSelector'
 
 interface PnLChartProps {
   data: ChartDataPoint[]
   timeframe: Timeframe
   onTimeframeChange: (t: Timeframe) => void
   totalPnl: number
+  period: Period
+  customRange: DateRange | undefined
+  onPeriodChange: (p: Period, range?: DateRange) => void
 }
 
 interface TooltipProps {
@@ -66,7 +70,7 @@ const TIMEFRAMES: { label: string; value: Timeframe }[] = [
   { label: 'Monthly', value: 'monthly' },
 ]
 
-export default function PnLChart({ data, timeframe, onTimeframeChange, totalPnl }: PnLChartProps) {
+export default function PnLChart({ data, timeframe, onTimeframeChange, totalPnl, period, customRange, onPeriodChange }: PnLChartProps) {
   const isPositive = totalPnl >= 0
   const GREEN = 'var(--accent-profit)'
   const RED   = 'var(--accent-loss)'
@@ -102,25 +106,33 @@ export default function PnLChart({ data, timeframe, onTimeframeChange, totalPnl 
           </p>
         </div>
 
-        {/* Timeframe tabs */}
-        <div className="flex items-center gap-px" style={{ border: '1px solid var(--border-subtle)' }}>
-          {TIMEFRAMES.map((tf) => {
-            const isActive = timeframe === tf.value
-            return (
-              <button
-                key={tf.value}
-                onClick={() => onTimeframeChange(tf.value)}
-                className="px-3 py-1 text-[10px] font-semibold tracking-wider uppercase transition-colors"
-                style={{
-                  background: isActive ? 'var(--bg-elevated)' : 'transparent',
-                  color: isActive ? 'var(--text-primary)' : 'var(--text-muted)',
-                  borderRight: tf.value !== 'monthly' ? '1px solid var(--border-subtle)' : 'none',
-                }}
-              >
-                {tf.label}
-              </button>
-            )
-          })}
+        <div className="flex items-center gap-3">
+          {/* Period selector */}
+          <PeriodSelector value={period} customRange={customRange} onChange={onPeriodChange} />
+
+          {/* Divider */}
+          <div className="h-4 w-px" style={{ background: 'var(--border-subtle)' }} />
+
+          {/* Timeframe tabs */}
+          <div className="flex items-center gap-px" style={{ border: '1px solid var(--border-subtle)' }}>
+            {TIMEFRAMES.map((tf) => {
+              const isActive = timeframe === tf.value
+              return (
+                <button
+                  key={tf.value}
+                  onClick={() => onTimeframeChange(tf.value)}
+                  className="px-3 py-1 text-[10px] font-semibold tracking-wider uppercase transition-colors"
+                  style={{
+                    background: isActive ? 'var(--bg-elevated)' : 'transparent',
+                    color: isActive ? 'var(--text-primary)' : 'var(--text-muted)',
+                    borderRight: tf.value !== 'monthly' ? '1px solid var(--border-subtle)' : 'none',
+                  }}
+                >
+                  {tf.label}
+                </button>
+              )
+            })}
+          </div>
         </div>
       </div>
 

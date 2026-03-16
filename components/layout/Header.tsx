@@ -1,12 +1,15 @@
 'use client'
 
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useMemo } from 'react'
 import { useAuth } from '@/lib/auth-context'
 import { useTheme } from '@/lib/theme-context'
 import { useRouter } from 'next/navigation'
 import { TrendingUp, LogOut, User, Activity, ChevronDown, Sun, Moon } from 'lucide-react'
 import { formatMoney, formatPercent } from '@/lib/utils'
+import { getAllDailyPnL } from '@/lib/mock-data'
 import NavDropdown from './NavDropdown'
+
+const INITIAL_CAPITAL = 6_800_000
 
 interface HeaderProps {
   totalPnl: number
@@ -17,6 +20,11 @@ export default function Header({ totalPnl, annualYield }: HeaderProps) {
   const { user, logout } = useAuth()
   const { theme, toggle: toggleTheme } = useTheme()
   const router = useRouter()
+
+  const fundValue = useMemo(() => {
+    const totalPnlAll = getAllDailyPnL().reduce((s, d) => s + d.pnl, 0)
+    return INITIAL_CAPITAL + totalPnlAll
+  }, [])
   const [navOpen, setNavOpen] = useState(false)
   const navRef = useRef<HTMLDivElement>(null)
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -64,7 +72,7 @@ export default function Header({ totalPnl, annualYield }: HeaderProps) {
             className="font-bold text-sm tracking-tight leading-none font-heading"
             style={{ color: 'var(--text-primary)' }}
           >
-            NEXUS FUND
+            CICADA FOUNDATION
           </p>
           <p
             className="text-[10px] tracking-widest uppercase leading-none mt-0.5"
@@ -123,6 +131,23 @@ export default function Header({ totalPnl, annualYield }: HeaderProps) {
         >
           <User className="w-3 h-3" />
           <span className="text-xs font-medium">{user?.username}</span>
+        </div>
+
+        {/* Fund value badge */}
+        <div
+          className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5"
+          style={{
+            background: 'var(--bg-secondary)',
+            border: '1px solid var(--border-subtle)',
+          }}
+        >
+          <span className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>Fund</span>
+          <span
+            className="font-mono text-xs font-bold tabular"
+            style={{ color: 'var(--accent-profit)' }}
+          >
+            {formatMoney(fundValue)}
+          </span>
         </div>
 
         {/* Theme toggle */}
