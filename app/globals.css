@@ -1,26 +1,26 @@
 @import "tailwindcss";
 
-/* ─── Dark theme (default) ─────────────────────────────────────────────── */
+/* ─── Dark theme / Wintermute (default) ────────────────────────────────── */
 :root {
   /* Backgrounds */
-  --bg-primary:    #0A0A0F;
-  --bg-secondary:  #13131A;
-  --bg-tertiary:   #0D0D14;
-  --bg-elevated:   #1A1A24;
+  --bg-primary:    #0a0a0a;
+  --bg-secondary:  #111111;
+  --bg-tertiary:   #0d0d0d;
+  --bg-elevated:   #161616;
 
   /* Borders */
-  --border-subtle: #1C1C28;
-  --border-medium: #252535;
-  --border-strong: #303048;
+  --border-subtle: #1e1e1e;
+  --border-medium: #2a2a2a;
+  --border-strong: #333333;
 
   /* Text */
-  --text-primary:   #F0F4FF;
-  --text-secondary: #6B7A99;
-  --text-muted:     #3D4A66;
+  --text-primary:   #e8e8e8;
+  --text-secondary: #888888;
+  --text-muted:     #555555;
 
-  /* Accents — same in both themes */
-  --accent-profit: #00FF88;
-  --accent-loss:   #FF3B3B;
+  /* Accents */
+  --accent-profit: #00ff41;
+  --accent-loss:   #ff4444;
   --accent-gold:   #FFD700;
   --accent-blue:   #2D6FFF;
 
@@ -28,43 +28,48 @@
   --exchange-binance: #F0B90B;
   --exchange-bybit:   #FF6B2C;
   --exchange-okx:     #4F8EF7;
+
+  /* Font aliases — lets existing components keep their variable references */
+  --font-geist-mono:    var(--font-rajdhani);
+  --font-inter:         var(--font-dm-sans);
+  --font-space-grotesk: var(--font-rajdhani);
 }
 
-/* ─── Light theme ───────────────────────────────────────────────────────── */
+/* ─── Light theme / Cicada ───────────────────────────────────────────────── */
 .light {
-  --bg-primary:    #F0F2F8;
-  --bg-secondary:  #FFFFFF;
-  --bg-tertiary:   #E8EBF4;
-  --bg-elevated:   #FFFFFF;
+  --bg-primary:    #f0f2f5;
+  --bg-secondary:  #ffffff;
+  --bg-tertiary:   #e8edf5;
+  --bg-elevated:   #ffffff;
 
-  --border-subtle: #DDE0EE;
-  --border-medium: #C5C9DB;
-  --border-strong: #A8ADC5;
+  --border-subtle: #dde3f0;
+  --border-medium: #c8d0e0;
+  --border-strong: #b0bcd0;
 
-  --text-primary:   #0A0A1F;
-  --text-secondary: #48556A;
-  --text-muted:     #8896AE;
+  --text-primary:   #111111;
+  --text-secondary: #555555;
+  --text-muted:     #aabbbb;
 
-  --accent-profit: #00A854;
-  --accent-loss:   #D93030;
+  --accent-profit: #1a9e4a;
+  --accent-loss:   #d32f2f;
   --accent-gold:   #B8860B;
-  --accent-blue:   #1A5FE8;
+  --accent-blue:   #1a56db;
 }
 
 /* ─── Tailwind theme ───────────────────────────────────────────────────── */
 @theme inline {
   --color-background: var(--bg-primary);
   --color-foreground: var(--text-primary);
-  --font-sans:    var(--font-inter);
-  --font-heading: var(--font-space-grotesk);
-  --font-mono:    var(--font-geist-mono);
+  --font-sans:    var(--font-dm-sans);
+  --font-heading: var(--font-rajdhani);
+  --font-mono:    var(--font-rajdhani);
 }
 
 /* ─── Base ─────────────────────────────────────────────────────────────── */
 body {
   background: var(--bg-primary);
   color: var(--text-primary);
-  font-family: var(--font-inter), system-ui, -apple-system, sans-serif;
+  font-family: var(--font-dm-sans), system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -76,7 +81,7 @@ body, header, main, div, section, aside, nav, button, input, select, a, p, span,
 
 /* ─── Utility classes ──────────────────────────────────────────────────── */
 .font-heading {
-  font-family: var(--font-space-grotesk), system-ui, sans-serif;
+  font-family: var(--font-rajdhani), system-ui, sans-serif;
 }
 
 .tabular {

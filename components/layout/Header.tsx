@@ -41,7 +41,7 @@ export default function Header({ totalPnl, annualYield }: HeaderProps) {
     <header
       className="sticky top-0 z-50 px-6 flex items-center justify-between h-14"
       style={{
-        background: theme === 'light' ? 'rgba(240,242,248,0.95)' : 'rgba(10,10,15,0.95)',
+        background: theme === 'light' ? 'rgba(240,242,245,0.95)' : 'rgba(10,10,10,0.95)',
         backdropFilter: 'blur(12px)',
         borderBottom: '1px solid var(--border-subtle)',
       }}
