@@ -8,6 +8,7 @@ import {
   summarizeFilteredTrades,
   buildMetricTimeSeries,
   calculateFuturesMetrics,
+  buildOverlayData,
 } from '../calculations'
 import type { DailyPnLEntry, Trade, HistoryFilterState } from '../types'
 
@@ -482,5 +483,132 @@ describe('calculateFuturesMetrics', () => {
   it('returns 0 averageLeverage when no futures trades exist', () => {
     const trades = [makeTrade({ id: 't1', tradeType: 'spot' })]
     expect(calculateFuturesMetrics(trades).averageLeverage).toBe(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// buildOverlayData
+// ---------------------------------------------------------------------------
+function makeOverlayEntry(
+  date: string,
+  cumulativePnl: number,
+  subAccountId: string,
+  pnl = 0,
+): DailyPnLEntry {
+  return { date, pnl, cumulativePnl, exchangeId: 'binance', subAccountId }
+}
+
+describe('buildOverlayData', () => {
+  const range = { start: '2025-01-01', end: '2025-01-03' }
+
+  // Case 1
+  it('returns empty array when dailyPnL is empty', () => {
+    expect(buildOverlayData([], ['acc-1'], range)).toEqual([])
+  })
+
+  // Case 2
+  it('returns empty array when subAccountIds is empty', () => {
+    const daily = [makeOverlayEntry('2025-01-01', 1000, 'acc-1')]
+    expect(buildOverlayData(daily, [], range)).toEqual([])
+  })
+
+  // Case 3
+  it('normalizes single account, single day to 0', () => {
+    const daily = [makeOverlayEntry('2025-01-01', 5000, 'acc-1')]
+    const result = buildOverlayData(daily, ['acc-1'], { start: '2025-01-01', end: '2025-01-01' })
+    expect(result).toHaveLength(1)
+    expect(result[0]['acc-1']).toBe(0)
+  })
+
+  // Case 4
+  it('normalizes single account across multiple days relative to first day', () => {
+    const daily = [
+      makeOverlayEntry('2025-01-01', 1000, 'acc-1'),
+      makeOverlayEntry('2025-01-02', 1200, 'acc-1'),
+      makeOverlayEntry('2025-01-03',  900, 'acc-1'),
+    ]
+    const result = buildOverlayData(daily, ['acc-1'], range)
+    expect(result).toHaveLength(3)
+    expect(result[0]['acc-1']).toBe(0)
+    expect(result[1]['acc-1']).toBe(200)
+    expect(result[2]['acc-1']).toBe(-100)
+  })
+
+  // Case 5
+  it('normalizes two accounts independently so both start at 0 regardless of absolute level', () => {
+    const daily = [
+      makeOverlayEntry('2025-01-01', 10000, 'acc-1'),
+      makeOverlayEntry('2025-01-02', 10500, 'acc-1'),
+      makeOverlayEntry('2025-01-03', 10300, 'acc-1'),
+      makeOverlayEntry('2025-01-01',   500, 'acc-2'),
+      makeOverlayEntry('2025-01-02',   600, 'acc-2'),
+      makeOverlayEntry('2025-01-03',   700, 'acc-2'),
+    ]
+    const result = buildOverlayData(daily, ['acc-1', 'acc-2'], range)
+    expect(result).toHaveLength(3)
+    expect(result[0]['acc-1']).toBe(0)
+    expect(result[0]['acc-2']).toBe(0)
+    expect(result[1]['acc-1']).toBe(500)
+    expect(result[1]['acc-2']).toBe(100)
+    expect(result[2]['acc-1']).toBe(300)
+    expect(result[2]['acc-2']).toBe(200)
+  })
+
+  // Case 6
+  it('carries forward the last known value when an account has a gap', () => {
+    const daily = [
+      makeOverlayEntry('2025-01-01', 1000, 'acc-1'),
+      // no Jan 2 entry
+      makeOverlayEntry('2025-01-03', 1400, 'acc-1'),
+    ]
+    const result = buildOverlayData(daily, ['acc-1'], range)
+    expect(result).toHaveLength(3)
+    expect(result[0]['acc-1']).toBe(0)
+    expect(result[1]['acc-1']).toBe(0)   // carried forward
+    expect(result[2]['acc-1']).toBe(400)
+  })
+
+  // Case 7
+  it('omits an account that has no entries in the date range', () => {
+    const daily = [
+      makeOverlayEntry('2025-01-01', 1000, 'acc-1'),
+      makeOverlayEntry('2025-01-02', 1100, 'acc-1'),
+      // acc-2 has entries but outside range
+      makeOverlayEntry('2024-12-31', 500, 'acc-2'),
+    ]
+    const result = buildOverlayData(daily, ['acc-1', 'acc-2'], range)
+    expect(result.length).toBeGreaterThan(0)
+    result.forEach((row) => {
+      expect('acc-2' in row).toBe(false)
+    })
+  })
+
+  // Case 8
+  it('excludes entries outside the date range', () => {
+    const daily = [
+      makeOverlayEntry('2024-12-31',  800, 'acc-1'),  // before range
+      makeOverlayEntry('2025-01-01', 1000, 'acc-1'),
+      makeOverlayEntry('2025-01-02', 1200, 'acc-1'),
+      makeOverlayEntry('2025-01-03', 1100, 'acc-1'),
+      makeOverlayEntry('2025-01-04', 1500, 'acc-1'),  // after range
+    ]
+    const result = buildOverlayData(daily, ['acc-1'], range)
+    expect(result).toHaveLength(3)
+    expect(result[0].date).toBe('2025-01-01')
+    expect(result[2].date).toBe('2025-01-03')
+    expect(result[0]['acc-1']).toBe(0)   // baseline = Jan 1 (not Dec 31)
+  })
+
+  // Case 9
+  it('handles a losing account with negative cumulative PnL correctly', () => {
+    const daily = [
+      makeOverlayEntry('2025-01-01', -200, 'acc-1'),
+      makeOverlayEntry('2025-01-02', -350, 'acc-1'),
+      makeOverlayEntry('2025-01-03', -100, 'acc-1'),
+    ]
+    const result = buildOverlayData(daily, ['acc-1'], range)
+    expect(result[0]['acc-1']).toBe(0)
+    expect(result[1]['acc-1']).toBe(-150)
+    expect(result[2]['acc-1']).toBe(100)
   })
 })
