@@ -5,11 +5,26 @@
 ## Project State
 *Update this section after every major change.*
 
-### Status: Phase 1 complete — full mock dashboard running
+### Status: Phase 2 complete — Dashboard and Performance Indicators pages fully built
 
 ### What has been built
 
-A full-stack dark-themed crypto hedge fund PnL dashboard. Authentication, filters, 10 financial metrics, an equity-curve chart, and a paginated orders table are all functional with deterministic mock data. No real exchange APIs are connected yet.
+**App name:** NEXUS FUND — a professional dark-themed crypto hedge fund PnL dashboard.
+
+**Pages complete:**
+- `/dashboard` — balance cards, 10 metric cards, equity-curve chart (Area + period Bars), orders table, period selector, exchange/sub-account filter
+- `/performance` — metric selector tiles (spot + futures split), per-account toggle bar, multi-line chart (`MetricLineChart`) showing any metric over time per account, weekly/monthly timeframe toggle
+
+**Pages stubbed (routing works, UI shows "Coming soon"):**
+- `/results`, `/history`, `/api-settings`
+
+**Infrastructure complete:**
+- Dark/light theme toggle (ThemeProvider, localStorage, anti-flash `<Script>` in layout)
+- Logo-hover nav dropdown (NavDropdown, reads from `lib/nav.ts`)
+- `PeriodSelector` shared component (1D / Week / Month / Year / Manual with date picker)
+- `AuthGuard` component used in every page layout
+- `lib/adapters/` — `ExchangeAdapter` interface + `MockAdapter` implementation
+- Full Jest test suite covering all `calculations.ts` functions
 
 **Credentials:** `admin` / `admin123`
 **Dev server:** `npm run dev` → `http://localhost:3000`
@@ -21,33 +36,68 @@ A full-stack dark-themed crypto hedge fund PnL dashboard. Authentication, filter
 ```
 crypto-dashboard/          ← project root (NOT src/)
 ├── app/
-│   ├── globals.css        ← dark theme, custom scrollbar, Tailwind v4 @theme block
-│   ├── layout.tsx         ← root layout: loads Geist fonts, wraps in <Providers>
+│   ├── globals.css        ← dark + light CSS variables, Tailwind v4 @theme block, theme transitions
+│   ├── layout.tsx         ← root layout: loads Inter, Space Grotesk, Geist Mono; anti-flash script; wraps in <Providers>
 │   ├── page.tsx           ← server redirect → /dashboard
-│   ├── providers.tsx      ← 'use client' wrapper; mounts AuthProvider
+│   ├── providers.tsx      ← 'use client'; wraps in <ThemeProvider><AuthProvider>
 │   ├── login/
-│   │   └── page.tsx       ← imports LoginForm (thin server shell)
-│   └── dashboard/
-│       ├── layout.tsx     ← 'use client' auth guard; redirects → /login if not authed
-│       └── page.tsx       ← main dashboard; owns all filter state (useState/useMemo)
+│   │   └── page.tsx       ← imports LoginForm
+│   ├── dashboard/
+│   │   ├── layout.tsx     ← wraps children in <AuthGuard>
+│   │   └── page.tsx       ← filter state (FilterState + DateRange), renders BalanceCards, MetricsGrid, PnLChart, OrdersTable
+│   ├── performance/
+│   │   ├── layout.tsx     ← wraps children in <AuthGuard>
+│   │   └── page.tsx       ← account toggle state, MetricSelector, FuturesMetricsTiles, MetricLineChart
+│   ├── results/
+│   │   ├── layout.tsx     ← wraps children in <AuthGuard>
+│   │   └── page.tsx       ← STUB ("Coming soon")
+│   ├── history/
+│   │   ├── layout.tsx     ← wraps children in <AuthGuard>
+│   │   └── page.tsx       ← STUB ("Coming soon")
+│   └── api-settings/
+│       ├── layout.tsx     ← wraps children in <AuthGuard>
+│       └── page.tsx       ← STUB ("Coming soon")
 │
 ├── components/
 │   ├── auth/
-│   │   └── LoginForm.tsx  ← form, validation, show/hide password, demo-credential hint
-│   └── dashboard/
-│       ├── Header.tsx     ← sticky header: logo, total PnL badge, user pill, logout
-│       ├── FilterBar.tsx  ← exchange tab buttons + sub-account <select>; resets sub-account on exchange change
-│       ├── MetricCard.tsx ← single metric tile (label, value, trend color, icon, description)
-│       ├── MetricsGrid.tsx← 5×2 grid of MetricCards; maps Metrics → display config
-│       ├── PnLChart.tsx   ← recharts ComposedChart (Area cumulative + Bar period PnL, dual Y-axes)
-│       └── OrdersTable.tsx← sortable columns, client search, 15-row pagination
+│   │   └── LoginForm.tsx      ← form, validation, show/hide password, demo-credential fill button
+│   ├── layout/
+│   │   ├── Header.tsx         ← sticky header: logo + nav trigger (hover), total PnL badge, user pill, theme toggle (Sun/Moon), logout
+│   │   ├── NavDropdown.tsx    ← rendered inside Header on hover; reads NAV_ITEMS from lib/nav.ts; active item in gold
+│   │   ├── FilterBar.tsx      ← exchange tab buttons + sub-account <select>; resets sub-account on exchange change; Clear button
+│   │   └── AuthGuard.tsx      ← 'use client'; redirects to /login if not authenticated; shows spinner while loading
+│   ├── ui/
+│   │   └── PeriodSelector.tsx ← 1D / Week / Month / Year / Manual; Manual reveals start/end date inputs + Apply button
+│   ├── metrics/
+│   │   ├── MetricCard.tsx         ← single metric tile (label, value, optional subValue, trend color, icon, description)
+│   │   ├── MetricsGrid.tsx        ← 5×2 CSS grid of MetricCards for dashboard
+│   │   ├── BalanceCards.tsx       ← 4-column grid: one card per exchange + Portfolio total; shows balance, PnL, PnL%
+│   │   ├── MetricSelector.tsx     ← 5×2 clickable tile grid for /performance; selected tile underlined in blue
+│   │   └── FuturesMetricsTiles.tsx← 5-tile row: funding cost, avg leverage, L/S ratio, liq. distance, overnight exposure
+│   ├── charts/
+│   │   ├── PnLChart.tsx       ← recharts ComposedChart; Area (cumulative PnL, left Y) + colored Bars (period PnL, right Y); daily/weekly/monthly timeframe tabs
+│   │   └── MetricLineChart.tsx← recharts LineChart; one Line per active sub-account; custom tooltip shows all series sorted by value
+│   └── orders/
+│       └── OrdersTable.tsx    ← sortable by symbol/pnl/fee/pnlPercent/closedAt; client-side search; 15-row pagination
 │
-└── lib/
-    ├── types.ts           ← ALL shared interfaces: ExchangeId, Trade, DailyPnLEntry, Metrics, FilterState…
-    ├── utils.ts           ← formatMoney(), formatPercent(), formatPrice(), formatDate(), cn()
-    ├── auth-context.tsx   ← 'use client' AuthProvider + useAuth(); stores session in localStorage
-    ├── mock-data.ts       ← seeded mulberry32 RNG; generates 365 days × 7 sub-accounts + ~1,400 trades
-    └── calculations.ts    ← calculateMetrics() (Sharpe, Sortino, MDD, CAGR…), aggregateChartData()
+├── lib/
+│   ├── types.ts           ← ALL shared interfaces: ExchangeId, Trade, DailyPnLEntry, Metrics, FuturesMetrics,
+│   │                         FilterState, HistoryFilterState, MetricTimeSeries, AccountSummary, ApiKeyConfig,
+│   │                         ChartDataPoint, DateRange, Period, Timeframe, SubAccount, ExchangeConfig, ConnectionStatus
+│   ├── utils.ts           ← formatMoney(), formatPercent(), formatRatio(), formatPrice(), formatDate(), cn()
+│   ├── auth-context.tsx   ← 'use client' AuthProvider + useAuth(); credentials hardcoded (admin/admin123); localStorage
+│   ├── theme-context.tsx  ← 'use client' ThemeProvider + useTheme(); toggles .light class on <html>; localStorage
+│   ├── nav.ts             ← NAV_ITEMS array — the only file to edit when adding a page
+│   ├── mock-data.ts       ← seeded mulberry32 RNG; EXCHANGES config; ACCOUNT_COLORS map; generates 365 days × 7 sub-accounts;
+│   │                         filterDailyPnL(), filterTrades(), getAllDailyPnL(), getAllTrades()
+│   ├── calculations.ts    ← calculateMetrics(), aggregateChartData(), resolveDateRange(), filterByDateRange(),
+│   │                         normalizeEquityCurve(), filterTradesAdvanced(), summarizeFilteredTrades(),
+│   │                         buildMetricTimeSeries(), calculateFuturesMetrics()
+│   ├── adapters/
+│   │   ├── types.ts       ← ExchangeAdapter interface: getDailyPnL(), getTrades(), testConnection()
+│   │   └── mock.ts        ← MockAdapter implements ExchangeAdapter using mock-data.ts
+│   └── __tests__/
+│       └── calculations.test.ts  ← Jest tests for all calculations.ts functions (full coverage)
 ```
 
 ---
@@ -57,37 +107,45 @@ crypto-dashboard/          ← project root (NOT src/)
 | Decision | Choice | Reason |
 |---|---|---|
 | Root layout | `app/` (not `src/`) | Default Next.js scaffold kept |
-| Auth | localStorage + React Context | Simple for mock phase; swap for JWT/session when real APIs arrive |
+| App name | NEXUS FUND | Institutional branding established in LoginForm and Header |
+| Auth | localStorage + React Context; AuthGuard component in each page layout | Simple for mock phase; swap for JWT/session when real APIs arrive |
+| Auth guard | Separate `AuthGuard` component (not inline in layouts) | Reusable; used in all 5 page layouts |
 | Mock data | Seeded deterministic RNG (mulberry32) | Same data every run; no committed fixtures |
-| Data range | 2025-01-01 → 2025-12-31 | Full calendar year gives meaningful weekly/monthly aggregation |
-| Filter state | Lives in `dashboard/page.tsx` | Single source of truth; all children receive filtered props |
-| Chart library | recharts `ComposedChart` | Dual Y-axes: Area (cumulative, left) + colored Bars (period PnL, right) |
-| Styling | Tailwind v4 + CSS variables | No `tailwind.config.js` needed; arbitrary values for brand colors |
-| Color palette | bg `#050b14`, card `#0a1628`, border `#152035`, green `#0ecb81`, red `#f6465d` | High-contrast dark terminal feel |
-| Exchange colors | Binance `#F0B90B`, Bybit `#FF6B2C`, OKX `#4F8EF7` | Matches each exchange's official brand |
+| Data range | 2025-01-01 → 2025-12-31 | Full calendar year; "today" hardcoded to 2025-12-31 in page components |
+| Filter state | Lives in each page component | Single source of truth per page; all children receive filtered props |
+| Chart library | recharts `ComposedChart` (dashboard), recharts `LineChart` (performance) | Dual Y-axes for PnL chart; multi-series for metric chart |
+| Styling | Tailwind v4 + CSS variables in globals.css | No `tailwind.config.js` needed |
+| Color palette (dark) | bg-primary `#0A0A0F`, bg-secondary `#13131A`, bg-elevated `#1A1A24`, border-subtle `#1C1C28`, profit `#00FF88`, loss `#FF3B3B`, gold `#FFD700`, blue `#2D6FFF` | Defined as CSS variables in `:root` |
+| Color palette (light) | bg-primary `#F0F2F8`, bg-secondary `#FFFFFF`, profit `#00A854`, loss `#D93030` | Defined as CSS variables in `.light` class |
+| Exchange colors | Binance `#F0B90B`, Bybit `#FF6B2C`, OKX `#4F8EF7` | Matches official brand colors |
+| Sub-account colors | Darker shades of exchange color per account (ACCOUNT_COLORS in mock-data.ts) | Visually groups accounts by exchange on multi-line charts |
+| Theme switching | ThemeProvider toggles `.light` on `<html>`; anti-flash inline `<Script>` in layout | Prevents light-mode flash on page load |
+| Fonts | Inter (body/data), Space Grotesk (`font-heading`), Geist Mono (`font-mono`) | Three variables: --font-inter, --font-space-grotesk, --font-geist-mono |
 | Metrics source | Daily PnL → Sharpe/Sortino/MDD/CAGR; Trades → WinRate/PF/AvgWin/Fees | Correct financial separation |
-| Initial capital | $6,800,000 (used only for ratio calculations) | Realistic small-fund size |
+| Initial capital | $6,800,000 split evenly across 7 sub-accounts | Used in ratio calculations and BalanceCards |
+| Navigation | Logo hover → NavDropdown; reads NAV_ITEMS from lib/nav.ts | Adding a page requires only one entry in nav.ts |
+| TDD | All calculations.ts functions have tests in lib/__tests__/calculations.test.ts | Tests written before implementation |
 
 ### Mock Data Profile
 
-| Sub-account | Exchange | Target Sharpe | Archetype |
+| Sub-account ID | Name | Exchange | Archetype |
 |---|---|---|---|
-| Alpha Fund | Binance | ~1.8 | Aggressive momentum |
-| Beta Fund | Binance | ~1.2 | Alt-coin mid-vol |
-| Gamma Stable | Binance | ~2.1 | Conservative yield |
-| Delta Perps | Bybit | ~1.0 | High-vol perpetuals |
-| Epsilon MM | Bybit | ~2.5 | Market making |
-| Zeta Options | OKX | ~1.3 | Options strategies |
-| Eta Arb | OKX | ~2.2 | Statistical arbitrage |
+| `binance-alpha` | Alpha Fund | Binance | Aggressive momentum |
+| `binance-beta` | Beta Fund | Binance | Alt-coin mid-vol |
+| `binance-gamma` | Gamma Stable | Binance | Conservative yield |
+| `bybit-delta` | Delta Perps | Bybit | High-vol perpetuals |
+| `bybit-epsilon` | Epsilon MM | Bybit | Market making |
+| `okx-zeta` | Zeta Options | OKX | Options strategies |
+| `okx-eta` | Eta Arb | OKX | Statistical arbitrage |
 
 ### Next Steps (not yet built)
 
-- Pages 2–5 from Site Structure below (Performance Indicators, Trading Results, Trading History, API)
+- **Page 3 — `/results`**: `OverlayLineChart` (normalized equity curves) + `ComparisonTable` (per-account metrics with Δ delta column). `normalizeEquityCurve()` already exists in calculations.ts.
+- **Page 4 — `/history`**: `TradeFilters` sticky bar + paginated 25-row table + `ExportButton` (CSV via Blob; PDF via jsPDF). `filterTradesAdvanced()` and `summarizeFilteredTrades()` already exist.
+- **Page 5 — `/api-settings`**: `ExchangeCard`, `ApiKeyInput` (masked, no clipboard), `StatusBadge`.
 - `lib/adapters/` — real exchange API adapters (Binance, Bybit, OKX)
 - `/api/` routes — server-side proxy for API keys
 - Proper session auth (NextAuth or JWT cookies) to replace localStorage
-- Logo hover dropdown navigation
-- Period selector component (1D / Week / Month / Year / Manual) — global, shared across all pages
 
 ---
 
@@ -116,23 +174,26 @@ Five pages. All share: the same nav shell, the same period selector (1D / Week /
 
 ---
 
-### 2. Performance Indicators `/performance`
+### 2. Performance Indicators `/performance` ✅ COMPLETE
 
 **Purpose:** deep-dive into individual metrics over time; multi-account comparison.
 
 **Layout:**
-- Top: metric selector grid — all metrics displayed as tiles (spot + futures split where applicable); clicking a tile selects it
-- Bottom: dynamic line chart of the selected metric over time — one line per selected account/exchange
+- Controls bar: PeriodSelector + weekly/monthly timeframe toggle + per-account/exchange toggle buttons (All / Reset)
+- Metric selector grid (`MetricSelector`) — 10 spot metrics as clickable tiles; selected tile underlined in blue
+- Futures metrics tiles (`FuturesMetricsTiles`) — 5 read-only tiles: funding cost, avg leverage, L/S ratio, liq. distance, overnight exposure
+- Multi-line chart (`MetricLineChart`) — one line per active sub-account for the selected metric over time
 
-**Multi-select:** user can toggle multiple accounts/exchanges on the chart simultaneously. Each line gets the exchange brand color; sub-accounts get shades of that color.
+**Multi-select:** exchange-level group toggle + individual sub-account toggles. At least one account always remains active.
 
 **Period selector:** controls both the metric tiles (period snapshot) and the chart time range.
 
-**New components needed:**
-- `components/charts/MetricLineChart.tsx` — multi-line recharts LineChart, legend, hover tooltip showing all series values
-- `components/metrics/MetricSelector.tsx` — clickable tile grid for metric selection
+**Components built:**
+- `components/charts/MetricLineChart.tsx` — multi-line recharts LineChart, inline legend, custom tooltip sorted by value
+- `components/metrics/MetricSelector.tsx` — 5×2 clickable tile grid
+- `components/metrics/FuturesMetricsTiles.tsx` — 5-tile read-only row
 
-**Data:** metrics computed per account per time window; stored as a time series, not a single snapshot.
+**Data:** `buildMetricTimeSeries()` in calculations.ts — computes metric snapshot per bucket per sub-account.
 
 ---
 
@@ -252,8 +313,15 @@ All functions in `lib/calculations.ts` must be developed test-first using Jest.
 
 | Function | Must cover |
 |---|---|
-| `calculateMetrics` | empty input returns zero metrics; positive PnL; negative PnL; single-day data |
-| `aggregateChartData` | daily (last 90 days), weekly, monthly aggregation; empty input; single entry |
+| `calculateMetrics` | empty input; positive PnL; negative PnL; single-day; win rate; profit factor; zero-loss trades ✅ |
+| `aggregateChartData` | daily (last 90 days), weekly, monthly; empty input; single entry; cumulative reflects full history ✅ |
+| `resolveDateRange` | 1D, 1W, 1M, 1Y, manual ✅ |
+| `filterByDateRange` | in-range, out-of-range, full coverage ✅ |
+| `normalizeEquityCurve` | empty; first point = 0; final value reflects relative gain ✅ |
+| `filterTradesAdvanced` | all filters; no-match combination; symbol substring ✅ |
+| `summarizeFilteredTrades` | empty; sum PnL and fees ✅ |
+| `buildMetricTimeSeries` | empty; monthly/weekly buckets; multiple accounts; dateRange respected; winRate bounds ✅ |
+| `calculateFuturesMetrics` | empty; funding cost (futures only); avg leverage; L/S ratio; liq distance; overnight count ✅ |
 | Any new metric helper | happy path, zero denominator (no division by zero), all-loss / all-win edge cases |
 
 ### Jest setup
@@ -320,7 +388,7 @@ Before finalizing ANY code, check:
 ### TypeScript
 - All props and return types explicitly typed
 - No use of `any` — use proper generics or `unknown`
-- Interfaces in `src/lib/types.ts`, not inline
+- Interfaces in `lib/types.ts`, not inline
 
 ### Performance
 - Memoize expensive calculations with `useMemo`
@@ -335,7 +403,7 @@ Before finalizing ANY code, check:
 
 ### Architecture
 - One component = one responsibility
-- Business logic in `src/lib/`, not in components
+- Business logic in `lib/`, not in components
 - Mock data and real API adapters share the same interface (`ExchangeAdapter`)
 
 ---
@@ -358,7 +426,7 @@ You have full authority to make architectural decisions. Act proactively:
 app/                               # Next.js App Router (no src/ wrapper)
 ├── page.tsx                       # Redirect → /dashboard
 ├── layout.tsx                     # Root layout: fonts, <Providers>
-├── providers.tsx                  # AuthProvider (client)
+├── providers.tsx                  # ThemeProvider + AuthProvider (client)
 ├── login/page.tsx
 ├── dashboard/page.tsx             # Page 1: Dashboard
 ├── performance/page.tsx           # Page 2: Performance Indicators
@@ -369,12 +437,13 @@ app/                               # Next.js App Router (no src/ wrapper)
     └── exchanges/[exchange]/ping/ # Connection health check
 
 components/
-├── ui/                # Primitives: Button, Card, Badge, PeriodSelector, Skeleton
-├── layout/            # Header, NavDropdown, FilterBar
-├── charts/            # PnLChart, MetricLineChart, OverlayLineChart
-├── metrics/           # MetricCard, MetricsGrid, MetricSelector
-├── orders/            # OrdersTable, TradeFilters, ComparisonTable, ExportButton
-└── api/               # ExchangeCard, ApiKeyInput, StatusBadge
+├── auth/              # LoginForm
+├── ui/                # PeriodSelector ✅ | (Skeleton — not yet built)
+├── layout/            # Header ✅, NavDropdown ✅, FilterBar ✅, AuthGuard ✅
+├── charts/            # PnLChart ✅, MetricLineChart ✅ | (OverlayLineChart — not yet built)
+├── metrics/           # MetricCard ✅, MetricsGrid ✅, BalanceCards ✅, MetricSelector ✅, FuturesMetricsTiles ✅
+├── orders/            # OrdersTable ✅ | (TradeFilters, ComparisonTable, ExportButton — not yet built)
+└── api/               # (ExchangeCard, ApiKeyInput, StatusBadge — not yet built)
 
 lib/
 ├── types.ts           # ALL TypeScript interfaces
@@ -422,7 +491,7 @@ lib/__tests__/
 - **Binance**: Use `/api/v3/myTrades` — requires `HMAC SHA256` signature
 - **Bybit**: Use `/v5/execution/list` — requires `API Key + timestamp + signature`  
 - **OKX**: Use `/api/v5/trade/fills` — requires `OK-ACCESS-SIGN` header
-- All keys stored in `.env.local`, accessed only via `src/app/api/` routes
+- All keys stored in `.env.local`, accessed only via `app/api/` routes
 - Never expose `apiSecret` to the client
 
 ---
