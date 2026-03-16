@@ -3,6 +3,7 @@
 import { useState, useMemo, useCallback } from 'react'
 import type { Metrics, Period, DateRange } from '@/lib/types'
 import { EXCHANGES, getAllDailyPnL, getAllTrades, ACCOUNT_COLORS } from '@/lib/mock-data'
+import { useAccountToggles } from '@/hooks/useAccountToggles'
 import {
   calculateMetrics,
   calculateFuturesMetrics,
@@ -16,9 +17,6 @@ import MetricSelector from '@/components/metrics/MetricSelector'
 import FuturesMetricsTiles from '@/components/metrics/FuturesMetricsTiles'
 import MetricLineChart from '@/components/charts/MetricLineChart'
 
-const ALL_ACCOUNTS = EXCHANGES.flatMap((ex) => ex.subAccounts)
-const ALL_IDS = ALL_ACCOUNTS.map((a) => a.id)
-
 type ChartTimeframe = 'weekly' | 'monthly'
 
 export default function PerformancePage() {
@@ -26,7 +24,7 @@ export default function PerformancePage() {
   const [period, setPeriod] = useState<Period>('1Y')
   const [customRange, setCustomRange] = useState<DateRange | undefined>()
   const [chartTimeframe, setChartTimeframe] = useState<ChartTimeframe>('monthly')
-  const [activeIds, setActiveIds] = useState<Set<string>>(new Set(ALL_IDS))
+  const { activeIds, toggleAccount, toggleExchange, selectAll, reset } = useAccountToggles()
 
   const dateRange = useMemo<DateRange>(() => {
     if (period === 'manual' && customRange) return customRange
@@ -36,34 +34,6 @@ export default function PerformancePage() {
   const handlePeriodChange = useCallback((p: Period, range?: DateRange) => {
     setPeriod(p)
     setCustomRange(range)
-  }, [])
-
-  const toggleAccount = useCallback((id: string) => {
-    setActiveIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) {
-        if (next.size > 1) next.delete(id) // always keep at least one
-      } else {
-        next.add(id)
-      }
-      return next
-    })
-  }, [])
-
-  const toggleExchange = useCallback((exId: string) => {
-    const exIds = new Set(EXCHANGES.find((e) => e.id === exId)?.subAccounts.map((s) => s.id) ?? [])
-    setActiveIds((prev) => {
-      const allOn = [...exIds].every((id) => prev.has(id))
-      const next = new Set(prev)
-      if (allOn) {
-        // Only turn off if it won't leave nothing active
-        const remaining = [...prev].filter((id) => !exIds.has(id))
-        if (remaining.length > 0) exIds.forEach((id) => next.delete(id))
-      } else {
-        exIds.forEach((id) => next.add(id))
-      }
-      return next
-    })
   }, [])
 
   // Aggregate metrics for the selector tiles (all active accounts, full period)
@@ -183,7 +153,7 @@ export default function PerformancePage() {
             <button
               className="text-[10px] uppercase tracking-widest transition-colors"
               style={{ color: 'var(--text-muted)' }}
-              onClick={() => setActiveIds(new Set(ALL_IDS))}
+              onClick={selectAll}
             >
               All
             </button>
@@ -191,7 +161,7 @@ export default function PerformancePage() {
             <button
               className="text-[10px] uppercase tracking-widest transition-colors"
               style={{ color: 'var(--text-muted)' }}
-              onClick={() => setActiveIds(new Set([ALL_IDS[0]]))}
+              onClick={reset}
             >
               Reset
             </button>
