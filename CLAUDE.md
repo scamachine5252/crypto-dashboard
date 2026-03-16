@@ -5,7 +5,7 @@
 ## Project State
 *Update this section after every major change.*
 
-### Status: Phase 4 in progress — 4 of 5 pages complete
+### Status: Phase 4 complete — all 5 pages live
 
 ### What has been built
 
@@ -16,9 +16,7 @@
 - `/performance` — metric selector tiles (spot + futures split), per-account toggle bar, multi-line chart (`MetricLineChart`) showing any metric over time per account, weekly/monthly timeframe toggle
 - `/history` — sticky TradeFilters bar (exchange, sub-account, symbol, type, side, 180-day date range), 50-row paginated OrdersTable, ExportButton (CSV + PDF), footer with total PnL + fees
 - `/results` — normalized overlay equity curves (`OverlayLineChart`), per-account metric comparison table (`ComparisonTable`) with Δ vs baseline, period selector, pair filter, account toggles
-
-**Pages stubbed (routing works, UI shows "Coming soon"):**
-- `/api-settings`
+- `/api-settings` — three exchange cards (Binance, Bybit, OKX); API key + secret fields (masked, show/hide); OKX passphrase field; mock Test Connection (600ms delay); Save/Remove; localStorage persistence via `api-key-store.ts`; global withdrawal-warning banner
 
 **Infrastructure complete:**
 - Dark/light theme toggle (ThemeProvider, localStorage, anti-flash `<Script>` in layout)
@@ -58,7 +56,7 @@ crypto-dashboard/          ← project root (NOT src/)
 │   │   └── page.tsx       ← full Trading History page; TradeFilters + OrdersTable(pageSize=50) + ExportButton + footer
 │   └── api-settings/
 │       ├── layout.tsx     ← wraps children in <AuthGuard>
-│       └── page.tsx       ← STUB ("Coming soon")
+│       └── page.tsx       ← full API Settings page; loads configs from localStorage on mount; 3-col grid of ExchangeCards; security warning banner
 │
 ├── components/
 │   ├── auth/
@@ -86,6 +84,11 @@ crypto-dashboard/          ← project root (NOT src/)
 │       ├── OrdersTable.tsx    ← sortable by symbol/pnl/fee/pnlPercent/closedAt; client-side search; configurable pageSize (default 15)
 │       └── ComparisonTable.tsx← one row per account; 12 metric columns; Δ vs baseline with polarity-aware color; sticky Account column; baseline row gold border + badge
 │
+├── components/api/
+│   ├── StatusBadge.tsx    ← Connected / Error / Not configured badge with colored dot
+│   ├── ApiKeyInput.tsx    ← masked input (type=password/text toggle); Eye/EyeOff; no copy button (security)
+│   └── ExchangeCard.tsx   ← full exchange config card; draft state; mock Test Connection (600ms); Save/Remove handlers; OKX passphrase field
+│
 ├── hooks/
 │   └── useAccountToggles.ts  ← toggleAccount, toggleExchange, selectAll, reset; enforces min 1 active; used by /performance and /results
 │
@@ -104,6 +107,7 @@ crypto-dashboard/          ← project root (NOT src/)
 │   │                         normalizeEquityCurve(), filterTradesAdvanced(), summarizeFilteredTrades(),
 │   │                         buildMetricTimeSeries(), calculateFuturesMetrics(),
 │   │                         buildOverlayData(), buildComparisonRows()
+│   ├── api-key-store.ts   ← loadApiKey(), saveApiKey(), removeApiKey(), loadAllApiKeys(); SSR-safe; localStorage namespace nexus:apikeys:{id}
 │   ├── adapters/
 │   │   ├── types.ts       ← ExchangeAdapter interface: getDailyPnL(), getTrades(), testConnection()
 │   │   └── mock.ts        ← MockAdapter implements ExchangeAdapter using mock-data.ts
