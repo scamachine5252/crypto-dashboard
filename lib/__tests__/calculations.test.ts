@@ -255,7 +255,7 @@ describe('filterTradesAdvanced', () => {
   const baseTrades: Trade[] = [
     makeTrade({ id: 't1', symbol: 'BTC/USDT', side: 'long', tradeType: 'spot', exchangeId: 'binance', closedAt: '2025-03-01T00:00:00.000Z' }),
     makeTrade({ id: 't2', symbol: 'ETH/USDT', side: 'short', tradeType: 'futures', exchangeId: 'bybit', closedAt: '2025-04-01T00:00:00.000Z' }),
-    makeTrade({ id: 't3', symbol: 'BTC/USDT', side: 'long', tradeType: 'options', exchangeId: 'okx', closedAt: '2025-05-01T00:00:00.000Z' }),
+    makeTrade({ id: 't3', symbol: 'BTC/USDT', side: 'long', tradeType: 'spot', exchangeId: 'okx', closedAt: '2025-05-01T00:00:00.000Z' }),
   ]
 
   const baseFilter: HistoryFilterState = {

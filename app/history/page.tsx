@@ -64,29 +64,6 @@ export default function HistoryPage() {
       </div>
 
       <main className="flex-1 pb-6">
-        {/* Table header bar */}
-        <div
-          className="mx-6 mt-4 px-5 py-3 flex items-center justify-between"
-          style={{
-            background: 'var(--bg-secondary)',
-            border: '1px solid var(--border-subtle)',
-            borderBottom: 'none',
-          }}
-        >
-          <div>
-            <p
-              className="text-sm font-semibold font-heading"
-              style={{ color: 'var(--text-primary)' }}
-            >
-              Order History
-            </p>
-            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              {filteredTrades.length.toLocaleString()} trades
-            </p>
-          </div>
-          <ExportButton trades={filteredTrades} filename={exportFilename} />
-        </div>
-
         <OrdersTable trades={filteredTrades} pageSize={50} />
 
         {/* Footer summary */}
@@ -120,6 +97,9 @@ export default function HistoryPage() {
               -{formatMoney(summary.totalFees)}
             </span>
           </span>
+          <div className="ml-auto">
+            <ExportButton trades={filteredTrades} filename={exportFilename} />
+          </div>
         </div>
       </main>
     </div>

@@ -79,12 +79,15 @@ crypto-dashboard/          ← project root (NOT src/)
 │   │   ├── PnLChart.tsx       ← recharts ComposedChart; Area (cumulative PnL, left Y) + colored Bars (period PnL, right Y); daily/weekly/monthly timeframe tabs
 │   │   └── MetricLineChart.tsx← recharts LineChart; one Line per active sub-account; custom tooltip shows all series sorted by value
 │   └── orders/
-│       └── OrdersTable.tsx    ← sortable by symbol/pnl/fee/pnlPercent/closedAt; client-side search; 15-row pagination
+│       ├── TradeFilters.tsx   ← sticky filter bar for /history; exchange tabs, sub-account, symbol, trade type (spot/futures), side, Day/Week/Month/180D quick-select + manual date range (180-day cap); MOCK_TODAY = '2025-12-31'
+│       ├── ExportButton.tsx   ← CSV (Blob + createObjectURL) + PDF (jspdf@4 + jspdf-autotable@5 standalone API) export; two independent loading states
+│       └── OrdersTable.tsx    ← sortable by symbol/pnl/fee/pnlPercent/closedAt; client-side search; configurable pageSize (default 15)
 │
 ├── lib/
 │   ├── types.ts           ← ALL shared interfaces: ExchangeId, Trade, DailyPnLEntry, Metrics, FuturesMetrics,
 │   │                         FilterState, HistoryFilterState, MetricTimeSeries, AccountSummary, ApiKeyConfig,
 │   │                         ChartDataPoint, DateRange, Period, Timeframe, SubAccount, ExchangeConfig, ConnectionStatus
+│   │                         TradeType = 'spot' | 'futures' (options removed)
 │   ├── utils.ts           ← formatMoney(), formatPercent(), formatRatio(), formatPrice(), formatDate(), cn()
 │   ├── auth-context.tsx   ← 'use client' AuthProvider + useAuth(); credentials hardcoded (admin/admin123); localStorage
 │   ├── theme-context.tsx  ← 'use client' ThemeProvider + useTheme(); toggles .light class on <html>; localStorage

@@ -190,7 +190,7 @@ function generateTrades(): Trade[] {
         const symbol = rng.choice(SYMBOLS)
         const [lo, hi] = PRICE_RANGE[symbol]
         const side = rng.bool(0.54) ? 'long' : ('short' as const)
-        const tradeType: TradeType = rng.choice(['spot', 'futures', 'options'] as TradeType[])
+        const tradeType: TradeType = rng.choice(['spot', 'futures'] as TradeType[])
 
         const dateIdx = rng.int(0, ALL_DATES.length - 1)
         const openedAt = new Date(ALL_DATES[dateIdx] + 'T00:00:00Z')

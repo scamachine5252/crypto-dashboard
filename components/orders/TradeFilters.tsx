@@ -4,12 +4,17 @@ import type { ReactNode } from 'react'
 import { EXCHANGES } from '@/lib/mock-data'
 import type { HistoryFilterState, ExchangeId, TradeType, TradeSide } from '@/lib/types'
 
+const MOCK_TODAY = '2025-12-31' // TODO: replace with real today when CCXT connected
 const MAX_DAYS = 180
 
 function addDays(dateStr: string, days: number): string {
   const d = new Date(dateStr + 'T00:00:00Z')
   d.setUTCDate(d.getUTCDate() + days)
   return d.toISOString().slice(0, 10)
+}
+
+function subDays(dateStr: string, days: number): string {
+  return addDays(dateStr, -days)
 }
 
 function capEnd(start: string, end: string): string {
@@ -26,13 +31,19 @@ const TRADE_TYPES: { label: string; value: TradeType | 'all' }[] = [
   { label: 'All',     value: 'all' },
   { label: 'Spot',    value: 'spot' },
   { label: 'Futures', value: 'futures' },
-  { label: 'Options', value: 'options' },
 ]
 
 const SIDES: { label: string; value: TradeSide | 'all'; color?: string }[] = [
   { label: 'All',   value: 'all' },
   { label: 'Long',  value: 'long',  color: 'var(--accent-profit)' },
   { label: 'Short', value: 'short', color: 'var(--accent-loss)' },
+]
+
+const QUICK_PERIODS: { label: string; days: number }[] = [
+  { label: 'Day',  days: 1 },
+  { label: 'Week', days: 7 },
+  { label: 'Month', days: 30 },
+  { label: '180D', days: 180 },
 ]
 
 export default function TradeFilters({ filter, onChange }: TradeFiltersProps) {
@@ -62,6 +73,17 @@ export default function TradeFilters({ filter, onChange }: TradeFiltersProps) {
   const handleEndDate = (end: string) => {
     onChange({ dateRange: { start: filter.dateRange.start, end }, page: 1 })
   }
+
+  const handleQuickPeriod = (days: number) => {
+    const end = MOCK_TODAY
+    const start = subDays(end, days - 1)
+    onChange({ dateRange: { start, end }, page: 1 })
+  }
+
+  const activeQuickDays = QUICK_PERIODS.find(({ days }) => {
+    const expectedStart = subDays(MOCK_TODAY, days - 1)
+    return filter.dateRange.end === MOCK_TODAY && filter.dateRange.start === expectedStart
+  })?.days ?? null
 
   return (
     <div
@@ -148,6 +170,19 @@ export default function TradeFilters({ filter, onChange }: TradeFiltersProps) {
 
       {/* Date range */}
       <div className="flex items-center gap-1.5">
+        {/* Quick-select period buttons */}
+        <div className="flex items-center gap-px" style={{ border: '1px solid var(--border-subtle)' }}>
+          {QUICK_PERIODS.map(({ label, days }) => (
+            <TabBtn
+              key={label}
+              active={activeQuickDays === days}
+              onClick={() => handleQuickPeriod(days)}
+            >
+              {label}
+            </TabBtn>
+          ))}
+        </div>
+
         <input
           type="date"
           value={filter.dateRange.start}
