@@ -4,7 +4,7 @@ import { useState, useRef, useCallback, useMemo } from 'react'
 import { useAuth } from '@/lib/auth-context'
 import { useTheme } from '@/lib/theme-context'
 import { useRouter } from 'next/navigation'
-import { TrendingUp, LogOut, User, Activity, ChevronDown, Sun, Moon } from 'lucide-react'
+import { TrendingUp, LogOut, User, Activity, ChevronDown, Sun, Moon, RefreshCw } from 'lucide-react'
 import { formatMoney, formatPercent } from '@/lib/utils'
 import { getAllDailyPnL } from '@/lib/mock-data'
 import NavDropdown from './NavDropdown'
@@ -44,6 +44,24 @@ export default function Header({ totalPnl, annualYield }: HeaderProps) {
   }
 
   const isPositive = totalPnl >= 0
+
+  const [syncing, setSyncing] = useState(false)
+  const [syncMsg, setSyncMsg] = useState<string | null>(null)
+
+  const handleSync = useCallback(async () => {
+    setSyncing(true)
+    setSyncMsg(null)
+    try {
+      const res = await fetch('/api/sync', { method: 'POST' })
+      const json = await res.json()
+      setSyncMsg(res.ok ? `Synced ${json.synced} accounts` : 'Sync failed')
+    } catch {
+      setSyncMsg('Sync failed')
+    } finally {
+      setSyncing(false)
+      setTimeout(() => setSyncMsg(null), 3000)
+    }
+  }, [])
 
   return (
     <header
@@ -120,6 +138,31 @@ export default function Header({ totalPnl, annualYield }: HeaderProps) {
 
       {/* Right — theme toggle + user + logout */}
       <div className="flex items-center gap-2">
+        {/* Sync Now */}
+        <div className="relative flex items-center">
+          <button
+            onClick={handleSync}
+            disabled={syncing}
+            className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 border"
+            style={{
+              background: syncing ? 'var(--bg-secondary)' : 'var(--bg-secondary)',
+              borderColor: syncMsg === 'Sync failed' ? 'var(--accent-loss)' : syncMsg ? 'var(--accent-profit)' : 'var(--border-subtle)',
+              color: syncMsg === 'Sync failed' ? 'var(--accent-loss)' : syncMsg ? 'var(--accent-profit)' : 'var(--text-muted)',
+              opacity: syncing ? 0.7 : 1,
+              cursor: syncing ? 'not-allowed' : 'pointer',
+            }}
+            title="Sync exchange data now"
+          >
+            <RefreshCw
+              className="w-3 h-3"
+              style={{ animation: syncing ? 'spin 1s linear infinite' : 'none' }}
+            />
+            <span className="hidden sm:inline font-mono tracking-widest uppercase text-[10px]">
+              {syncMsg ?? 'Sync Now'}
+            </span>
+          </button>
+        </div>
+
         {/* User pill */}
         <div
           className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5"

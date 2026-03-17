@@ -5,7 +5,7 @@
 ## Project State
 *Update this section after every major change.*
 
-### Status: Bybit API connected on production — ping, balance, trades working
+### Status: Sync system implemented — hourly cron + manual Sync Now button in header
 
 ### What has been built
 
@@ -24,6 +24,10 @@
 - `lib/adapters/bybit.ts`, `binance.ts`, `okx.ts` — `getTrades()` implemented with `ccxt.fetchMyTrades(undefined, since, limit ?? 100)`, mapped to internal `Trade[]` via shared `ccxt-utils.ts`
 - `lib/adapters/ccxt-utils.ts` — `mapCcxtTrade()` maps ccxt fill objects to internal `Trade` type; extracts PnL from `info.closedPnl`/`realised_pnl`/`pnl`; derives leverage and tradeType
 - `lib/adapters/types.ts` — `getTrades` signature extended with `since?: number, limit?: number`
+- `app/api/sync/route.ts` — POST + GET handlers; syncs all accounts (fetchBalance + getTrades) to Supabase `balances` and `trades` tables; skips failed accounts, returns `{ synced, errors, accounts }`
+- `vercel.json` — Vercel Cron Job runs `GET /api/sync` every hour (`0 * * * *`), all API functions pinned to `fra1` region
+- `components/layout/Header.tsx` — Sync Now button (left of user pill); spinner while syncing; "Synced X accounts" / "Sync failed" toast for 3s
+- Tests: 231 passing
 - `import 'server-only'` added to all CCXT adapter files (`bybit.ts`, `binance.ts`, `okx.ts`) and API routes (`ping`, `balance`, `trades`)
 - `serverExternalPackages: ['ccxt']` in `next.config.ts` — prevents Turbopack from bundling ccxt for the client
 - `__mocks__/server-only.ts` — no-op mock for Jest compatibility; `moduleNameMapper` in `jest.config.ts` routes `server-only` imports to this mock

@@ -3,5 +3,11 @@
     "app/api/**": {
       "regions": ["fra1"]
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/sync",
+      "schedule": "0 * * * *"
+    }
+  ]
 }
