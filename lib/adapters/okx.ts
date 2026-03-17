@@ -1,5 +1,5 @@
 import 'server-only'
-import ccxt from 'ccxt'
+import * as ccxt from 'ccxt'
 import type { ExchangeAdapter, BalanceResult } from './types'
 import type { DailyPnLEntry, Trade, DateRange } from '../types'
 import { mapCcxtTrade } from './ccxt-utils'
@@ -32,7 +32,7 @@ export class OkxAdapter implements ExchangeAdapter {
 
   async fetchBalance(): Promise<BalanceResult> {
     const raw = await this.exchange.fetchBalance()
-    const total = (raw.total ?? {}) as Record<string, number>
+    const total = (raw.total ?? {}) as unknown as Record<string, number>
 
     const usdt = total['USDT'] ?? 0
     const tokens: Record<string, number> = {}
