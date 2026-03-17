@@ -5,7 +5,7 @@
 ## Project State
 *Update this section after every major change.*
 
-### Status: Balance and trades endpoints implemented
+### Status: CCXT server-only fix applied — all exchange adapters protected from client bundling
 
 ### What has been built
 
@@ -24,6 +24,9 @@
 - `lib/adapters/bybit.ts`, `binance.ts`, `okx.ts` — `getTrades()` implemented with `ccxt.fetchMyTrades(undefined, since, limit ?? 100)`, mapped to internal `Trade[]` via shared `ccxt-utils.ts`
 - `lib/adapters/ccxt-utils.ts` — `mapCcxtTrade()` maps ccxt fill objects to internal `Trade` type; extracts PnL from `info.closedPnl`/`realised_pnl`/`pnl`; derives leverage and tradeType
 - `lib/adapters/types.ts` — `getTrades` signature extended with `since?: number, limit?: number`
+- `import 'server-only'` added to all CCXT adapter files (`bybit.ts`, `binance.ts`, `okx.ts`) and API routes (`ping`, `balance`, `trades`)
+- `serverExternalPackages: ['ccxt']` in `next.config.ts` — prevents Turbopack from bundling ccxt for the client
+- `__mocks__/server-only.ts` — no-op mock for Jest compatibility; `moduleNameMapper` in `jest.config.ts` routes `server-only` imports to this mock
 - Tests: 223 passing (6 new balance route tests + 6 new trades route tests)
 - `lib/adapters/bybit.ts`, `binance.ts`, `okx.ts` — real CCXT adapters implementing `ExchangeAdapter`; `testConnection` catches all errors → `false`; `fetchBalance` extracts USDT + non-zero token balances from `raw.total`; OKX uses `password` field for passphrase
 - `lib/adapters/types.ts` — added `BalanceResult` interface and `fetchBalance(): Promise<BalanceResult>` to `ExchangeAdapter`

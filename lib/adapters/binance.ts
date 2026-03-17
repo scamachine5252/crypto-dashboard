@@ -1,3 +1,4 @@
+import 'server-only'
 import ccxt from 'ccxt'
 import type { ExchangeAdapter, BalanceResult } from './types'
 import type { DailyPnLEntry, Trade, DateRange } from '../types'
