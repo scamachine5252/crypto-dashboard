@@ -87,7 +87,7 @@ async function runSync(): Promise<NextResponse> {
             account_id:  row.id,
             exchange:    row.exchange,
             symbol:      t.symbol,
-            side:        t.side === 'long' || t.side === 'buy' ? 'buy' : 'sell',
+            side:        t.side === 'long' ? 'buy' : 'sell',
             direction:   t.side === 'long' || t.side === 'short' ? t.side : 'unknown',
             entry_price: t.entryPrice,
             exit_price:  t.exitPrice,
