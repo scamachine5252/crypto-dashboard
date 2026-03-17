@@ -5,7 +5,7 @@
 ## Project State
 *Update this section after every major change.*
 
-### Status: AES-256-GCM encryption implemented for API keys storage
+### Status: API routes implemented for secure account management
 
 ### What has been built
 
@@ -19,6 +19,10 @@
 - `/api-settings` — two-column layout: left (280px) Create Account form (Fund/Exchange/Account Name/Instrument/API Key/Secret/PassPhrase OKX-only/AccountID Memo) with green CREATE ACCOUNT button; right column Accounts List table (Account Name/Fund/Exchange/Instrument/Status/Actions); Test (600ms mock)/Edit/Remove per row; 7 mock accounts seeded from EXCHANGES; localStorage persistence via `AccountConfig` in `cicada:accounts`; amber warning banner
 
 **Infrastructure complete:**
+- `app/api/accounts/route.ts` — GET (list accounts, sensitive fields stripped) and POST (create account with encrypted keys)
+- `app/api/accounts/[id]/route.ts` — DELETE account (404 if not found)
+- All API routes use `supabaseAdmin` (server-only), never expose encrypted fields in any response
+- Tests: 184 passing (10 new API route tests in `app/api/accounts/__tests__/route.test.ts`)
 - `lib/crypto/encrypt.ts` — AES-256-GCM encryption with random IV per call
 - `lib/crypto/decrypt.ts` — decryption with GCM auth tag tamper detection
 - `ENCRYPTION_KEY` in `.env.local` (server-side only, 32 bytes hex)
