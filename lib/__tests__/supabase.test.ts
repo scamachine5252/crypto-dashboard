@@ -84,4 +84,11 @@ describe('accounts table schema', () => {
     const sql = fs.readFileSync('supabase/migrations/004_add_account_id_memo.sql', 'utf8')
     expect(sql).toContain('ADD COLUMN IF NOT EXISTS account_id_memo')
   })
+
+  it('migration 005 adds direction column to trades', () => {
+    const fs = require('fs')
+    const sql = fs.readFileSync('supabase/migrations/005_add_direction_to_trades.sql', 'utf8')
+    expect(sql).toContain('ADD COLUMN IF NOT EXISTS direction')
+    expect(sql).toContain("'long', 'short', 'unknown'")
+  })
 })

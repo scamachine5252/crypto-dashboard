@@ -119,15 +119,28 @@ describe('POST /api/sync', () => {
     expect(mockGetTrades).toHaveBeenCalledTimes(2)
   })
 
-  it('saves balances to Supabase balances table', async () => {
+  it('saves balances to Supabase balances table using usdt_balance column', async () => {
     const { POST } = await import('../route')
     await POST(makePost())
-    expect(mockBalancesInsert).toHaveBeenCalledTimes(2)
-    const firstCall = mockBalancesInsert.mock.calls[0][0]
-    expect(firstCall.account_id).toBe('uuid-1')
-    expect(firstCall.usdt).toBe(1000)
-    expect(firstCall.tokens).toEqual({ BTC: 0.1 })
-    expect(firstCall.recorded_at).toBeDefined()
+    // 2 accounts × (1 USDT row + 1 BTC token row) = 4 inserts
+    expect(mockBalancesInsert).toHaveBeenCalledTimes(4)
+    const usdtRow = mockBalancesInsert.mock.calls[0][0]
+    expect(usdtRow.account_id).toBe('uuid-1')
+    expect(usdtRow.usdt_balance).toBe(1000)
+    expect(usdtRow.usdt).toBeUndefined()
+    expect(usdtRow.tokens).toBeUndefined()
+    expect(usdtRow.recorded_at).toBeDefined()
+  })
+
+  it('inserts separate row per token with token_symbol and token_balance', async () => {
+    const { POST } = await import('../route')
+    await POST(makePost())
+    const tokenRow = mockBalancesInsert.mock.calls[1][0]
+    expect(tokenRow.account_id).toBe('uuid-1')
+    expect(tokenRow.usdt_balance).toBe(0)
+    expect(tokenRow.token_symbol).toBe('BTC')
+    expect(tokenRow.token_balance).toBe(0.1)
+    expect(tokenRow.recorded_at).toBeDefined()
   })
 
   it('saves trades to Supabase trades table', async () => {
@@ -138,6 +151,39 @@ describe('POST /api/sync', () => {
     expect(Array.isArray(firstCall)).toBe(true)
     expect(firstCall[0].account_id).toBe('uuid-1')
     expect(firstCall[0].symbol).toBe('BTC/USDT')
+  })
+
+  it('maps trade side long→buy and short→sell', async () => {
+    mockGetTrades.mockResolvedValue([
+      { ...sampleTrade, side: 'long' },
+      { ...sampleTrade, side: 'short', openedAt: '2025-01-02T10:00:00.000Z' },
+    ])
+    const { POST } = await import('../route')
+    await POST(makePost())
+    const rows = mockTradesUpsert.mock.calls[0][0]
+    expect(rows[0].side).toBe('buy')
+    expect(rows[1].side).toBe('sell')
+  })
+
+  it('stores original direction (long/short) in direction column', async () => {
+    mockGetTrades.mockResolvedValue([
+      { ...sampleTrade, side: 'long' },
+      { ...sampleTrade, side: 'short', openedAt: '2025-01-02T10:00:00.000Z' },
+    ])
+    const { POST } = await import('../route')
+    await POST(makePost())
+    const rows = mockTradesUpsert.mock.calls[0][0]
+    expect(rows[0].direction).toBe('long')
+    expect(rows[1].direction).toBe('short')
+  })
+
+  it('does not include leverage, funding_cost, or is_overnight in trades insert', async () => {
+    const { POST } = await import('../route')
+    await POST(makePost())
+    const row = mockTradesUpsert.mock.calls[0][0][0]
+    expect(row.leverage).toBeUndefined()
+    expect(row.funding_cost).toBeUndefined()
+    expect(row.is_overnight).toBeUndefined()
   })
 
   it('skips account if adapter throws and continues with others', async () => {

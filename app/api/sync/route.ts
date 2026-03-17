@@ -59,33 +59,44 @@ async function runSync(): Promise<NextResponse> {
 
       // Fetch and persist balance
       const balance = await adapter.fetchBalance()
+      const recordedAt = new Date().toISOString()
+
+      // One row for USDT
       await supabaseAdmin.from('balances').insert({
-        account_id:  row.id,
-        usdt:        balance.usdt,
-        tokens:      balance.tokens,
-        recorded_at: new Date().toISOString(),
+        account_id:   row.id,
+        usdt_balance: balance.usdt,
+        recorded_at:  recordedAt,
       })
+
+      // One row per non-USDT token
+      for (const [symbol, amount] of Object.entries(balance.tokens)) {
+        await supabaseAdmin.from('balances').insert({
+          account_id:    row.id,
+          usdt_balance:  0,
+          token_symbol:  symbol,
+          token_balance: amount,
+          recorded_at:   recordedAt,
+        })
+      }
 
       // Fetch and upsert trades
       const trades = await adapter.getTrades('all', dateRange)
       if (trades.length > 0) {
         await supabaseAdmin.from('trades').upsert(
           trades.map((t) => ({
-            account_id:   row.id,
-            exchange:     row.exchange,
-            symbol:       t.symbol,
-            side:         t.side,
-            entry_price:  t.entryPrice,
-            exit_price:   t.exitPrice,
-            quantity:     t.quantity,
-            pnl:          t.pnl,
-            fee:          t.fee,
-            opened_at:    t.openedAt,
-            closed_at:    t.closedAt,
-            trade_type:   t.tradeType,
-            leverage:     t.leverage,
-            funding_cost: t.fundingCost,
-            is_overnight: t.isOvernight,
+            account_id:  row.id,
+            exchange:    row.exchange,
+            symbol:      t.symbol,
+            side:        t.side === 'long' || t.side === 'buy' ? 'buy' : 'sell',
+            direction:   t.side === 'long' || t.side === 'short' ? t.side : 'unknown',
+            entry_price: t.entryPrice,
+            exit_price:  t.exitPrice,
+            quantity:    t.quantity,
+            pnl:         t.pnl,
+            fee:         t.fee,
+            opened_at:   t.openedAt,
+            closed_at:   t.closedAt,
+            trade_type:  t.tradeType,
           })),
           { onConflict: 'account_id,symbol,opened_at' },
         )
