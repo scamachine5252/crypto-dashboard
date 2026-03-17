@@ -22,9 +22,12 @@ export class BybitAdapter implements ExchangeAdapter {
 
   async testConnection(): Promise<boolean> {
     try {
-      await this.exchange.fetchBalance()
+      const result = await this.exchange.fetchBalance()
+      console.log('Bybit fetchBalance result keys:', Object.keys(result))
+      console.log('Bybit fetchBalance total:', result.total)
       return true
-    } catch {
+    } catch (error: unknown) {
+      console.error('Bybit testConnection error:', error instanceof Error ? error.message : String(error))
       return false
     }
   }
