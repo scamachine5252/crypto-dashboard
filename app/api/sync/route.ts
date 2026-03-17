@@ -81,6 +81,8 @@ async function runSync(): Promise<NextResponse> {
 
       // Fetch and upsert trades
       const trades = await adapter.getTrades('all', dateRange)
+      console.log('trades count for', row.account_name, ':', trades.length)
+      console.log('first trade sample:', JSON.stringify(trades[0]))
       if (trades.length > 0) {
         await supabaseAdmin.from('trades').upsert(
           trades.map((t) => ({
