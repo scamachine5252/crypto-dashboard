@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.99.2",
+    "ccxt": "^4.5.43",
     "clsx": "^2.1.1",
     "jspdf": "^4.2.0",
     "jspdf-autotable": "^5.0.7",

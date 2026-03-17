@@ -5,7 +5,7 @@
 ## Project State
 *Update this section after every major change.*
 
-### Status: Accounts CRUD fully working — all fields persisted to Supabase including account_id_memo
+### Status: CCXT integrated — real exchange adapters for Bybit, Binance, OKX + ping endpoint
 
 ### What has been built
 
@@ -16,9 +16,14 @@
 - `/performance` — PeriodSelector + accounts checkbox dropdown (click-outside aware); **L1 tabs** SPOT/FUTURES (active = green filled pill); **L2 tabs** (active = green border-bottom): SPOT has Overview/Returns/Risk/Costs, FUTURES has Overview/Returns/Risk & Exposure/Cost/Execution; per-account metrics table with polarity-aware best (green) / worst (red) cell highlighting and Total/Avg footer row; `OverlayLineChart` equity curves with D/W/M switcher embedded in chart header, normalized to 0 at period start for all timeframes
 - `/history` — sticky header strip (Export button) + TradeFilters bar (exchange/account/section/side dropdowns, symbol input, date range with Day/Week/Month/180D shortcuts); OrdersTable with Bybit-standard columns (Date/Time, Symbol, Order Type, Side, Filled Qty, Filled Value, Realized PnL, Fee, Exchange/Account); all CSS variables (full light/dark support)
 - `/results` — Trading Results investor view: USDT balance line chart (`BalanceLineChart`) + PnL histogram (`PnlHistogramChart`, Day/Week/Month timeframe), balance table with 2 rows per account (USDT + token), checkbox column, Difference/Fees/Avg Price/PnL columns, totals row; pair filter dropdown; charts filter by checked accounts
-- `/api-settings` — two-column layout: left (280px) Create Account form (Fund/Exchange/Account Name/Instrument/API Key/Secret/PassPhrase/AccountID Memo) with green CREATE ACCOUNT button; right column Accounts List table (Account Name/Fund/Exchange/Instrument/Status/Actions); Test (600ms mock)/Edit/Remove per row; **fully connected to real API routes** — Create Account → `POST /api/accounts` (keys AES-256-GCM encrypted before DB write), list → `GET /api/accounts` (no encrypted fields returned), Remove → `DELETE /api/accounts/[id]`; loading skeleton, error panel with Retry, empty state; localStorage removed
+- `/api-settings` — two-column layout: left (280px) Create Account form (Fund/Exchange/Account Name/Instrument/API Key/Secret/PassPhrase/AccountID Memo) with green CREATE ACCOUNT button; right column Accounts List table (Account Name/Fund/Exchange/Instrument/Status/Actions); **Test button calls real ping** (`POST /api/exchanges/[exchange]/ping`) — sets Connected/Error status; Edit/Remove per row; **fully connected to real API routes** — Create Account → `POST /api/accounts` (keys AES-256-GCM encrypted before DB write), list → `GET /api/accounts` (no encrypted fields returned), Remove → `DELETE /api/accounts/[id]`; loading skeleton, error panel with Retry, empty state; localStorage removed
 
 **Infrastructure complete:**
+- `lib/adapters/bybit.ts`, `binance.ts`, `okx.ts` — real CCXT adapters implementing `ExchangeAdapter`; `testConnection` catches all errors → `false`; `fetchBalance` extracts USDT + non-zero token balances from `raw.total`; OKX uses `password` field for passphrase
+- `lib/adapters/types.ts` — added `BalanceResult` interface and `fetchBalance(): Promise<BalanceResult>` to `ExchangeAdapter`
+- `app/api/exchanges/[exchange]/ping/route.ts` — POST validates exchange, fetches account from Supabase, decrypts `api_key`/`api_secret`/`passphrase` server-side, calls adapter `testConnection()`, returns `{ connected, exchange, account_name }` — never exposes decrypted keys
+- `app/api-settings/page.tsx` — Test button calls `POST /api/exchanges/${exchange}/ping`; updates status to `connected`/`error` from response; falls back to `error` on network failure
+- Tests: 211 passing (9 new CCXT adapter tests + 6 new ping route tests)
 - `supabase/migrations/004_add_account_id_memo.sql` — adds nullable `account_id_memo` column to accounts table
 - `app/api-settings/page.tsx` — `tradingPair` field removed (not needed at account level); `account_id_memo` wired form → POST payload → DB; restored on Edit; `AccountRow` type updated
 - `app/api/accounts/route.ts` — POST destructures and inserts `account_id_memo` (optional); GET returns it (not sensitive); GET/POST fully wired to Supabase with all required fields

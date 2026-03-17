@@ -241,16 +241,24 @@ export default function ApiSettingsPage() {
   }, [editingId, resetForm, fetchAccounts])
 
   // ---------------------------------------------------------------------------
-  // Test connection (mock — 600ms delay)
+  // Test connection — real ping via /api/exchanges/[exchange]/ping
   // ---------------------------------------------------------------------------
-  const handleTest = useCallback((id: string) => {
-    setTestingId(id)
-    setTimeout(() => {
-      setAccounts((prev) =>
-        prev.map((a) => a.id === id ? { ...a, status: 'connected' as const } : a),
-      )
+  const handleTest = useCallback(async (account: AccountRow) => {
+    setTestingId(account.id)
+    try {
+      const res = await fetch(`/api/exchanges/${account.exchange}/ping`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ account_id: account.id }),
+      })
+      const json = await res.json() as { connected?: boolean }
+      const status: AccountRow['status'] = json.connected ? 'connected' : 'error'
+      setAccounts((prev) => prev.map((a) => a.id === account.id ? { ...a, status } : a))
+    } catch {
+      setAccounts((prev) => prev.map((a) => a.id === account.id ? { ...a, status: 'error' as const } : a))
+    } finally {
       setTestingId(null)
-    }, 600)
+    }
   }, [])
 
   const canSubmit = !!form.exchangeId && !!form.accountName.trim()
@@ -550,7 +558,7 @@ export default function ApiSettingsPage() {
                           <span className="flex items-center gap-1.5">
                             {/* Test */}
                             <button
-                              onClick={() => handleTest(account.id)}
+                              onClick={() => handleTest(account)}
                               disabled={isTesting}
                               className="px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider transition-colors disabled:opacity-50"
                               style={{
