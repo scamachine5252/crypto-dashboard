@@ -1,14 +1,23 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import type { AccountConfig, ExchangeId } from '@/lib/types'
-import { EXCHANGES } from '@/lib/mock-data'
-import {
-  loadAllAccountConfigs,
-  saveAccountConfig,
-  removeAccountConfig,
-} from '@/lib/api-key-store'
+import type { ExchangeId } from '@/lib/types'
 import Header from '@/components/layout/Header'
+
+// ---------------------------------------------------------------------------
+// Types for API responses (snake_case, no sensitive fields)
+// ---------------------------------------------------------------------------
+interface AccountRow {
+  id: string
+  fund: string
+  exchange: ExchangeId
+  account_name: string
+  instrument: string
+  status: 'connected' | 'error' | 'not_configured'
+  passphrase?: never       // never returned by API
+  api_key?: never          // never returned by API
+  api_secret?: never       // never returned by API
+}
 
 const EXCHANGE_COLORS: Record<string, string> = {
   binance: '#F0B90B',
@@ -17,28 +26,6 @@ const EXCHANGE_COLORS: Record<string, string> = {
 }
 
 const FUNDS = ['Cicada Foundation']
-
-// Seed the initial list from mock EXCHANGES — one row per sub-account
-function buildDefaultAccounts(): AccountConfig[] {
-  const rows: AccountConfig[] = []
-  for (const ex of EXCHANGES) {
-    for (const sa of ex.subAccounts) {
-      rows.push({
-        id:            sa.id,
-        fund:          'Cicada Foundation',
-        exchangeId:    ex.id,
-        accountName:   sa.name,
-        instrument:    '',
-        apiKey:        '',
-        apiSecret:     '',
-        passphrase:    '',
-        accountIdMemo: '',
-        status:        'not_configured',
-      })
-    }
-  }
-  return rows
-}
 
 const EMPTY_FORM = {
   fund:          'Cicada Foundation',
@@ -143,21 +130,33 @@ function FieldSelect({
 }
 
 export default function ApiSettingsPage() {
-  const [accounts, setAccounts] = useState<AccountConfig[]>([])
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [testingId, setTestingId] = useState<string | null>(null)
-  const [form, setForm] = useState(EMPTY_FORM)
+  const [accounts, setAccounts]     = useState<AccountRow[]>([])
+  const [loading, setLoading]       = useState(true)
+  const [error, setError]           = useState<string | null>(null)
+  const [editingId, setEditingId]   = useState<string | null>(null)
+  const [testingId, setTestingId]   = useState<string | null>(null)
+  const [form, setForm]             = useState(EMPTY_FORM)
   const [newFundDraft, setNewFundDraft] = useState('')
 
-  // Merge mock defaults with localStorage on mount
-  useEffect(() => {
-    const saved = loadAllAccountConfigs()
-    const savedMap = new Map(saved.map((a) => [a.id, a]))
-    const defaults = buildDefaultAccounts().map((d) => savedMap.get(d.id) ?? d)
-    // Append any saved accounts that aren't in the defaults (user-created)
-    const extraSaved = saved.filter((a) => !defaults.find((d) => d.id === a.id))
-    setAccounts([...defaults, ...extraSaved])
+  // ---------------------------------------------------------------------------
+  // Load accounts from API on mount
+  // ---------------------------------------------------------------------------
+  const fetchAccounts = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/accounts')
+      if (!res.ok) throw new Error('Failed to load accounts')
+      const data = (await res.json()) as AccountRow[]
+      setAccounts(data)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unknown error')
+    } finally {
+      setLoading(false)
+    }
   }, [])
+
+  useEffect(() => { fetchAccounts() }, [fetchAccounts])
 
   const patch = useCallback((field: keyof typeof EMPTY_FORM, value: string) => {
     setForm((prev) => ({ ...prev, [field]: value }))
@@ -169,84 +168,85 @@ export default function ApiSettingsPage() {
     setEditingId(null)
   }, [])
 
-  const handleSubmit = useCallback(() => {
+  // ---------------------------------------------------------------------------
+  // Create / update account via POST
+  // ---------------------------------------------------------------------------
+  const handleSubmit = useCallback(async () => {
     if (!form.exchangeId || !form.accountName.trim()) return
     const resolvedFund = form.fund === '__new__' ? newFundDraft.trim() || 'Cicada Foundation' : form.fund
 
-    if (editingId) {
-      // Update existing
-      const updated: AccountConfig = {
-        id:            editingId,
-        fund:          resolvedFund,
-        exchangeId:    form.exchangeId as ExchangeId,
-        accountName:   form.accountName.trim(),
-        instrument:    form.instrument.trim(),
-        apiKey:        form.apiKey,
-        apiSecret:     form.apiSecret,
-        passphrase:    form.passphrase,
-        accountIdMemo: form.accountIdMemo,
-        status:        'not_configured',
-      }
-      saveAccountConfig(updated)
-      setAccounts((prev) => prev.map((a) => (a.id === editingId ? updated : a)))
-      resetForm()
-    } else {
-      const created: AccountConfig = {
-        id:            Date.now().toString(),
-        fund:          resolvedFund,
-        exchangeId:    form.exchangeId as ExchangeId,
-        accountName:   form.accountName.trim(),
-        instrument:    form.instrument.trim(),
-        apiKey:        form.apiKey,
-        apiSecret:     form.apiSecret,
-        passphrase:    form.passphrase,
-        accountIdMemo: form.accountIdMemo,
-        status:        'not_configured',
-      }
-      saveAccountConfig(created)
-      setAccounts((prev) => [...prev, created])
-      resetForm()
+    const payload = {
+      fund:          resolvedFund,
+      exchange:      form.exchangeId,
+      account_name:  form.accountName.trim(),
+      instrument:    form.instrument.trim(),
+      api_key:       form.apiKey,
+      api_secret:    form.apiSecret,
+      ...(form.passphrase    ? { passphrase:     form.passphrase }    : {}),
+      ...(form.accountIdMemo ? { account_id_memo: form.accountIdMemo } : {}),
     }
-  }, [form, newFundDraft, editingId, resetForm])
 
-  const handleEdit = useCallback((account: AccountConfig) => {
+    try {
+      const res = await fetch('/api/accounts', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(payload),
+      })
+      if (!res.ok) {
+        const json = await res.json() as { error?: string }
+        setError(json.error ?? 'Failed to create account')
+        return
+      }
+      resetForm()
+      await fetchAccounts()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unknown error')
+    }
+  }, [form, newFundDraft, resetForm, fetchAccounts])
+
+  // ---------------------------------------------------------------------------
+  // Edit — populate form (no API call needed, data is already loaded)
+  // ---------------------------------------------------------------------------
+  const handleEdit = useCallback((account: AccountRow) => {
     setForm({
       fund:          account.fund,
-      exchangeId:    account.exchangeId,
-      accountName:   account.accountName,
+      exchangeId:    account.exchange,
+      accountName:   account.account_name,
       instrument:    account.instrument,
-      apiKey:        account.apiKey,
-      apiSecret:     account.apiSecret,
-      passphrase:    account.passphrase ?? '',
-      accountIdMemo: account.accountIdMemo ?? '',
+      apiKey:        '',
+      apiSecret:     '',
+      passphrase:    '',
+      accountIdMemo: '',
     })
     setEditingId(account.id)
   }, [])
 
-  const handleRemove = useCallback((id: string) => {
-    removeAccountConfig(id)
-    setAccounts((prev) => {
-      // Restore default row if it was a mock account, otherwise remove entirely
-      const defaults = buildDefaultAccounts()
-      const defaultRow = defaults.find((d) => d.id === id)
-      if (defaultRow) {
-        return prev.map((a) => (a.id === id ? defaultRow : a))
+  // ---------------------------------------------------------------------------
+  // Delete account via DELETE /api/accounts/[id]
+  // ---------------------------------------------------------------------------
+  const handleRemove = useCallback(async (id: string) => {
+    try {
+      const res = await fetch(`/api/accounts/${id}`, { method: 'DELETE' })
+      if (!res.ok) {
+        const json = await res.json() as { error?: string }
+        setError(json.error ?? 'Failed to remove account')
+        return
       }
-      return prev.filter((a) => a.id !== id)
-    })
-    if (editingId === id) resetForm()
-  }, [editingId, resetForm])
+      if (editingId === id) resetForm()
+      await fetchAccounts()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unknown error')
+    }
+  }, [editingId, resetForm, fetchAccounts])
 
+  // ---------------------------------------------------------------------------
+  // Test connection (mock — 600ms delay)
+  // ---------------------------------------------------------------------------
   const handleTest = useCallback((id: string) => {
     setTestingId(id)
     setTimeout(() => {
       setAccounts((prev) =>
-        prev.map((a) => {
-          if (a.id !== id) return a
-          const updated = { ...a, status: 'connected' as const }
-          saveAccountConfig(updated)
-          return updated
-        })
+        prev.map((a) => a.id === id ? { ...a, status: 'connected' as const } : a),
       )
       setTestingId(null)
     }, 600)
@@ -407,162 +407,201 @@ export default function ApiSettingsPage() {
             <p className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>
               Accounts
             </p>
-            <span
-              className="text-[10px] font-bold px-1.5 py-0.5"
-              style={{ background: 'var(--bg-elevated)', color: 'var(--text-muted)', borderRadius: 2 }}
-            >
-              {accounts.length}
-            </span>
+            {!loading && !error && (
+              <span
+                className="text-[10px] font-bold px-1.5 py-0.5"
+                style={{ background: 'var(--bg-elevated)', color: 'var(--text-muted)', borderRadius: 2 }}
+              >
+                {accounts.length}
+              </span>
+            )}
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                  {['Account Name', 'Fund', 'Exchange', 'Instrument', 'Status', 'Actions'].map((col) => (
-                    <th
-                      key={col}
-                      className="px-5 py-2.5 text-left font-medium whitespace-nowrap"
-                      style={{ color: 'var(--text-muted)' }}
-                    >
-                      {col}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {accounts.map((account) => {
-                  const exColor = EXCHANGE_COLORS[account.exchangeId] ?? 'var(--text-secondary)'
-                  const isTesting = testingId === account.id
-                  const isEditing = editingId === account.id
+          {/* Loading skeleton */}
+          {loading && (
+            <div data-testid="accounts-loading" className="p-5 flex flex-col gap-3">
+              {[1, 2, 3].map((i) => (
+                <div
+                  key={i}
+                  className="h-8 rounded animate-pulse"
+                  style={{ background: 'var(--bg-elevated)' }}
+                />
+              ))}
+            </div>
+          )}
 
-                  const statusColor =
-                    account.status === 'connected'     ? 'var(--accent-profit)'
-                    : account.status === 'error'       ? 'var(--accent-loss)'
-                    : 'var(--text-muted)'
+          {/* Error state */}
+          {!loading && error && (
+            <div data-testid="accounts-error" className="p-5">
+              <p className="text-xs" style={{ color: 'var(--accent-loss)' }}>{error}</p>
+              <button
+                onClick={fetchAccounts}
+                className="mt-2 text-[10px] underline"
+                style={{ color: 'var(--text-muted)' }}
+              >
+                Retry
+              </button>
+            </div>
+          )}
 
-                  const statusLabel =
-                    account.status === 'connected'     ? 'Connected'
-                    : account.status === 'error'       ? 'Error'
-                    : 'Not configured'
+          {/* Empty state */}
+          {!loading && !error && accounts.length === 0 && (
+            <div className="p-5">
+              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>No accounts configured yet.</p>
+            </div>
+          )}
 
-                  return (
-                    <tr
-                      key={account.id}
-                      style={{
-                        borderBottom: '1px solid var(--border-subtle)',
-                        background: isEditing ? 'rgba(0,255,136,0.04)' : 'transparent',
-                      }}
-                      onMouseEnter={(e) => {
-                        if (!isEditing) (e.currentTarget as HTMLElement).style.background = 'var(--bg-elevated)'
-                      }}
-                      onMouseLeave={(e) => {
-                        (e.currentTarget as HTMLElement).style.background = isEditing ? 'rgba(0,255,136,0.04)' : 'transparent'
-                      }}
-                    >
-                      {/* Account Name */}
-                      <td className="px-5 py-2.5 whitespace-nowrap font-medium" style={{ color: 'var(--text-primary)' }}>
-                        {account.accountName}
-                      </td>
+          {/* Accounts table */}
+          {!loading && !error && accounts.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                    {['Account Name', 'Fund', 'Exchange', 'Instrument', 'Status', 'Actions'].map((col) => (
+                      <th
+                        key={col}
+                        className="px-5 py-2.5 text-left font-medium whitespace-nowrap"
+                        style={{ color: 'var(--text-muted)' }}
+                      >
+                        {col}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {accounts.map((account) => {
+                    const exColor  = EXCHANGE_COLORS[account.exchange] ?? 'var(--text-secondary)'
+                    const isTesting = testingId === account.id
+                    const isEditing = editingId === account.id
 
-                      {/* Fund */}
-                      <td className="px-5 py-2.5 whitespace-nowrap" style={{ color: 'var(--text-secondary)' }}>
-                        {account.fund}
-                      </td>
+                    const statusColor =
+                      account.status === 'connected' ? 'var(--accent-profit)'
+                      : account.status === 'error'   ? 'var(--accent-loss)'
+                      : 'var(--text-muted)'
 
-                      {/* Exchange */}
-                      <td className="px-5 py-2.5 whitespace-nowrap">
-                        <span className="flex items-center gap-1.5">
-                          <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: exColor }} />
-                          <span className="capitalize font-medium" style={{ color: exColor }}>
-                            {account.exchangeId}
+                    const statusLabel =
+                      account.status === 'connected' ? 'Connected'
+                      : account.status === 'error'   ? 'Error'
+                      : 'Not configured'
+
+                    return (
+                      <tr
+                        key={account.id}
+                        style={{
+                          borderBottom: '1px solid var(--border-subtle)',
+                          background: isEditing ? 'rgba(0,255,136,0.04)' : 'transparent',
+                        }}
+                        onMouseEnter={(e) => {
+                          if (!isEditing) (e.currentTarget as HTMLElement).style.background = 'var(--bg-elevated)'
+                        }}
+                        onMouseLeave={(e) => {
+                          (e.currentTarget as HTMLElement).style.background = isEditing ? 'rgba(0,255,136,0.04)' : 'transparent'
+                        }}
+                      >
+                        {/* Account Name */}
+                        <td className="px-5 py-2.5 whitespace-nowrap font-medium" style={{ color: 'var(--text-primary)' }}>
+                          {account.account_name}
+                        </td>
+
+                        {/* Fund */}
+                        <td className="px-5 py-2.5 whitespace-nowrap" style={{ color: 'var(--text-secondary)' }}>
+                          {account.fund}
+                        </td>
+
+                        {/* Exchange */}
+                        <td className="px-5 py-2.5 whitespace-nowrap">
+                          <span className="flex items-center gap-1.5">
+                            <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: exColor }} />
+                            <span className="capitalize font-medium" style={{ color: exColor }}>
+                              {account.exchange}
+                            </span>
                           </span>
-                        </span>
-                      </td>
+                        </td>
 
-                      {/* Instrument */}
-                      <td className="px-5 py-2.5 whitespace-nowrap">
-                        {account.instrument ? (
-                          <span
-                            className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider"
-                            style={{
-                              background: 'var(--bg-elevated)',
-                              color: 'var(--accent-blue)',
-                              border: '1px solid var(--border-subtle)',
-                              borderRadius: 2,
-                            }}
-                          >
-                            {account.instrument}
+                        {/* Instrument */}
+                        <td className="px-5 py-2.5 whitespace-nowrap">
+                          {account.instrument ? (
+                            <span
+                              className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider"
+                              style={{
+                                background: 'var(--bg-elevated)',
+                                color: 'var(--accent-blue)',
+                                border: '1px solid var(--border-subtle)',
+                                borderRadius: 2,
+                              }}
+                            >
+                              {account.instrument}
+                            </span>
+                          ) : (
+                            <span style={{ color: 'var(--border-medium)' }}>—</span>
+                          )}
+                        </td>
+
+                        {/* Status */}
+                        <td className="px-5 py-2.5 whitespace-nowrap">
+                          <span className="flex items-center gap-1.5" style={{ color: statusColor }}>
+                            <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: statusColor }} />
+                            {statusLabel}
                           </span>
-                        ) : (
-                          <span style={{ color: 'var(--border-medium)' }}>—</span>
-                        )}
-                      </td>
+                        </td>
 
-                      {/* Status */}
-                      <td className="px-5 py-2.5 whitespace-nowrap">
-                        <span className="flex items-center gap-1.5" style={{ color: statusColor }}>
-                          <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: statusColor }} />
-                          {statusLabel}
-                        </span>
-                      </td>
+                        {/* Actions */}
+                        <td className="px-5 py-2.5 whitespace-nowrap">
+                          <span className="flex items-center gap-1.5">
+                            {/* Test */}
+                            <button
+                              onClick={() => handleTest(account.id)}
+                              disabled={isTesting}
+                              className="px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider transition-colors disabled:opacity-50"
+                              style={{
+                                border: '1px solid var(--accent-blue)',
+                                color: 'var(--accent-blue)',
+                                borderRadius: 2,
+                              }}
+                              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'rgba(45,111,255,0.08)' }}
+                              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+                            >
+                              {isTesting ? '…' : 'Test'}
+                            </button>
 
-                      {/* Actions */}
-                      <td className="px-5 py-2.5 whitespace-nowrap">
-                        <span className="flex items-center gap-1.5">
-                          {/* Test */}
-                          <button
-                            onClick={() => handleTest(account.id)}
-                            disabled={isTesting}
-                            className="px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider transition-colors disabled:opacity-50"
-                            style={{
-                              border: '1px solid var(--accent-blue)',
-                              color: 'var(--accent-blue)',
-                              borderRadius: 2,
-                            }}
-                            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'rgba(45,111,255,0.08)' }}
-                            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
-                          >
-                            {isTesting ? '…' : 'Test'}
-                          </button>
+                            {/* Edit */}
+                            <button
+                              onClick={() => handleEdit(account)}
+                              className="px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider transition-colors"
+                              style={{
+                                border: '1px solid var(--border-medium)',
+                                color: 'var(--text-secondary)',
+                                borderRadius: 2,
+                              }}
+                              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--text-secondary)' }}
+                              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--border-medium)' }}
+                            >
+                              Edit
+                            </button>
 
-                          {/* Edit */}
-                          <button
-                            onClick={() => handleEdit(account)}
-                            className="px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider transition-colors"
-                            style={{
-                              border: '1px solid var(--border-medium)',
-                              color: 'var(--text-secondary)',
-                              borderRadius: 2,
-                            }}
-                            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--text-secondary)' }}
-                            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--border-medium)' }}
-                          >
-                            Edit
-                          </button>
-
-                          {/* Remove */}
-                          <button
-                            onClick={() => handleRemove(account.id)}
-                            className="px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider transition-colors"
-                            style={{
-                              border: '1px solid var(--accent-loss)',
-                              color: 'var(--accent-loss)',
-                              borderRadius: 2,
-                            }}
-                            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,59,59,0.08)' }}
-                            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
-                          >
-                            Remove
-                          </button>
-                        </span>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
+                            {/* Remove */}
+                            <button
+                              onClick={() => handleRemove(account.id)}
+                              className="px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider transition-colors"
+                              style={{
+                                border: '1px solid var(--accent-loss)',
+                                color: 'var(--accent-loss)',
+                                borderRadius: 2,
+                              }}
+                              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,59,59,0.08)' }}
+                              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+                            >
+                              Remove
+                            </button>
+                          </span>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </div>
     </div>

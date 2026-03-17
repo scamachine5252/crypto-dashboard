@@ -5,7 +5,7 @@
 ## Project State
 *Update this section after every major change.*
 
-### Status: API routes implemented for secure account management
+### Status: API Settings page connected to real backend — localStorage replaced with Supabase
 
 ### What has been built
 
@@ -16,9 +16,11 @@
 - `/performance` — PeriodSelector + accounts checkbox dropdown (click-outside aware); **L1 tabs** SPOT/FUTURES (active = green filled pill); **L2 tabs** (active = green border-bottom): SPOT has Overview/Returns/Risk/Costs, FUTURES has Overview/Returns/Risk & Exposure/Cost/Execution; per-account metrics table with polarity-aware best (green) / worst (red) cell highlighting and Total/Avg footer row; `OverlayLineChart` equity curves with D/W/M switcher embedded in chart header, normalized to 0 at period start for all timeframes
 - `/history` — sticky header strip (Export button) + TradeFilters bar (exchange/account/section/side dropdowns, symbol input, date range with Day/Week/Month/180D shortcuts); OrdersTable with Bybit-standard columns (Date/Time, Symbol, Order Type, Side, Filled Qty, Filled Value, Realized PnL, Fee, Exchange/Account); all CSS variables (full light/dark support)
 - `/results` — Trading Results investor view: USDT balance line chart (`BalanceLineChart`) + PnL histogram (`PnlHistogramChart`, Day/Week/Month timeframe), balance table with 2 rows per account (USDT + token), checkbox column, Difference/Fees/Avg Price/PnL columns, totals row; pair filter dropdown; charts filter by checked accounts
-- `/api-settings` — two-column layout: left (280px) Create Account form (Fund/Exchange/Account Name/Instrument/API Key/Secret/PassPhrase OKX-only/AccountID Memo) with green CREATE ACCOUNT button; right column Accounts List table (Account Name/Fund/Exchange/Instrument/Status/Actions); Test (600ms mock)/Edit/Remove per row; 7 mock accounts seeded from EXCHANGES; localStorage persistence via `AccountConfig` in `cicada:accounts`; amber warning banner
+- `/api-settings` — two-column layout: left (280px) Create Account form (Fund/Exchange/Account Name/Instrument/API Key/Secret/PassPhrase/AccountID Memo) with green CREATE ACCOUNT button; right column Accounts List table (Account Name/Fund/Exchange/Instrument/Status/Actions); Test (600ms mock)/Edit/Remove per row; **fully connected to real API routes** — Create Account → `POST /api/accounts` (keys AES-256-GCM encrypted before DB write), list → `GET /api/accounts` (no encrypted fields returned), Remove → `DELETE /api/accounts/[id]`; loading skeleton, error panel with Retry, empty state; localStorage removed
 
 **Infrastructure complete:**
+- `app/api-settings/page.tsx` — fully connected to real API routes; Create Account → `POST /api/accounts`, list → `GET /api/accounts`, Remove → `DELETE /api/accounts/[id]`; loading, error, and empty states implemented; all localStorage references removed
+- Tests: 191 passing (7 new API Settings page tests in `app/api-settings/__tests__/page.test.tsx`)
 - `app/api/accounts/route.ts` — GET (list accounts, sensitive fields stripped) and POST (create account with encrypted keys)
 - `app/api/accounts/[id]/route.ts` — DELETE account (404 if not found)
 - All API routes use `supabaseAdmin` (server-only), never expose encrypted fields in any response
