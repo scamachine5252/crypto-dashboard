@@ -5,7 +5,7 @@
 ## Project State
 *Update this section after every major change.*
 
-### Status: API Settings page connected to real backend — localStorage replaced with Supabase
+### Status: Accounts CRUD fully working — all fields persisted to Supabase including account_id_memo
 
 ### What has been built
 
@@ -19,12 +19,14 @@
 - `/api-settings` — two-column layout: left (280px) Create Account form (Fund/Exchange/Account Name/Instrument/API Key/Secret/PassPhrase/AccountID Memo) with green CREATE ACCOUNT button; right column Accounts List table (Account Name/Fund/Exchange/Instrument/Status/Actions); Test (600ms mock)/Edit/Remove per row; **fully connected to real API routes** — Create Account → `POST /api/accounts` (keys AES-256-GCM encrypted before DB write), list → `GET /api/accounts` (no encrypted fields returned), Remove → `DELETE /api/accounts/[id]`; loading skeleton, error panel with Retry, empty state; localStorage removed
 
 **Infrastructure complete:**
+- `supabase/migrations/004_add_account_id_memo.sql` — adds nullable `account_id_memo` column to accounts table
+- `app/api-settings/page.tsx` — `tradingPair` field removed (not needed at account level); `account_id_memo` wired form → POST payload → DB; restored on Edit; `AccountRow` type updated
+- `app/api/accounts/route.ts` — POST destructures and inserts `account_id_memo` (optional); GET returns it (not sensitive); GET/POST fully wired to Supabase with all required fields
+- Tests: 196 passing
 - `app/api-settings/page.tsx` — fully connected to real API routes; Create Account → `POST /api/accounts`, list → `GET /api/accounts`, Remove → `DELETE /api/accounts/[id]`; loading, error, and empty states implemented; all localStorage references removed
-- Tests: 191 passing (7 new API Settings page tests in `app/api-settings/__tests__/page.test.tsx`)
-- `app/api/accounts/route.ts` — GET (list accounts, sensitive fields stripped) and POST (create account with encrypted keys)
 - `app/api/accounts/[id]/route.ts` — DELETE account (404 if not found)
 - All API routes use `supabaseAdmin` (server-only), never expose encrypted fields in any response
-- Tests: 184 passing (10 new API route tests in `app/api/accounts/__tests__/route.test.ts`)
+- `supabase/migrations/003_fix_column_names.sql` — renames `label→account_name`, `api_key_encrypted→api_key`, `api_secret_encrypted→api_secret`, `passphrase_encrypted→passphrase`; adds `fund` column
 - `lib/crypto/encrypt.ts` — AES-256-GCM encryption with random IV per call
 - `lib/crypto/decrypt.ts` — decryption with GCM auth tag tamper detection
 - `ENCRYPTION_KEY` in `.env.local` (server-side only, 32 bytes hex)

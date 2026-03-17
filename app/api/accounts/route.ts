@@ -16,7 +16,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
   }
 
-  const { fund, exchange, account_name, instrument, api_key, api_secret, passphrase } = body as Record<string, string | undefined>
+  const { fund, exchange, account_name, instrument, api_key, api_secret, passphrase, account_id_memo } = body as Record<string, string | undefined>
 
   // Required field validation
   if (!fund || !exchange || !account_name || !instrument || !api_key || !api_secret) {
@@ -57,6 +57,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
   if (encryptedPassphrase !== null) {
     insertPayload.passphrase = encryptedPassphrase
+  }
+  if (account_id_memo) {
+    insertPayload.account_id_memo = account_id_memo
   }
 
   const { data, error } = await supabaseAdmin

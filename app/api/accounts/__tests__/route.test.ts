@@ -144,6 +144,42 @@ describe('POST /api/accounts', () => {
     const json = await res.json()
     expect(json.id).toBe('uuid-1')
   })
+
+  it('saves account_id_memo when provided', async () => {
+    mockInsert.mockReturnValue({
+      select: jest.fn().mockReturnValue({
+        single: jest.fn().mockResolvedValue({
+          data: { id: 'uuid-2', fund: 'Cicada Foundation', exchange: 'binance', account_name: 'Alpha Fund', instrument: 'spot', account_id_memo: 'memo-123' },
+          error: null,
+        }),
+      }),
+    })
+
+    const { POST } = await import('../route')
+    const req = makePost({ ...validBody, account_id_memo: 'memo-123' })
+    await POST(req)
+
+    const insertCall = mockInsert.mock.calls[0][0]
+    expect(insertCall.account_id_memo).toBe('memo-123')
+  })
+
+  it('does not include account_id_memo in insert when not provided', async () => {
+    mockInsert.mockReturnValue({
+      select: jest.fn().mockReturnValue({
+        single: jest.fn().mockResolvedValue({
+          data: { id: 'uuid-3', fund: 'Cicada Foundation', exchange: 'binance', account_name: 'Alpha Fund', instrument: 'spot' },
+          error: null,
+        }),
+      }),
+    })
+
+    const { POST } = await import('../route')
+    const req = makePost(validBody) // no account_id_memo
+    await POST(req)
+
+    const insertCall = mockInsert.mock.calls[0][0]
+    expect(insertCall.account_id_memo).toBeUndefined()
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -177,6 +213,22 @@ describe('GET /api/accounts', () => {
       expect(account.api_secret).toBeUndefined()
       expect(account.passphrase).toBeUndefined()
     })
+  })
+
+  it('returns account_id_memo in response', async () => {
+    mockSelect.mockResolvedValue({
+      data: [
+        { id: 'uuid-1', fund: 'Cicada Foundation', exchange: 'binance', account_name: 'Alpha Fund', instrument: 'spot', account_id_memo: 'memo-abc', api_key: 'enc:key', api_secret: 'enc:sec' },
+      ],
+      error: null,
+    })
+
+    const { GET } = await import('../route')
+    const req = makeGet()
+    const res = await GET(req)
+    const json = await res.json()
+
+    expect(json[0].account_id_memo).toBe('memo-abc')
   })
 
   it('returns empty array when no accounts exist', async () => {

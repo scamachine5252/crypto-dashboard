@@ -83,6 +83,7 @@ const ApiSettingsPage = () => require('../page').default
 describe('API Settings page', () => {
   beforeEach(() => {
     jest.clearAllMocks()
+    mockFetch.mockReset()    // clearAllMocks does NOT drain mockReturnValueOnce queues
     localStorageGetSpy.mockClear()
   })
 
@@ -133,7 +134,6 @@ describe('API Settings page', () => {
     // Fill in the form
     fireEvent.change(screen.getByPlaceholderText('e.g. Alpha Fund'), { target: { value: 'Test Account' } })
     fireEvent.change(screen.getByDisplayValue('Choose exchange'), { target: { value: 'bybit' } })
-    fireEvent.change(screen.getByPlaceholderText('e.g. BTCUSDT'), { target: { value: 'futures' } })
     fireEvent.change(screen.getByPlaceholderText('Enter API key'), { target: { value: 'my-api-key' } })
     fireEvent.change(screen.getByPlaceholderText('Enter secret key'), { target: { value: 'my-secret' } })
 

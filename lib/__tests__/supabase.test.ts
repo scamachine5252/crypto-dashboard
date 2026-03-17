@@ -68,4 +68,20 @@ describe('accounts table schema', () => {
     expect(sql).toContain("DEFAULT 'spot'")
     expect(sql).toContain("'spot', 'futures', 'options'")
   })
+
+  it('migration 003 fixes all column names', () => {
+    const fs = require('fs')
+    const sql = fs.readFileSync('supabase/migrations/003_fix_column_names.sql', 'utf8')
+    expect(sql).toContain('RENAME COLUMN label TO account_name')
+    expect(sql).toContain('RENAME COLUMN api_key_encrypted TO api_key')
+    expect(sql).toContain('RENAME COLUMN api_secret_encrypted TO api_secret')
+    expect(sql).toContain('RENAME COLUMN passphrase_encrypted TO passphrase')
+    expect(sql).toContain('ADD COLUMN IF NOT EXISTS fund')
+  })
+
+  it('migration 004 adds account_id_memo column', () => {
+    const fs = require('fs')
+    const sql = fs.readFileSync('supabase/migrations/004_add_account_id_memo.sql', 'utf8')
+    expect(sql).toContain('ADD COLUMN IF NOT EXISTS account_id_memo')
+  })
 })

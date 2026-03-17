@@ -13,6 +13,7 @@ interface AccountRow {
   exchange: ExchangeId
   account_name: string
   instrument: string
+  account_id_memo?: string
   status: 'connected' | 'error' | 'not_configured'
   passphrase?: never       // never returned by API
   api_key?: never          // never returned by API
@@ -31,7 +32,7 @@ const EMPTY_FORM = {
   fund:          'Cicada Foundation',
   exchangeId:    '' as ExchangeId | '',
   accountName:   '',
-  instrument:    '',
+  instrument:    'spot',   // account type: spot | futures | options
   apiKey:        '',
   apiSecret:     '',
   passphrase:    '',
@@ -177,13 +178,13 @@ export default function ApiSettingsPage() {
 
     const payload = {
       fund:          resolvedFund,
-      exchange:      form.exchangeId,
+      exchange:      form.exchangeId.toLowerCase(),
       account_name:  form.accountName.trim(),
-      instrument:    form.instrument.trim(),
+      instrument:    form.instrument,
       api_key:       form.apiKey,
       api_secret:    form.apiSecret,
-      ...(form.passphrase    ? { passphrase:     form.passphrase }    : {}),
-      ...(form.accountIdMemo ? { account_id_memo: form.accountIdMemo } : {}),
+      ...(form.passphrase    ? { passphrase:       form.passphrase }          : {}),
+      ...(form.accountIdMemo ? { account_id_memo:  form.accountIdMemo.trim() } : {}),
     }
 
     try {
@@ -216,7 +217,7 @@ export default function ApiSettingsPage() {
       apiKey:        '',
       apiSecret:     '',
       passphrase:    '',
-      accountIdMemo: '',
+      accountIdMemo: account.account_id_memo ?? '',
     })
     setEditingId(account.id)
   }, [])
@@ -316,13 +317,12 @@ export default function ApiSettingsPage() {
             placeholder="e.g. Alpha Fund"
           />
 
-          {/* Instrument */}
-          <FieldInput
-            label="Exchange Instrument"
-            value={form.instrument}
-            onChange={(v) => patch('instrument', v)}
-            placeholder="e.g. BTCUSDT"
-          />
+          {/* Account Type */}
+          <FieldSelect label="Account Type" value={form.instrument} onChange={(v) => patch('instrument', v)}>
+            <option value="spot">Spot</option>
+            <option value="futures">Futures</option>
+            <option value="options">Options</option>
+          </FieldSelect>
 
           {/* Divider */}
           <div style={{ borderTop: '1px solid var(--border-subtle)' }} />
