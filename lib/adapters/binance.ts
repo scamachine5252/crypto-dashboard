@@ -1,6 +1,7 @@
 import ccxt from 'ccxt'
 import type { ExchangeAdapter, BalanceResult } from './types'
 import type { DailyPnLEntry, Trade, DateRange } from '../types'
+import { mapCcxtTrade } from './ccxt-utils'
 
 interface BinanceCredentials {
   apiKey: string
@@ -44,7 +45,13 @@ export class BinanceAdapter implements ExchangeAdapter {
     return []
   }
 
-  async getTrades(_subAccountId: string, _dateRange: DateRange): Promise<Trade[]> {
-    return []
+  async getTrades(
+    _subAccountId: string,
+    _dateRange: DateRange,
+    since?: number,
+    limit?: number,
+  ): Promise<Trade[]> {
+    const raw = await this.exchange.fetchMyTrades(undefined, since, limit ?? 100)
+    return raw.map((t) => mapCcxtTrade(t, 'binance'))
   }
 }

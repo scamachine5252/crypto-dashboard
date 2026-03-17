@@ -1,6 +1,7 @@
 import ccxt from 'ccxt'
 import type { ExchangeAdapter, BalanceResult } from './types'
 import type { DailyPnLEntry, Trade, DateRange } from '../types'
+import { mapCcxtTrade } from './ccxt-utils'
 
 interface BybitCredentials {
   apiKey: string
@@ -42,12 +43,16 @@ export class BybitAdapter implements ExchangeAdapter {
   }
 
   async getDailyPnL(_subAccountId: string, _dateRange: DateRange): Promise<DailyPnLEntry[]> {
-    // Real implementation: fetch closed PnL from Bybit and aggregate by day
     return []
   }
 
-  async getTrades(_subAccountId: string, _dateRange: DateRange): Promise<Trade[]> {
-    // Real implementation: fetch trade history from Bybit
-    return []
+  async getTrades(
+    _subAccountId: string,
+    _dateRange: DateRange,
+    since?: number,
+    limit?: number,
+  ): Promise<Trade[]> {
+    const raw = await this.exchange.fetchMyTrades(undefined, since, limit ?? 100)
+    return raw.map((t) => mapCcxtTrade(t, 'bybit'))
   }
 }

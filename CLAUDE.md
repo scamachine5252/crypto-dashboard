@@ -5,7 +5,7 @@
 ## Project State
 *Update this section after every major change.*
 
-### Status: CCXT integrated — real exchange adapters for Bybit, Binance, OKX + ping endpoint
+### Status: Balance and trades endpoints implemented
 
 ### What has been built
 
@@ -19,11 +19,16 @@
 - `/api-settings` — two-column layout: left (280px) Create Account form (Fund/Exchange/Account Name/Instrument/API Key/Secret/PassPhrase/AccountID Memo) with green CREATE ACCOUNT button; right column Accounts List table (Account Name/Fund/Exchange/Instrument/Status/Actions); **Test button calls real ping** (`POST /api/exchanges/[exchange]/ping`) — sets Connected/Error status; Edit/Remove per row; **fully connected to real API routes** — Create Account → `POST /api/accounts` (keys AES-256-GCM encrypted before DB write), list → `GET /api/accounts` (no encrypted fields returned), Remove → `DELETE /api/accounts/[id]`; loading skeleton, error panel with Retry, empty state; localStorage removed
 
 **Infrastructure complete:**
+- `app/api/exchanges/[exchange]/balance/route.ts` — POST fetches account, decrypts keys, calls `adapter.fetchBalance()`, returns `{ usdt, tokens, account_name, exchange }`; 500 if adapter throws
+- `app/api/exchanges/[exchange]/trades/route.ts` — POST accepts `{ account_id, since?, limit? }`, calls `adapter.getTrades('all', dateRange, since, limit)`, returns `{ trades, account_name, exchange }`
+- `lib/adapters/bybit.ts`, `binance.ts`, `okx.ts` — `getTrades()` implemented with `ccxt.fetchMyTrades(undefined, since, limit ?? 100)`, mapped to internal `Trade[]` via shared `ccxt-utils.ts`
+- `lib/adapters/ccxt-utils.ts` — `mapCcxtTrade()` maps ccxt fill objects to internal `Trade` type; extracts PnL from `info.closedPnl`/`realised_pnl`/`pnl`; derives leverage and tradeType
+- `lib/adapters/types.ts` — `getTrades` signature extended with `since?: number, limit?: number`
+- Tests: 223 passing (6 new balance route tests + 6 new trades route tests)
 - `lib/adapters/bybit.ts`, `binance.ts`, `okx.ts` — real CCXT adapters implementing `ExchangeAdapter`; `testConnection` catches all errors → `false`; `fetchBalance` extracts USDT + non-zero token balances from `raw.total`; OKX uses `password` field for passphrase
 - `lib/adapters/types.ts` — added `BalanceResult` interface and `fetchBalance(): Promise<BalanceResult>` to `ExchangeAdapter`
 - `app/api/exchanges/[exchange]/ping/route.ts` — POST validates exchange, fetches account from Supabase, decrypts `api_key`/`api_secret`/`passphrase` server-side, calls adapter `testConnection()`, returns `{ connected, exchange, account_name }` — never exposes decrypted keys
 - `app/api-settings/page.tsx` — Test button calls `POST /api/exchanges/${exchange}/ping`; updates status to `connected`/`error` from response; falls back to `error` on network failure
-- Tests: 211 passing (9 new CCXT adapter tests + 6 new ping route tests)
 - `supabase/migrations/004_add_account_id_memo.sql` — adds nullable `account_id_memo` column to accounts table
 - `app/api-settings/page.tsx` — `tradingPair` field removed (not needed at account level); `account_id_memo` wired form → POST payload → DB; restored on Edit; `AccountRow` type updated
 - `app/api/accounts/route.ts` — POST destructures and inserts `account_id_memo` (optional); GET returns it (not sensitive); GET/POST fully wired to Supabase with all required fields

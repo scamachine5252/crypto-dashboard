@@ -7,7 +7,7 @@ export interface BalanceResult {
 
 export interface ExchangeAdapter {
   getDailyPnL(subAccountId: string, dateRange: DateRange): Promise<DailyPnLEntry[]>
-  getTrades(subAccountId: string, dateRange: DateRange): Promise<Trade[]>
+  getTrades(subAccountId: string, dateRange: DateRange, since?: number, limit?: number): Promise<Trade[]>
   testConnection(): Promise<boolean>
   fetchBalance(): Promise<BalanceResult>
 }
