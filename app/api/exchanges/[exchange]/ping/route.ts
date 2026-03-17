@@ -85,14 +85,9 @@ export async function POST(
         break
       }
     }
-  } catch (error) {
-    console.error('testConnection error:', error)
-    console.error('testConnection error message:', (error as Error)?.message)
-    console.error('testConnection error stack:', (error as Error)?.stack)
+  } catch {
     connected = false
   }
-
-  console.log('testConnection result:', connected!)
 
   // Return result — never expose decrypted credentials
   return NextResponse.json(

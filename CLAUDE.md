@@ -5,7 +5,7 @@
 ## Project State
 *Update this section after every major change.*
 
-### Status: CCXT server-only fix applied — all exchange adapters protected from client bundling
+### Status: Bybit API connected on production — ping, balance, trades working
 
 ### What has been built
 
