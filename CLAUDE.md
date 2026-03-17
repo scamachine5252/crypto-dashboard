@@ -5,7 +5,7 @@
 ## Project State
 *Update this section after every major change.*
 
-### Status: API Settings page rebuilt — create account form, accounts list table
+### Status: Supabase integrated — database created with accounts, balances, trades tables + tests passing
 
 ### What has been built
 
@@ -19,6 +19,10 @@
 - `/api-settings` — two-column layout: left (280px) Create Account form (Fund/Exchange/Account Name/Instrument/API Key/Secret/PassPhrase OKX-only/AccountID Memo) with green CREATE ACCOUNT button; right column Accounts List table (Account Name/Fund/Exchange/Instrument/Status/Actions); Test (600ms mock)/Edit/Remove per row; 7 mock accounts seeded from EXCHANGES; localStorage persistence via `AccountConfig` in `cicada:accounts`; amber warning banner
 
 **Infrastructure complete:**
+- Supabase project connected (`lib/supabase/client.ts` browser client, `lib/supabase/server.ts` admin client)
+- Database schema: `accounts`, `balances`, `trades` tables with RLS enabled (`supabase/migrations/001_initial_schema.sql`)
+- Environment variables configured in `.env.local` (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`)
+- Tests: 167 passing (4 new Supabase client tests in `lib/__tests__/supabase.test.ts`)
 - Renamed from Nexus Fund → Cicada Foundation across app/layout.tsx, LoginForm, Header
 - `lib/mock-data.ts`: `INITIAL_USDT_BALANCE`, `INITIAL_TOKEN_BALANCE`, `ACCOUNT_PRIMARY_TOKEN`, `getAllTransactions()` (seeded 3–5 deposits/withdrawals per sub-account)
 - `lib/calculations.ts`: `buildAccountSnapshots`, `buildUsdtBalanceTimeSeries`, `buildTokenBalanceTimeSeries`
