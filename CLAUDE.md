@@ -5,7 +5,7 @@
 ## Project State
 *Update this section after every major change.*
 
-### Status: Supabase integrated — database schema v2 with accounts (incl. instrument field), balances, trades tables
+### Status: AES-256-GCM encryption implemented for API keys storage
 
 ### What has been built
 
@@ -19,6 +19,10 @@
 - `/api-settings` — two-column layout: left (280px) Create Account form (Fund/Exchange/Account Name/Instrument/API Key/Secret/PassPhrase OKX-only/AccountID Memo) with green CREATE ACCOUNT button; right column Accounts List table (Account Name/Fund/Exchange/Instrument/Status/Actions); Test (600ms mock)/Edit/Remove per row; 7 mock accounts seeded from EXCHANGES; localStorage persistence via `AccountConfig` in `cicada:accounts`; amber warning banner
 
 **Infrastructure complete:**
+- `lib/crypto/encrypt.ts` — AES-256-GCM encryption with random IV per call
+- `lib/crypto/decrypt.ts` — decryption with GCM auth tag tamper detection
+- `ENCRYPTION_KEY` in `.env.local` (server-side only, 32 bytes hex)
+- Tests: 174 passing (6 new crypto tests in `lib/__tests__/crypto.test.ts`)
 - Supabase project connected (`lib/supabase/client.ts` browser client, `lib/supabase/server.ts` admin client)
 - Database schema: `accounts`, `balances`, `trades` tables with RLS enabled (`supabase/migrations/001_initial_schema.sql`)
 - Environment variables configured in `.env.local` (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`)
