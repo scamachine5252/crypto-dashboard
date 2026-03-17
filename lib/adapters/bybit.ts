@@ -53,7 +53,9 @@ export class BybitAdapter implements ExchangeAdapter {
     since?: number,
     limit?: number,
   ): Promise<Trade[]> {
-    const raw = await this.exchange.fetchMyTrades(undefined, since, limit ?? 100)
+    const raw = await this.exchange.fetchMyTrades(undefined, since, limit ?? 100, { category: 'spot' })
+    console.log('Bybit spot trades count:', raw.length)
+    console.log('Bybit first spot trade:', JSON.stringify(raw[0]))
     return raw.map((t) => mapCcxtTrade(t, 'bybit'))
   }
 }
