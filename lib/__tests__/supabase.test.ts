@@ -56,3 +56,16 @@ describe('lib/supabase/server.ts', () => {
     expect(typeof supabaseAdmin.from).toBe('function')
   })
 })
+
+// ---------------------------------------------------------------------------
+// accounts table schema
+// ---------------------------------------------------------------------------
+describe('accounts table schema', () => {
+  it('migration 002 contains correct ALTER TABLE statement', () => {
+    const fs = require('fs')
+    const sql = fs.readFileSync('supabase/migrations/002_add_instrument_to_accounts.sql', 'utf8')
+    expect(sql).toContain('ADD COLUMN instrument')
+    expect(sql).toContain("DEFAULT 'spot'")
+    expect(sql).toContain("'spot', 'futures', 'options'")
+  })
+})

@@ -5,7 +5,7 @@
 ## Project State
 *Update this section after every major change.*
 
-### Status: Supabase integrated — database created with accounts, balances, trades tables + tests passing
+### Status: Supabase integrated — database schema v2 with accounts (incl. instrument field), balances, trades tables
 
 ### What has been built
 
