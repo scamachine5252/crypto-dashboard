@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo } from 'react'
+import React, { useMemo } from 'react'
 import { EXCHANGES, getAllDailyPnL } from '@/lib/mock-data'
 import { formatMoney, formatPercent } from '@/lib/utils'
 
@@ -43,7 +43,7 @@ function OkxLogo() {
   )
 }
 
-const EXCHANGE_LOGOS: Record<string, () => JSX.Element> = {
+const EXCHANGE_LOGOS: Record<string, () => React.ReactElement> = {
   binance: BinanceLogo,
   bybit:   BybitLogo,
   okx:     OkxLogo,
