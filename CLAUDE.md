@@ -5,7 +5,7 @@
 ## Project State
 *Update this section after every major change.*
 
-### Status: Sync fixes applied — balances and trades correctly mapped to DB schema
+### Status: Bybit and OKX trade fetching implemented for all categories/instTypes
 
 ### What has been built
 
@@ -24,11 +24,14 @@
 - `lib/adapters/bybit.ts`, `binance.ts`, `okx.ts` — `getTrades()` implemented with `ccxt.fetchMyTrades(undefined, since, limit ?? 100)`, mapped to internal `Trade[]` via shared `ccxt-utils.ts`
 - `lib/adapters/ccxt-utils.ts` — `mapCcxtTrade()` maps ccxt fill objects to internal `Trade` type; extracts PnL from `info.closedPnl`/`realised_pnl`/`pnl`; derives leverage and tradeType
 - `lib/adapters/types.ts` — `getTrades` signature extended with `since?: number, limit?: number`
+- `lib/adapters/bybit.ts` — fetches trades across 4 categories (`spot`, `linear`, `inverse`, `option`) using `Promise.allSettled` + `paginate: true`; errors per category are silently skipped
+- `lib/adapters/okx.ts` — fetches trades across 5 instTypes (`SPOT`, `SWAP`, `FUTURES`, `OPTION`, `MARGIN`) using `Promise.allSettled` + `paginate: true`; errors per instType are silently skipped
+- Tests: 242 passing
 - `supabase/migrations/005_add_direction_to_trades.sql` — adds nullable `direction` column (`'long'`/`'short'`/`'unknown'`) to trades table
 - `app/api/sync/route.ts` — POST + GET handlers; syncs all accounts (fetchBalance + getTrades) to Supabase `balances` and `trades` tables; skips failed accounts, returns `{ synced, errors, accounts }`; fixed 6 schema mismatches: `usdt_balance` column, one row per token (`token_symbol`+`token_balance`), `side` mapped to `'buy'`/`'sell'`, `direction` stores original `'long'`/`'short'`, removed non-existent `leverage`/`funding_cost`/`is_overnight` columns
 - `vercel.json` — Vercel Cron Job runs `GET /api/sync` every hour (`0 * * * *`), all API functions pinned to `fra1` region
 - `components/layout/Header.tsx` — Sync Now button (left of user pill); spinner while syncing; "Synced X accounts" / "Sync failed" toast for 3s
-- Tests: 236 passing
+- Tests: 242 passing
 - `import 'server-only'` added to all CCXT adapter files (`bybit.ts`, `binance.ts`, `okx.ts`) and API routes (`ping`, `balance`, `trades`)
 - `serverExternalPackages: ['ccxt']` in `next.config.ts` — prevents Turbopack from bundling ccxt for the client
 - `__mocks__/server-only.ts` — no-op mock for Jest compatibility; `moduleNameMapper` in `jest.config.ts` routes `server-only` imports to this mock

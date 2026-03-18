@@ -54,7 +54,18 @@ export class OkxAdapter implements ExchangeAdapter {
     since?: number,
     limit?: number,
   ): Promise<Trade[]> {
-    const raw = await this.exchange.fetchMyTrades(undefined, since, limit ?? 100)
-    return raw.map((t) => mapCcxtTrade(t, 'okx'))
+    const instTypes = ['SPOT', 'SWAP', 'FUTURES', 'OPTION', 'MARGIN'] as const
+    const results = await Promise.allSettled(
+      instTypes.map((type) =>
+        this.exchange.fetchMyTrades(undefined, since, limit ?? 100, { type, paginate: true }),
+      ),
+    )
+    const all: Trade[] = []
+    for (const result of results) {
+      if (result.status === 'fulfilled') {
+        all.push(...result.value.map((t) => mapCcxtTrade(t, 'okx')))
+      }
+    }
+    return all
   }
 }

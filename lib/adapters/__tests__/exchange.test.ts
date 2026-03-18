@@ -18,6 +18,22 @@ jest.mock('ccxt', () => ({
 }))
 
 // ---------------------------------------------------------------------------
+// Shared fixture — minimal ccxt trade object
+// ---------------------------------------------------------------------------
+const sampleCcxtTrade = {
+  id: 'ccxt-1',
+  symbol: 'BTC/USDT',
+  side: 'buy',
+  price: 50000,
+  amount: 0.1,
+  cost: 5000,
+  fee: { cost: 5 },
+  timestamp: 1704067200000,
+  datetime: '2025-01-01T00:00:00.000Z',
+  info: {},
+}
+
+// ---------------------------------------------------------------------------
 // BybitAdapter
 // ---------------------------------------------------------------------------
 describe('BybitAdapter', () => {
@@ -81,6 +97,55 @@ describe('BybitAdapter', () => {
 
     await expect(adapter.fetchBalance()).rejects.toThrow()
   })
+
+  it('fetches trades for all 4 categories: spot, linear, inverse, option', async () => {
+    mockFetchTrades.mockResolvedValue([])
+
+    const { BybitAdapter } = await import('../bybit')
+    const adapter = new BybitAdapter({ apiKey: 'key', apiSecret: 'secret' })
+    await adapter.getTrades('all', { start: '2025-01-01', end: '2025-12-31' })
+
+    expect(mockFetchTrades).toHaveBeenCalledTimes(4)
+    const categories = mockFetchTrades.mock.calls.map(
+      (c) => (c[3] as Record<string, string>)?.category,
+    )
+    expect(categories).toContain('spot')
+    expect(categories).toContain('linear')
+    expect(categories).toContain('inverse')
+    expect(categories).toContain('option')
+  })
+
+  it('merges trades from all categories into single array', async () => {
+    mockFetchTrades.mockImplementation(
+      (_s: unknown, _since: unknown, _limit: unknown, params: Record<string, string>) => {
+        if (params?.category === 'spot')   return Promise.resolve([{ ...sampleCcxtTrade, id: 'spot-1' }])
+        if (params?.category === 'linear') return Promise.resolve([{ ...sampleCcxtTrade, id: 'linear-1' }])
+        return Promise.resolve([])
+      },
+    )
+
+    const { BybitAdapter } = await import('../bybit')
+    const adapter = new BybitAdapter({ apiKey: 'key', apiSecret: 'secret' })
+    const trades = await adapter.getTrades('all', { start: '2025-01-01', end: '2025-12-31' })
+
+    expect(trades.length).toBe(2)
+  })
+
+  it('handles empty result for a category gracefully', async () => {
+    mockFetchTrades.mockImplementation(
+      (_s: unknown, _since: unknown, _limit: unknown, params: Record<string, string>) => {
+        if (params?.category === 'spot')   return Promise.resolve([{ ...sampleCcxtTrade, id: 'spot-1' }])
+        if (params?.category === 'linear') return Promise.reject(new Error('category not available'))
+        return Promise.resolve([])
+      },
+    )
+
+    const { BybitAdapter } = await import('../bybit')
+    const adapter = new BybitAdapter({ apiKey: 'key', apiSecret: 'secret' })
+    const trades = await adapter.getTrades('all', { start: '2025-01-01', end: '2025-12-31' })
+
+    expect(trades.length).toBe(1)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -140,5 +205,55 @@ describe('OkxAdapter', () => {
     const result = await adapter.testConnection()
 
     expect(result).toBe(false)
+  })
+
+  it('fetches trades for all 5 instTypes: SPOT, SWAP, FUTURES, OPTION, MARGIN', async () => {
+    mockFetchTrades.mockResolvedValue([])
+
+    const { OkxAdapter } = await import('../okx')
+    const adapter = new OkxAdapter({ apiKey: 'key', apiSecret: 'secret', passphrase: 'pass' })
+    await adapter.getTrades('all', { start: '2025-01-01', end: '2025-12-31' })
+
+    expect(mockFetchTrades).toHaveBeenCalledTimes(5)
+    const types = mockFetchTrades.mock.calls.map(
+      (c) => (c[3] as Record<string, string>)?.type,
+    )
+    expect(types).toContain('SPOT')
+    expect(types).toContain('SWAP')
+    expect(types).toContain('FUTURES')
+    expect(types).toContain('OPTION')
+    expect(types).toContain('MARGIN')
+  })
+
+  it('merges trades from all instTypes into single array', async () => {
+    mockFetchTrades.mockImplementation(
+      (_s: unknown, _since: unknown, _limit: unknown, params: Record<string, string>) => {
+        if (params?.type === 'SPOT') return Promise.resolve([{ ...sampleCcxtTrade, id: 'spot-1' }])
+        if (params?.type === 'SWAP') return Promise.resolve([{ ...sampleCcxtTrade, id: 'swap-1' }])
+        return Promise.resolve([])
+      },
+    )
+
+    const { OkxAdapter } = await import('../okx')
+    const adapter = new OkxAdapter({ apiKey: 'key', apiSecret: 'secret', passphrase: 'pass' })
+    const trades = await adapter.getTrades('all', { start: '2025-01-01', end: '2025-12-31' })
+
+    expect(trades.length).toBe(2)
+  })
+
+  it('handles empty result for an instType gracefully', async () => {
+    mockFetchTrades.mockImplementation(
+      (_s: unknown, _since: unknown, _limit: unknown, params: Record<string, string>) => {
+        if (params?.type === 'SPOT') return Promise.resolve([{ ...sampleCcxtTrade, id: 'spot-1' }])
+        if (params?.type === 'SWAP') return Promise.reject(new Error('instType not available'))
+        return Promise.resolve([])
+      },
+    )
+
+    const { OkxAdapter } = await import('../okx')
+    const adapter = new OkxAdapter({ apiKey: 'key', apiSecret: 'secret', passphrase: 'pass' })
+    const trades = await adapter.getTrades('all', { start: '2025-01-01', end: '2025-12-31' })
+
+    expect(trades.length).toBe(1)
   })
 })
