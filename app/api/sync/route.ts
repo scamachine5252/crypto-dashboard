@@ -84,24 +84,26 @@ async function runSync(): Promise<NextResponse> {
       console.log('Total trades for', row.account_name, ':', trades.length)
       if (trades.length > 0) console.log('First trade:', JSON.stringify(trades[0]))
       if (trades.length > 0) {
-        await supabaseAdmin.from('trades').upsert(
-          trades.map((t) => ({
-            account_id:  row.id,
-            exchange:    row.exchange,
-            symbol:      t.symbol,
-            side:        t.side === 'long' ? 'buy' : 'sell',
-            direction:   t.side === 'long' || t.side === 'short' ? t.side : 'unknown',
-            entry_price: t.entryPrice,
-            exit_price:  t.exitPrice,
-            quantity:    t.quantity,
-            pnl:         t.pnl,
-            fee:         t.fee,
-            opened_at:   t.openedAt,
-            closed_at:   t.closedAt,
-            trade_type:  t.tradeType,
-          })),
-          { onConflict: 'account_id,symbol,opened_at' },
-        )
+        const tradesToInsert = trades.map((t) => ({
+          account_id:  row.id,
+          exchange:    row.exchange,
+          symbol:      t.symbol,
+          side:        t.side === 'long' ? 'buy' : 'sell',
+          direction:   t.side === 'long' || t.side === 'short' ? t.side : 'unknown',
+          entry_price: t.entryPrice,
+          exit_price:  t.exitPrice,
+          quantity:    t.quantity,
+          pnl:         t.pnl,
+          fee:         t.fee,
+          opened_at:   t.openedAt,
+          closed_at:   t.closedAt,
+          trade_type:  t.tradeType,
+        }))
+        const { error: tradesError } = await supabaseAdmin
+          .from('trades')
+          .upsert(tradesToInsert, { onConflict: 'account_id,symbol,opened_at' })
+        if (tradesError) console.error('Trades upsert error:', JSON.stringify(tradesError))
+        else console.log('Trades upserted:', tradesToInsert.length)
       }
 
       synced++
