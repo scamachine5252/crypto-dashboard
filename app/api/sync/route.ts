@@ -81,8 +81,6 @@ async function runSync(): Promise<NextResponse> {
 
       // Fetch and upsert trades
       const trades = await adapter.getTrades('all', dateRange)
-      console.log('Total trades for', row.account_name, ':', trades.length)
-      if (trades.length > 0) console.log('First trade:', JSON.stringify(trades[0]))
       if (trades.length > 0) {
         const tradesToInsert = trades.map((t) => ({
           account_id:  row.id,
@@ -103,7 +101,6 @@ async function runSync(): Promise<NextResponse> {
           .from('trades')
           .upsert(tradesToInsert, { onConflict: 'account_id,symbol,opened_at' })
         if (tradesError) console.error('Trades upsert error:', JSON.stringify(tradesError))
-        else console.log('Trades upserted:', tradesToInsert.length)
       }
 
       synced++

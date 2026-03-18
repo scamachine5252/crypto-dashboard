@@ -65,11 +65,6 @@ export class BybitAdapter implements ExchangeAdapter {
     const inverseTrades = inverseResult.status === 'fulfilled' ? inverseResult.value : []
     const optionTrades  = optionResult.status  === 'fulfilled' ? optionResult.value  : []
 
-    console.log('Bybit category spot trades:',    spotTrades.length)
-    console.log('Bybit category linear trades:',  linearTrades.length)
-    console.log('Bybit category inverse trades:',  inverseTrades.length)
-    console.log('Bybit category option trades:',  optionTrades.length)
-
     return [
       ...spotTrades,
       ...linearTrades,

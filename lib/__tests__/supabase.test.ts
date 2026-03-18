@@ -91,4 +91,11 @@ describe('accounts table schema', () => {
     expect(sql).toContain('ADD COLUMN IF NOT EXISTS direction')
     expect(sql).toContain("'long', 'short', 'unknown'")
   })
+
+  it('migration 006 adds unique constraint on trades', () => {
+    const fs = require('fs')
+    const sql = fs.readFileSync('supabase/migrations/006_add_trades_unique_constraint.sql', 'utf8')
+    expect(sql).toContain('CREATE UNIQUE INDEX')
+    expect(sql).toContain('account_id, symbol, opened_at')
+  })
 })
