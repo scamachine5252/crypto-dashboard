@@ -53,18 +53,28 @@ export class BybitAdapter implements ExchangeAdapter {
     since?: number,
     limit?: number,
   ): Promise<Trade[]> {
-    const categories = ['spot', 'linear', 'inverse', 'option'] as const
-    const results = await Promise.allSettled(
-      categories.map((category) =>
-        this.exchange.fetchMyTrades(undefined, since, limit ?? 100, { category, paginate: true }),
-      ),
-    )
-    const all: Trade[] = []
-    for (const result of results) {
-      if (result.status === 'fulfilled') {
-        all.push(...result.value.map((t) => mapCcxtTrade(t, 'bybit')))
-      }
-    }
-    return all
+    const [spotResult, linearResult, inverseResult, optionResult] = await Promise.allSettled([
+      this.exchange.fetchMyTrades(undefined, since, limit ?? 100, { category: 'spot',    paginate: true }),
+      this.exchange.fetchMyTrades(undefined, since, limit ?? 100, { category: 'linear',  paginate: true }),
+      this.exchange.fetchMyTrades(undefined, since, limit ?? 100, { category: 'inverse', paginate: true }),
+      this.exchange.fetchMyTrades(undefined, since, limit ?? 100, { category: 'option',  paginate: true }),
+    ])
+
+    const spotTrades    = spotResult.status    === 'fulfilled' ? spotResult.value    : []
+    const linearTrades  = linearResult.status  === 'fulfilled' ? linearResult.value  : []
+    const inverseTrades = inverseResult.status === 'fulfilled' ? inverseResult.value : []
+    const optionTrades  = optionResult.status  === 'fulfilled' ? optionResult.value  : []
+
+    console.log('Bybit category spot trades:',    spotTrades.length)
+    console.log('Bybit category linear trades:',  linearTrades.length)
+    console.log('Bybit category inverse trades:',  inverseTrades.length)
+    console.log('Bybit category option trades:',  optionTrades.length)
+
+    return [
+      ...spotTrades,
+      ...linearTrades,
+      ...inverseTrades,
+      ...optionTrades,
+    ].map((t) => mapCcxtTrade(t, 'bybit'))
   }
 }
