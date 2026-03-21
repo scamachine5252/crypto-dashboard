@@ -119,8 +119,30 @@ export class BinanceAdapter implements ExchangeAdapter {
   // Full 180-day scan — called by /api/sync/binance/full only (not on ExchangeAdapter interface).
   // Note: accountId is intentionally NOT a parameter — the route owns account identity;
   // this method only receives the symbol slice for the current chunk.
-  async getFullTrades(_symbols: string[]): Promise<FullTradesResult> {
-    // Stub — implemented in Task 3
-    return { trades: [], failedSymbols: [] }
+  async getFullTrades(symbols: string[]): Promise<FullTradesResult> {
+    const since = Date.now() - 180 * 24 * 60 * 60 * 1000
+    const trades: Trade[] = []
+    const failedSymbols: { symbol: string; error: string }[] = []
+
+    for (const symbol of symbols) {
+      let succeeded = false
+      let lastError = ''
+
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const raw = await this.exchange.fetchMyTrades(symbol, since, 1000)
+          for (const t of raw) trades.push(mapCcxtTrade(t, 'binance'))
+          succeeded = true
+          break
+        } catch (err) {
+          lastError = err instanceof Error ? err.message : String(err)
+          if (attempt === 0) await new Promise((r) => setTimeout(r, 500))
+        }
+      }
+
+      if (!succeeded) failedSymbols.push({ symbol, error: lastError })
+    }
+
+    return { trades, failedSymbols }
   }
 }

@@ -401,6 +401,86 @@ describe('BinanceAdapter', () => {
       expect(trades.some((t) => t.symbol === 'BTC/USDT')).toBe(true)
     })
   })
+
+  describe('getFullTrades (full scan)', () => {
+    beforeEach(() => {
+      jest.clearAllMocks()
+      mockFetchTrades.mockReset()
+    })
+
+    it('calls fetchMyTrades for each symbol with a ~180-day since window', async () => {
+      mockFetchTrades.mockResolvedValue([])
+      const before = Date.now()
+
+      const { BinanceAdapter } = await import('../binance')
+      const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
+      await adapter.getFullTrades(['BTC/USDT', 'ETH/USDT'])
+
+      expect(mockFetchTrades).toHaveBeenCalledTimes(2)
+      const sinceArg = mockFetchTrades.mock.calls[0][1] as number
+      const expected180d = before - 180 * 24 * 3600_000
+      expect(sinceArg).toBeGreaterThanOrEqual(expected180d - 1000)
+      expect(sinceArg).toBeLessThanOrEqual(expected180d + 5000)
+    })
+
+    it('retries a failed symbol exactly once before marking it failed', async () => {
+      let callCount = 0
+      mockFetchTrades.mockImplementation(() => {
+        callCount++
+        return Promise.reject(new Error('rate limit'))
+      })
+
+      const { BinanceAdapter } = await import('../binance')
+      const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
+      const result = await adapter.getFullTrades(['BTC/USDT'])
+
+      expect(callCount).toBe(2) // 1 original + 1 retry
+      expect(result.failedSymbols).toHaveLength(1)
+      expect(result.failedSymbols[0].symbol).toBe('BTC/USDT')
+      expect(result.failedSymbols[0].error).toMatch(/rate limit/)
+    }, 10_000)
+
+    it('succeeds on retry if first attempt fails', async () => {
+      let callCount = 0
+      mockFetchTrades.mockImplementation(() => {
+        callCount++
+        if (callCount === 1) return Promise.reject(new Error('timeout'))
+        return Promise.resolve([{ ...sampleCcxtTrade, symbol: 'BTC/USDT' }])
+      })
+
+      const { BinanceAdapter } = await import('../binance')
+      const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
+      const result = await adapter.getFullTrades(['BTC/USDT'])
+
+      expect(result.trades).toHaveLength(1)
+      expect(result.failedSymbols).toHaveLength(0)
+    }, 10_000)
+
+    it('continues loop when one symbol fails — does not stop', async () => {
+      mockFetchTrades.mockImplementation((symbol: string) => {
+        if (symbol === 'ETH/USDT') return Promise.reject(new Error('symbol error'))
+        return Promise.resolve([{ ...sampleCcxtTrade, symbol }])
+      })
+
+      const { BinanceAdapter } = await import('../binance')
+      const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
+      const result = await adapter.getFullTrades(['BTC/USDT', 'ETH/USDT', 'SOL/USDT'])
+
+      expect(result.trades).toHaveLength(2) // BTC + SOL
+      expect(result.failedSymbols).toHaveLength(1)
+      expect(result.failedSymbols[0].symbol).toBe('ETH/USDT')
+    }, 10_000)
+
+    it('returns empty result for empty symbol list without calling fetchMyTrades', async () => {
+      const { BinanceAdapter } = await import('../binance')
+      const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
+      const result = await adapter.getFullTrades([])
+
+      expect(result.trades).toEqual([])
+      expect(result.failedSymbols).toEqual([])
+      expect(mockFetchTrades).not.toHaveBeenCalled()
+    })
+  })
 })
 
 // ---------------------------------------------------------------------------
