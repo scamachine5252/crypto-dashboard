@@ -180,6 +180,59 @@ describe('POST /api/accounts', () => {
     const insertCall = mockInsert.mock.calls[0][0]
     expect(insertCall.account_id_memo).toBeUndefined()
   })
+
+  it('accepts unified as a valid instrument', async () => {
+    mockInsert.mockReturnValue({
+      select: jest.fn().mockReturnValue({
+        single: jest.fn().mockResolvedValue({
+          data: { id: 'uuid-4', fund: 'Test Fund', exchange: 'bybit', account_name: 'Test Account', instrument: 'unified' },
+          error: null,
+        }),
+      }),
+    })
+
+    const { POST } = await import('../route')
+    const request = new NextRequest('http://localhost/api/accounts', {
+      method: 'POST',
+      body: JSON.stringify({
+        fund: 'Test Fund',
+        exchange: 'bybit',
+        account_name: 'Test Account',
+        instrument: 'unified',
+        api_key: 'key123',
+        api_secret: 'secret123',
+      }),
+    })
+    const response = await POST(request)
+    expect(response.status).toBe(201)
+  })
+
+  it('uses unified as default when instrument is omitted', async () => {
+    mockInsert.mockReturnValue({
+      select: jest.fn().mockReturnValue({
+        single: jest.fn().mockResolvedValue({
+          data: { id: 'uuid-5', fund: 'Test Fund', exchange: 'bybit', account_name: 'Test Account', instrument: 'unified' },
+          error: null,
+        }),
+      }),
+    })
+
+    const { POST } = await import('../route')
+    const request = new NextRequest('http://localhost/api/accounts', {
+      method: 'POST',
+      body: JSON.stringify({
+        fund: 'Test Fund',
+        exchange: 'bybit',
+        account_name: 'Test Account',
+        api_key: 'key123',
+        api_secret: 'secret123',
+      }),
+    })
+    const response = await POST(request)
+    expect(response.status).toBe(201)
+    const body = await response.json()
+    expect(body.instrument).toBe('unified')
+  })
 })
 
 // ---------------------------------------------------------------------------
