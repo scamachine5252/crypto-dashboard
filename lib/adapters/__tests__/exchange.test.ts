@@ -239,6 +239,20 @@ describe('BinanceAdapter', () => {
 
       expect(balance.usdt).toBe(5000)
     })
+
+    it('throws if all wallet types fail', async () => {
+      mockFetchBalance.mockImplementation((params: Record<string, string>) => {
+        if (params?.type === 'spot')     return Promise.reject(new Error('spot unavailable'))
+        if (params?.type === 'future')   return Promise.reject(new Error('future unavailable'))
+        if (params?.type === 'delivery') return Promise.reject(new Error('delivery unavailable'))
+        return Promise.reject(new Error('unknown wallet unavailable'))
+      })
+
+      const { BinanceAdapter } = await import('../binance')
+      const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
+
+      await expect(adapter.fetchBalance()).rejects.toThrow()
+    })
   })
 })
 
