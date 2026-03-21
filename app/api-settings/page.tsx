@@ -166,55 +166,100 @@ export default function ApiSettingsPage() {
   useEffect(() => { fetchAccounts() }, [fetchAccounts])
 
   // ---------------------------------------------------------------------------
-  // Full Binance history scan — iterates symbol chunks, shows progress bar
+  // Full history scan — exchange-aware chunked sync
+  // Binance: iterates symbol chunks (shows symbol progress)
+  // Bybit/OKX: iterates 30-day time chunks (shows chunk progress)
   // ---------------------------------------------------------------------------
-  const handleFullScan = useCallback(async (accountId: string) => {
+  const handleFullScan = useCallback(async (accountId: string, exchange: string) => {
     setScanState((prev) => ({ ...prev, [accountId]: { current: 0, total: 0, failed: [] } }))
 
     try {
-      const marketsRes = await fetch(`/api/sync/binance/markets?account_id=${accountId}`)
-      if (!marketsRes.ok) throw new Error('Failed to load markets')
-      const { totalChunks, totalSymbols } = (await marketsRes.json()) as {
-        totalChunks: number; chunkSize: number; totalSymbols: number
-      }
-
-      setScanState((prev) => ({
-        ...prev,
-        [accountId]: { current: 0, total: totalSymbols, failed: [] },
-      }))
-
       const allFailed: { symbol: string; error: string }[] = []
 
-      for (let i = 0; i < totalChunks; i++) {
-        const res = await fetch('/api/sync/binance/full', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ account_id: accountId, chunk_index: i }),
-        })
-        if (res.ok) {
-          const data = (await res.json()) as {
-            synced: number; failedSymbols: { symbol: string; error: string }[]
-          }
-          allFailed.push(...data.failedSymbols)
+      if (exchange === 'binance') {
+        // Binance: symbol-based chunking
+        const marketsRes = await fetch(`/api/sync/binance/markets?account_id=${accountId}`)
+        if (!marketsRes.ok) throw new Error('Failed to load markets')
+        const { totalChunks, totalSymbols } = (await marketsRes.json()) as {
+          totalChunks: number; chunkSize: number; totalSymbols: number
         }
-        const symbolsDone = Math.min((i + 1) * 50, totalSymbols)
+
         setScanState((prev) => ({
           ...prev,
-          [accountId]: { current: symbolsDone, total: totalSymbols, failed: allFailed },
+          [accountId]: { current: 0, total: totalSymbols, failed: [] },
+        }))
+
+        for (let i = 0; i < totalChunks; i++) {
+          const res = await fetch('/api/sync/binance/full', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ account_id: accountId, chunk_index: i }),
+          })
+          if (res.ok) {
+            const data = (await res.json()) as {
+              synced: number; failedSymbols: { symbol: string; error: string }[]
+            }
+            allFailed.push(...data.failedSymbols)
+          }
+          const symbolsDone = Math.min((i + 1) * 50, totalSymbols)
+          setScanState((prev) => ({
+            ...prev,
+            [accountId]: { current: symbolsDone, total: totalSymbols, failed: allFailed },
+          }))
+        }
+
+        await fetch('/api/sync/binance/full', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ account_id: accountId, failed_count: allFailed.length }),
+        })
+
+        setScanState((prev) => ({
+          ...prev,
+          [accountId]: { current: totalSymbols, total: totalSymbols, failed: allFailed, completed: true },
+        }))
+      } else {
+        // Bybit / OKX: time-based chunking (6 × 30-day windows)
+        const chunksRes = await fetch(`/api/sync/${exchange}/chunks`)
+        if (!chunksRes.ok) throw new Error('Failed to load chunks')
+        const { totalChunks } = (await chunksRes.json()) as { totalChunks: number }
+
+        setScanState((prev) => ({
+          ...prev,
+          [accountId]: { current: 0, total: totalChunks, failed: [] },
+        }))
+
+        for (let i = 0; i < totalChunks; i++) {
+          const res = await fetch(`/api/sync/${exchange}/full`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ account_id: accountId, chunk_index: i }),
+          })
+          if (res.ok) {
+            const data = (await res.json()) as {
+              synced: number
+              failedCategories?: { symbol: string; error: string }[]
+            }
+            allFailed.push(...(data.failedCategories ?? []))
+          }
+          setScanState((prev) => ({
+            ...prev,
+            [accountId]: { current: i + 1, total: totalChunks, failed: allFailed },
+          }))
+        }
+
+        await fetch(`/api/sync/${exchange}/full`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ account_id: accountId, failed_count: allFailed.length }),
+        })
+
+        setScanState((prev) => ({
+          ...prev,
+          [accountId]: { current: totalChunks, total: totalChunks, failed: allFailed, completed: true },
         }))
       }
 
-      // Mark scan complete
-      await fetch('/api/sync/binance/full', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ account_id: accountId, failed_count: allFailed.length }),
-      })
-
-      setScanState((prev) => ({
-        ...prev,
-        [accountId]: { current: totalSymbols, total: totalSymbols, failed: allFailed, completed: true },
-      }))
       await fetchAccounts()
     } catch {
       setScanState((prev) => ({ ...prev, [accountId]: { current: 0, total: 0, failed: [], isError: true } }))
@@ -263,8 +308,8 @@ export default function ApiSettingsPage() {
       const json = await res.json() as { id?: string }
       resetForm()
       await fetchAccounts()
-      if (form.exchangeId === 'binance' && json.id) {
-        handleFullScan(json.id)
+      if (json.id) {
+        handleFullScan(json.id, form.exchangeId)
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error')
@@ -622,7 +667,7 @@ export default function ApiSettingsPage() {
 
                         {/* Last Synced */}
                         <td style={{ padding: '8px 12px', fontSize: 11, color: 'var(--text-secondary)' }}>
-                          {account.exchange === 'binance' ? (() => {
+                          {(() => {
                             const state = scanState[account.id]
                             if (state && !state.completed && !state.isError) {
                               return (
@@ -661,25 +706,23 @@ export default function ApiSettingsPage() {
                                   </span>
                                   {failedCount > 0 && (
                                     <span style={{ color: 'var(--accent-gold)', fontSize: 10 }}>
-                                      ⚠ {failedCount} symbols failed
+                                      ⚠ {failedCount} failed
                                     </span>
                                   )}
                                 </div>
                               )
                             }
                             return <span style={{ color: 'var(--text-muted)', opacity: 0.5 }}>Never</span>
-                          })() : (
-                            <span style={{ color: 'var(--text-muted)', opacity: 0.4 }}>—</span>
-                          )}
+                          })()}
                         </td>
 
                         {/* Actions */}
                         <td className="px-5 py-2.5 whitespace-nowrap">
                           <span className="flex items-center gap-1.5">
-                            {/* Full History (Binance only) */}
-                            {account.exchange === 'binance' && (!scanState[account.id] || scanState[account.id].isError || scanState[account.id].completed) && (
+                            {/* Full History — all exchanges */}
+                            {(!scanState[account.id] || scanState[account.id].isError || scanState[account.id].completed) && (
                               <button
-                                onClick={() => handleFullScan(account.id)}
+                                onClick={() => handleFullScan(account.id, account.exchange)}
                                 style={{
                                   fontSize: 10,
                                   padding: '3px 8px',
