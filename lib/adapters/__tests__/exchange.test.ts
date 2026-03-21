@@ -37,6 +37,7 @@ const sampleCcxtTrade = {
 // mapCcxtTrade
 // ---------------------------------------------------------------------------
 import { mapCcxtTrade } from '../ccxt-utils'
+import type { DateRange } from '../../types'
 
 describe('mapCcxtTrade', () => {
   describe('tradeType detection', () => {
@@ -180,6 +181,17 @@ describe('BybitAdapter', () => {
     const trades = await adapter.getTrades('all', { start: '2025-01-01', end: '2025-12-31' })
 
     expect(trades.length).toBe(1)
+  })
+
+  it('passes until to CCXT params when provided', async () => {
+    mockFetchTrades.mockResolvedValue([])
+    const until = 1700000000000
+    const { BybitAdapter } = await import('../bybit')
+    const adapter = new BybitAdapter({ apiKey: 'key', apiSecret: 'secret' })
+    await adapter.getTrades('all', {} as DateRange, 0, 100, until)
+    // fetchMyTrades is called once per category (4 times). Check any call has until in params.
+    const anyCall = mockFetchTrades.mock.calls.find((c) => (c[3] as Record<string, unknown>)?.until === until)
+    expect(anyCall).toBeDefined()
   })
 })
 
@@ -560,5 +572,15 @@ describe('OkxAdapter', () => {
     const trades = await adapter.getTrades('all', { start: '2025-01-01', end: '2025-12-31' })
 
     expect(trades.length).toBe(1)
+  })
+
+  it('passes until to CCXT params when provided', async () => {
+    mockFetchTrades.mockResolvedValue([])
+    const until = 1700000000000
+    const { OkxAdapter } = await import('../okx')
+    const adapter = new OkxAdapter({ apiKey: 'key', apiSecret: 'secret', passphrase: 'pass' })
+    await adapter.getTrades('all', {} as DateRange, 0, 100, until)
+    const anyCall = mockFetchTrades.mock.calls.find((c) => (c[3] as Record<string, unknown>)?.until === until)
+    expect(anyCall).toBeDefined()
   })
 })

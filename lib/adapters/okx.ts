@@ -53,11 +53,13 @@ export class OkxAdapter implements ExchangeAdapter {
     _dateRange: DateRange,
     since?: number,
     limit?: number,
+    until?: number,
   ): Promise<Trade[]> {
+    const untilParam = until !== undefined ? { until } : {}
     const instTypes = ['SPOT', 'SWAP', 'FUTURES', 'OPTION', 'MARGIN'] as const
     const results = await Promise.allSettled(
       instTypes.map((type) =>
-        this.exchange.fetchMyTrades(undefined, since, limit ?? 100, { type, paginate: true }),
+        this.exchange.fetchMyTrades(undefined, since, limit ?? 100, { type, paginate: true, ...untilParam }),
       ),
     )
     const all: Trade[] = []
