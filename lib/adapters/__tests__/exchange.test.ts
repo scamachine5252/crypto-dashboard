@@ -176,6 +176,70 @@ describe('BinanceAdapter', () => {
 
     expect(result).toBe(false)
   })
+
+  describe('fetchBalance', () => {
+    it('queries spot, future, and delivery wallets in parallel', async () => {
+      mockFetchBalance.mockResolvedValue({ total: { USDT: 0 } })
+
+      const { BinanceAdapter } = await import('../binance')
+      const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
+      await adapter.fetchBalance()
+
+      expect(mockFetchBalance).toHaveBeenCalledTimes(3)
+      const calledTypes = mockFetchBalance.mock.calls.map(
+        (c) => (c[0] as Record<string, string>)?.type,
+      )
+      expect(calledTypes).toContain('spot')
+      expect(calledTypes).toContain('future')
+      expect(calledTypes).toContain('delivery')
+    })
+
+    it('sums USDT across all wallet types', async () => {
+      mockFetchBalance.mockImplementation((params: Record<string, string>) => {
+        if (params?.type === 'spot')     return Promise.resolve({ total: { USDT: 1000 } })
+        if (params?.type === 'future')   return Promise.resolve({ total: { USDT: 5000 } })
+        if (params?.type === 'delivery') return Promise.resolve({ total: { USDT: 0 } })
+        return Promise.resolve({ total: {} })
+      })
+
+      const { BinanceAdapter } = await import('../binance')
+      const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
+      const balance = await adapter.fetchBalance()
+
+      expect(balance.usdt).toBe(6000)
+    })
+
+    it('merges non-USDT tokens across wallet types', async () => {
+      mockFetchBalance.mockImplementation((params: Record<string, string>) => {
+        if (params?.type === 'spot')     return Promise.resolve({ total: { USDT: 0, BTC: 0.1 } })
+        if (params?.type === 'future')   return Promise.resolve({ total: { USDT: 0, BTC: 0.2, ETH: 1.0 } })
+        if (params?.type === 'delivery') return Promise.resolve({ total: { USDT: 0 } })
+        return Promise.resolve({ total: {} })
+      })
+
+      const { BinanceAdapter } = await import('../binance')
+      const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
+      const balance = await adapter.fetchBalance()
+
+      expect(balance.tokens['BTC']).toBeCloseTo(0.3)
+      expect(balance.tokens['ETH']).toBe(1.0)
+    })
+
+    it('ignores failed wallet types gracefully', async () => {
+      mockFetchBalance.mockImplementation((params: Record<string, string>) => {
+        if (params?.type === 'spot')     return Promise.reject(new Error('spot unavailable'))
+        if (params?.type === 'future')   return Promise.resolve({ total: { USDT: 5000 } })
+        if (params?.type === 'delivery') return Promise.resolve({ total: { USDT: 0 } })
+        return Promise.resolve({ total: {} })
+      })
+
+      const { BinanceAdapter } = await import('../binance')
+      const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
+      const balance = await adapter.fetchBalance()
+
+      expect(balance.usdt).toBe(5000)
+    })
+  })
 })
 
 // ---------------------------------------------------------------------------

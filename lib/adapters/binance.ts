@@ -21,7 +21,7 @@ export class BinanceAdapter implements ExchangeAdapter {
 
   async testConnection(): Promise<boolean> {
     try {
-      await this.exchange.fetchBalance()
+      await this.fetchBalance()
       return true
     } catch {
       return false
@@ -29,16 +29,33 @@ export class BinanceAdapter implements ExchangeAdapter {
   }
 
   async fetchBalance(): Promise<BalanceResult> {
-    const raw = await this.exchange.fetchBalance()
-    const total = (raw.total ?? {}) as unknown as Record<string, number>
+    const walletTypes = ['spot', 'future', 'delivery'] as const
 
-    const usdt = total['USDT'] ?? 0
+    const results = await Promise.allSettled(
+      walletTypes.map((type) => this.exchange.fetchBalance({ type }))
+    )
+
+    let usdt = 0
     const tokens: Record<string, number> = {}
-    for (const [symbol, amount] of Object.entries(total)) {
-      if (symbol !== 'USDT' && typeof amount === 'number' && amount > 0) {
-        tokens[symbol] = amount
+    let anySucceeded = false
+
+    for (const result of results) {
+      if (result.status !== 'fulfilled') continue
+      anySucceeded = true
+      const total = (result.value.total ?? {}) as unknown as Record<string, number>
+      usdt += total['USDT'] ?? 0
+      for (const [symbol, amount] of Object.entries(total)) {
+        if (symbol !== 'USDT' && typeof amount === 'number' && amount > 0) {
+          tokens[symbol] = (tokens[symbol] ?? 0) + amount
+        }
       }
     }
+
+    if (!anySucceeded) {
+      const firstRejected = results.find((r) => r.status === 'rejected') as PromiseRejectedResult
+      throw firstRejected.reason
+    }
+
     return { usdt, tokens }
   }
 
