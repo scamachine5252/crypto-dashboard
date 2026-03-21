@@ -668,7 +668,7 @@ export default function ApiSettingsPage() {
                         <td className="px-5 py-2.5 whitespace-nowrap">
                           <span className="flex items-center gap-1.5">
                             {/* Full History (Binance only) */}
-                            {account.exchange === 'binance' && (!scanState[account.id] || scanState[account.id].isError || scanState[account.id].completed) && (
+                            {account.exchange === 'binance' && !account.last_full_sync_at && (!scanState[account.id] || scanState[account.id].isError) && (
                               <button
                                 onClick={() => handleFullScan(account.id)}
                                 style={{
