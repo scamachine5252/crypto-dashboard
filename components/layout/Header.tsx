@@ -1,11 +1,17 @@
 'use client'
 
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { useAuth } from '@/lib/auth-context'
 import { useTheme } from '@/lib/theme-context'
 import { useRouter } from 'next/navigation'
 import { TrendingUp, LogOut, User, ChevronDown, Sun, Moon, RefreshCw } from 'lucide-react'
 import NavDropdown from './NavDropdown'
+
+interface AccountMeta {
+  id: string
+  exchange: string
+  last_full_sync_at: string | null
+}
 
 export default function Header() {
   const { user, logout } = useAuth()
@@ -32,8 +38,27 @@ export default function Header() {
 
   const [syncing, setSyncing] = useState(false)
   const [syncMsg, setSyncMsg] = useState<string | null>(null)
+  const [accounts, setAccounts] = useState<AccountMeta[]>([])
+
+  // Load account metadata once on mount — used to detect Binance accounts without full scan
+  useEffect(() => {
+    fetch('/api/accounts')
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data: AccountMeta[]) => setAccounts(data))
+      .catch(() => { /* non-critical — notice simply won't show */ })
+  }, [])
 
   const handleSync = useCallback(async () => {
+    // Block sync if any Binance account hasn't had its first full scan
+    const needsFullScan = accounts.some(
+      (a) => a.exchange === 'binance' && a.last_full_sync_at === null
+    )
+    if (needsFullScan) {
+      setSyncMsg('Load full history in API Settings first')
+      setTimeout(() => setSyncMsg(null), 4000)
+      return
+    }
+
     setSyncing(true)
     setSyncMsg(null)
     try {
@@ -46,7 +71,7 @@ export default function Header() {
       setSyncing(false)
       setTimeout(() => setSyncMsg(null), 3000)
     }
-  }, [])
+  }, [accounts])
 
   return (
     <header
@@ -104,7 +129,7 @@ export default function Header() {
             disabled={syncing}
             className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 border"
             style={{
-              background: syncing ? 'var(--bg-secondary)' : 'var(--bg-secondary)',
+              background: 'var(--bg-secondary)',
               borderColor: syncMsg === 'Sync failed' ? 'var(--accent-loss)' : syncMsg ? 'var(--accent-profit)' : 'var(--border-subtle)',
               color: syncMsg === 'Sync failed' ? 'var(--accent-loss)' : syncMsg ? 'var(--accent-profit)' : 'var(--text-muted)',
               opacity: syncing ? 0.7 : 1,
