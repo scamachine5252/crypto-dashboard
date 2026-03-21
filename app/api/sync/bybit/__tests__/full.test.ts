@@ -165,6 +165,41 @@ describe('POST /api/sync/bybit/full', () => {
     expect(res.status).toBe(500)
   })
 
+  it('returns 500 if getTrades throws', async () => {
+    mockSelectEqSingle.mockResolvedValue({
+      data: { id: 'uuid-1', api_key: 'enc-key', api_secret: 'enc-sec' },
+      error: null,
+    })
+    mockGetTrades.mockRejectedValue(new Error('exchange timeout'))
+
+    const { POST } = await import('../full/route')
+    const res = await POST(makePost({ account_id: 'uuid-1', chunk_index: 0 }))
+
+    expect(res.status).toBe(500)
+    const json = await res.json()
+    expect(json.error).toMatch(/exchange timeout/)
+  })
+
+  it('passes correct time window to getTrades based on chunk_index', async () => {
+    mockSelectEqSingle.mockResolvedValue({
+      data: { id: 'uuid-1', api_key: 'enc-key', api_secret: 'enc-sec' },
+      error: null,
+    })
+    mockGetTrades.mockResolvedValue([])
+    mockUpsert.mockResolvedValue({ error: null })
+
+    const { POST } = await import('../full/route')
+    const res = await POST(makePost({ account_id: 'uuid-1', chunk_index: 0 }))
+
+    expect(res.status).toBe(200)
+    // Verify getTrades was called with since and until as numbers, 30 days apart
+    const [, , since, limit, until] = mockGetTrades.mock.calls[0]
+    expect(typeof since).toBe('number')
+    expect(typeof until).toBe('number')
+    expect(limit).toBe(1000)
+    expect(until - since).toBe(30 * 24 * 60 * 60 * 1000)
+  })
+
   it('deduplicates trades with same account_id/symbol/openedAt before upsert', async () => {
     mockSelectEqSingle.mockResolvedValue({
       data: { id: 'uuid-1', api_key: 'enc-key', api_secret: 'enc-sec' },

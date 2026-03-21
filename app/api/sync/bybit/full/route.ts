@@ -42,7 +42,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     apiSecret: decrypt((account as Record<string, string>).api_secret),
   })
 
-  const trades = await adapter.getTrades('all', {} as DateRange, since, 1000, until)
+  let trades: Trade[]
+  try {
+    trades = await adapter.getTrades('all', {} as DateRange, since, 1000, until)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return NextResponse.json({ error: message }, { status: 500 })
+  }
 
   let synced = 0
   if (trades.length > 0) {
