@@ -32,7 +32,7 @@ const EMPTY_FORM = {
   fund:          'Cicada Foundation',
   exchangeId:    '' as ExchangeId | '',
   accountName:   '',
-  instrument:    'spot',   // account type: spot | futures | options
+  instrument:    'unified',   // account type: unified | spot | futures | options
   apiKey:        '',
   apiSecret:     '',
   passphrase:    '',
@@ -327,6 +327,7 @@ export default function ApiSettingsPage() {
 
           {/* Account Type */}
           <FieldSelect label="Account Type" value={form.instrument} onChange={(v) => patch('instrument', v)}>
+            <option value="unified">Unified</option>
             <option value="spot">Spot</option>
             <option value="futures">Futures</option>
             <option value="options">Options</option>
