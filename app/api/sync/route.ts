@@ -83,7 +83,10 @@ async function runSync(): Promise<NextResponse> {
       }
 
       // Fetch and upsert trades
-      const trades = await adapter.getTrades('all', dateRange)
+      const since = row.exchange === 'binance'
+        ? Date.now() - 48 * 60 * 60 * 1000
+        : undefined
+      const trades = await adapter.getTrades('all', dateRange, since)
       diag.tradesFetched = trades.length
       if (trades.length > 0) {
         const allTrades = trades.map((t) => ({
