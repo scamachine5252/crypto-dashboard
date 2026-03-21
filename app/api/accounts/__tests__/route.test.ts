@@ -74,7 +74,7 @@ describe('POST /api/accounts', () => {
     expect(json.error).toMatch(/exchange/i)
   })
 
-  it('returns 400 if instrument is not spot/futures/options', async () => {
+  it('returns 400 if instrument is not valid', async () => {
     const { POST } = await import('../route')
     const req = makePost({ ...validBody, instrument: 'nft' })
     const res = await POST(req)
@@ -192,18 +192,14 @@ describe('POST /api/accounts', () => {
     })
 
     const { POST } = await import('../route')
-    const request = new NextRequest('http://localhost/api/accounts', {
-      method: 'POST',
-      body: JSON.stringify({
-        fund: 'Test Fund',
-        exchange: 'bybit',
-        account_name: 'Test Account',
-        instrument: 'unified',
-        api_key: 'key123',
-        api_secret: 'secret123',
-      }),
-    })
-    const response = await POST(request)
+    const response = await POST(makePost({
+      fund: 'Test Fund',
+      exchange: 'bybit',
+      account_name: 'Test Account',
+      instrument: 'unified',
+      api_key: 'key123',
+      api_secret: 'secret123',
+    }))
     expect(response.status).toBe(201)
   })
 
@@ -218,20 +214,19 @@ describe('POST /api/accounts', () => {
     })
 
     const { POST } = await import('../route')
-    const request = new NextRequest('http://localhost/api/accounts', {
-      method: 'POST',
-      body: JSON.stringify({
-        fund: 'Test Fund',
-        exchange: 'bybit',
-        account_name: 'Test Account',
-        api_key: 'key123',
-        api_secret: 'secret123',
-      }),
-    })
-    const response = await POST(request)
+    const response = await POST(makePost({
+      fund: 'Test Fund',
+      exchange: 'bybit',
+      account_name: 'Test Account',
+      api_key: 'key123',
+      api_secret: 'secret123',
+    }))
     expect(response.status).toBe(201)
     const body = await response.json()
     expect(body.instrument).toBe('unified')
+    expect(mockInsert).toHaveBeenCalledWith(
+      expect.objectContaining({ instrument: 'unified' })
+    )
   })
 })
 
