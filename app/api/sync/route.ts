@@ -34,8 +34,10 @@ async function runSync(): Promise<NextResponse> {
   let errors = 0
   const syncedAccounts: string[] = []
   const dateRange: DateRange = { start: '2000-01-01', end: '2099-12-31' }
+  const diagnostics: Record<string, unknown>[] = []
 
   for (const row of rows) {
+    const diag: Record<string, unknown> = { account: row.account_name, exchange: row.exchange }
     try {
       const apiKey    = decrypt(row.api_key)
       const apiSecret = decrypt(row.api_secret)
@@ -59,6 +61,7 @@ async function runSync(): Promise<NextResponse> {
 
       // Fetch and persist balance
       const balance = await adapter.fetchBalance()
+      diag.balance = { usdt: balance.usdt, tokens: Object.keys(balance.tokens) }
       const recordedAt = new Date().toISOString()
 
       // One row for USDT
@@ -81,6 +84,7 @@ async function runSync(): Promise<NextResponse> {
 
       // Fetch and upsert trades
       const trades = await adapter.getTrades('all', dateRange)
+      diag.tradesFetched = trades.length
       if (trades.length > 0) {
         const tradesToInsert = trades.map((t) => ({
           account_id:  row.id,
@@ -100,19 +104,28 @@ async function runSync(): Promise<NextResponse> {
         const { error: tradesError } = await supabaseAdmin
           .from('trades')
           .upsert(tradesToInsert, { onConflict: 'account_id,symbol,opened_at' })
-        if (tradesError) console.error('Trades upsert error:', JSON.stringify(tradesError))
+        if (tradesError) {
+          diag.tradesUpsertError = tradesError
+          console.error('Trades upsert error:', JSON.stringify(tradesError))
+        } else {
+          diag.tradesUpserted = trades.length
+        }
       }
 
+      diag.status = 'ok'
       synced++
       syncedAccounts.push(row.account_name)
     } catch (error) {
+      diag.status = 'error'
+      diag.error = error instanceof Error ? error.message : String(error)
       console.error(`Sync error for account ${row.account_name}:`, error)
       errors++
     }
+    diagnostics.push(diag)
   }
 
   return NextResponse.json(
-    { synced, errors, accounts: syncedAccounts },
+    { synced, errors, accounts: syncedAccounts, diagnostics },
     { status: 200 },
   )
 }
