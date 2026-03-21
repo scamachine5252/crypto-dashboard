@@ -107,13 +107,17 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 // ---------------------------------------------------------------------------
 export async function PATCH(req: NextRequest): Promise<NextResponse> {
   const body = await req.json() as Record<string, unknown>
-  const accountId = body.account_id as string | undefined
+  const accountId   = body.account_id   as string | undefined
+  const failedCount = body.failed_count as number | undefined
 
   if (!accountId) return NextResponse.json({ error: 'account_id required' }, { status: 400 })
 
   const { error } = await supabaseAdmin
     .from('accounts')
-    .update({ last_full_sync_at: new Date().toISOString() })
+    .update({
+      last_full_sync_at:       new Date().toISOString(),
+      full_sync_failed_count:  typeof failedCount === 'number' ? failedCount : 0,
+    })
     .eq('id', accountId)
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })

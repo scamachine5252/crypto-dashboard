@@ -14,7 +14,8 @@ interface AccountRow {
   account_name: string
   instrument: string
   account_id_memo?: string
-  last_full_sync_at?: string | null   // populated after a full Binance history scan
+  last_full_sync_at?: string | null        // populated after a full Binance history scan
+  full_sync_failed_count?: number | null   // symbols that failed during last full scan
   status: 'connected' | 'error' | 'not_configured'
   passphrase?: never       // never returned by API
   api_key?: never          // never returned by API
@@ -207,7 +208,7 @@ export default function ApiSettingsPage() {
       await fetch('/api/sync/binance/full', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ account_id: accountId, done: true }),
+        body: JSON.stringify({ account_id: accountId, failed_count: allFailed.length }),
       })
 
       setScanState((prev) => ({
@@ -652,10 +653,18 @@ export default function ApiSettingsPage() {
                             )
                             if (state?.isError) return <span style={{ color: 'var(--accent-loss)' }}>Error</span>
                             if (account.last_full_sync_at) {
+                              const failedCount = account.full_sync_failed_count ?? 0
                               return (
-                                <span style={{ color: 'var(--text-muted)' }}>
-                                  {new Date(account.last_full_sync_at).toLocaleDateString()}
-                                </span>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                                  <span style={{ color: 'var(--text-muted)' }}>
+                                    {new Date(account.last_full_sync_at).toLocaleDateString()}
+                                  </span>
+                                  {failedCount > 0 && (
+                                    <span style={{ color: 'var(--accent-gold)', fontSize: 10 }}>
+                                      ⚠ {failedCount} symbols failed
+                                    </span>
+                                  )}
+                                </div>
                               )
                             }
                             return <span style={{ color: 'var(--text-muted)', opacity: 0.5 }}>Never</span>
@@ -668,7 +677,7 @@ export default function ApiSettingsPage() {
                         <td className="px-5 py-2.5 whitespace-nowrap">
                           <span className="flex items-center gap-1.5">
                             {/* Full History (Binance only) */}
-                            {account.exchange === 'binance' && !account.last_full_sync_at && (!scanState[account.id] || scanState[account.id].isError) && (
+                            {account.exchange === 'binance' && (!scanState[account.id] || scanState[account.id].isError || scanState[account.id].completed) && (
                               <button
                                 onClick={() => handleFullScan(account.id)}
                                 style={{
