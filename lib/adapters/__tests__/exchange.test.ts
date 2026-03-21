@@ -384,6 +384,22 @@ describe('BinanceAdapter', () => {
 
       expect(trades).toEqual([])
     })
+
+    it('returns trades from successful symbols when some symbols fail', async () => {
+      mockFetchBalance.mockResolvedValue({ total: { USDT: 100 } })
+      mockFetchTrades.mockImplementation((symbol: string) => {
+        if (symbol === 'BTC/USDT') return Promise.resolve([{ ...sampleCcxtTrade, symbol: 'BTC/USDT' }])
+        if (symbol === 'ETH/USDT') return Promise.reject(new Error('invalid symbol'))
+        return Promise.resolve([])
+      })
+
+      const { BinanceAdapter } = await import('../binance')
+      const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
+      const trades = await adapter.getTrades('all', { start: '2025-01-01', end: '2025-12-31' }, Date.now() - 48 * 3600_000)
+
+      expect(trades.length).toBeGreaterThan(0)
+      expect(trades.some((t) => t.symbol === 'BTC/USDT')).toBe(true)
+    })
   })
 })
 

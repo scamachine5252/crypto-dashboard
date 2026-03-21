@@ -71,8 +71,9 @@ export class BinanceAdapter implements ExchangeAdapter {
     }
 
     if (!anySucceeded) {
-      const firstRejected = results.find((r) => r.status === 'rejected') as PromiseRejectedResult
-      throw firstRejected.reason
+      const firstRejected = results.find((r): r is PromiseRejectedResult => r.status === 'rejected')
+      if (firstRejected) throw firstRejected.reason
+      throw new Error('fetchBalance: all wallet types failed')
     }
 
     return { usdt, tokens }
