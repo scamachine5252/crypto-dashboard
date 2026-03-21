@@ -12,7 +12,7 @@ async function loadSortedUsdtSymbols(): Promise<string[]> {
   const exchange = new ccxt.binance()
   const markets = await exchange.loadMarkets()
   return Object.values(markets)
-    .filter((m) => m.quote === 'USDT')
+    .filter((m): m is NonNullable<typeof m> => m != null && m.quote === 'USDT')
     .map((m) => m.symbol)
     .sort()
 }

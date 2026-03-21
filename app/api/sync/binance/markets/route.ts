@@ -10,7 +10,7 @@ export async function GET(_req: NextRequest): Promise<NextResponse> {
     const markets = await exchange.loadMarkets()
 
     const symbols = Object.values(markets)
-      .filter((m) => m.quote === 'USDT')
+      .filter((m): m is NonNullable<typeof m> => m != null && m.quote === 'USDT')
       .map((m) => m.symbol)
 
     const totalSymbols = symbols.length
