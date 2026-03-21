@@ -14,6 +14,7 @@ interface AccountRow {
   account_name: string
   instrument: string
   account_id_memo?: string
+  last_full_sync_at?: string | null   // populated after a full Binance history scan
   status: 'connected' | 'error' | 'not_configured'
   passphrase?: never       // never returned by API
   api_key?: never          // never returned by API
@@ -139,6 +140,10 @@ export default function ApiSettingsPage() {
   const [form, setForm]             = useState(EMPTY_FORM)
   const [newFundDraft, setNewFundDraft] = useState('')
 
+  type ScanEntry = { current: number; total: number; failed: { symbol: string; error: string }[] }
+  const [scanState, setScanState] = useState<Record<string, ScanEntry | 'done' | 'error'>>({})
+
+
   // ---------------------------------------------------------------------------
   // Load accounts from API on mount
   // ---------------------------------------------------------------------------
@@ -158,6 +163,59 @@ export default function ApiSettingsPage() {
   }, [])
 
   useEffect(() => { fetchAccounts() }, [fetchAccounts])
+
+  // ---------------------------------------------------------------------------
+  // Full Binance history scan — iterates symbol chunks, shows progress bar
+  // ---------------------------------------------------------------------------
+  const handleFullScan = useCallback(async (accountId: string) => {
+    setScanState((prev) => ({ ...prev, [accountId]: { current: 0, total: 0, failed: [] } }))
+
+    try {
+      const marketsRes = await fetch(`/api/sync/binance/markets?account_id=${accountId}`)
+      if (!marketsRes.ok) throw new Error('Failed to load markets')
+      const { totalChunks, totalSymbols } = (await marketsRes.json()) as {
+        totalChunks: number; chunkSize: number; totalSymbols: number
+      }
+
+      setScanState((prev) => ({
+        ...prev,
+        [accountId]: { current: 0, total: totalSymbols, failed: [] },
+      }))
+
+      const allFailed: { symbol: string; error: string }[] = []
+
+      for (let i = 0; i < totalChunks; i++) {
+        const res = await fetch('/api/sync/binance/full', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ account_id: accountId, chunk_index: i }),
+        })
+        if (res.ok) {
+          const data = (await res.json()) as {
+            synced: number; failedSymbols: { symbol: string; error: string }[]
+          }
+          allFailed.push(...data.failedSymbols)
+        }
+        const symbolsDone = Math.min((i + 1) * 50, totalSymbols)
+        setScanState((prev) => ({
+          ...prev,
+          [accountId]: { current: symbolsDone, total: totalSymbols, failed: allFailed },
+        }))
+      }
+
+      // Mark scan complete
+      await fetch('/api/sync/binance/full', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_id: accountId, done: true }),
+      })
+
+      setScanState((prev) => ({ ...prev, [accountId]: 'done' }))
+      await fetchAccounts()
+    } catch {
+      setScanState((prev) => ({ ...prev, [accountId]: 'error' }))
+    }
+  }, [fetchAccounts])
 
   const patch = useCallback((field: keyof typeof EMPTY_FORM, value: string) => {
     setForm((prev) => ({ ...prev, [field]: value }))
@@ -198,12 +256,16 @@ export default function ApiSettingsPage() {
         setError(json.error ?? 'Failed to create account')
         return
       }
+      const json = await res.json() as { id?: string }
       resetForm()
       await fetchAccounts()
+      if (form.exchangeId === 'binance' && json.id) {
+        handleFullScan(json.id)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error')
     }
-  }, [form, newFundDraft, resetForm, fetchAccounts])
+  }, [form, newFundDraft, resetForm, fetchAccounts, handleFullScan])
 
   // ---------------------------------------------------------------------------
   // Edit — populate form (no API call needed, data is already loaded)
@@ -466,7 +528,7 @@ export default function ApiSettingsPage() {
               <table className="w-full text-xs">
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                    {['Account Name', 'Fund', 'Exchange', 'Instrument', 'Status', 'Actions'].map((col) => (
+                    {['Account Name', 'Fund', 'Exchange', 'Instrument', 'Status', 'Last Synced', 'Actions'].map((col) => (
                       <th
                         key={col}
                         className="px-5 py-2.5 text-left font-medium whitespace-nowrap"
@@ -554,9 +616,68 @@ export default function ApiSettingsPage() {
                           </span>
                         </td>
 
+                        {/* Last Synced */}
+                        <td style={{ padding: '8px 12px', fontSize: 11, color: 'var(--text-secondary)' }}>
+                          {account.exchange === 'binance' ? (() => {
+                            const state = scanState[account.id]
+                            if (state && state !== 'done' && state !== 'error') {
+                              return (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                  <span style={{ color: 'var(--text-muted)', fontFamily: 'monospace', fontSize: 10 }}>
+                                    ⟳ {state.current} / {state.total}
+                                  </span>
+                                  <div style={{ width: 100, height: 3, background: 'var(--bg-elevated)', borderRadius: 2, overflow: 'hidden' }}>
+                                    <div style={{
+                                      height: '100%',
+                                      background: 'var(--accent-profit)',
+                                      width: state.total > 0 ? `${(state.current / state.total) * 100}%` : '0%',
+                                      transition: 'width 0.3s ease',
+                                    }} />
+                                  </div>
+                                  {state.failed.length > 0 && (
+                                    <span style={{ color: 'var(--accent-loss)', fontSize: 10 }}>
+                                      ⚠ {state.failed.length} failed
+                                    </span>
+                                  )}
+                                </div>
+                              )
+                            }
+                            if (state === 'done') return <span style={{ color: 'var(--accent-profit)' }}>✓ Done</span>
+                            if (state === 'error') return <span style={{ color: 'var(--accent-loss)' }}>Error</span>
+                            if (account.last_full_sync_at) {
+                              return (
+                                <span style={{ color: 'var(--text-muted)' }}>
+                                  {new Date(account.last_full_sync_at).toLocaleDateString()}
+                                </span>
+                              )
+                            }
+                            return <span style={{ color: 'var(--text-muted)', opacity: 0.5 }}>Never</span>
+                          })() : (
+                            <span style={{ color: 'var(--text-muted)', opacity: 0.4 }}>—</span>
+                          )}
+                        </td>
+
                         {/* Actions */}
                         <td className="px-5 py-2.5 whitespace-nowrap">
                           <span className="flex items-center gap-1.5">
+                            {/* Full History (Binance only) */}
+                            {account.exchange === 'binance' && !scanState[account.id] && (
+                              <button
+                                onClick={() => handleFullScan(account.id)}
+                                style={{
+                                  fontSize: 10,
+                                  padding: '3px 8px',
+                                  border: '1px solid var(--border-medium)',
+                                  background: 'transparent',
+                                  color: 'var(--accent-blue)',
+                                  cursor: 'pointer',
+                                  letterSpacing: '0.05em',
+                                }}
+                              >
+                                FULL HISTORY
+                              </button>
+                            )}
+
                             {/* Test */}
                             <button
                               onClick={() => handleTest(account)}
