@@ -37,7 +37,7 @@ export function mapCcxtTrade(
     typeof info['leverage'] === 'string' ? Number(info['leverage']) :
     1
 
-  const tradeType: TradeType = leverage > 1 ? 'futures' : 'spot'
+  const tradeType: TradeType = t.symbol?.includes(':') ? 'futures' : 'spot'
 
   return {
     id:           String(t.id ?? Math.random()),

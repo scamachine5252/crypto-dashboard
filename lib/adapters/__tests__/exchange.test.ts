@@ -34,6 +34,41 @@ const sampleCcxtTrade = {
 }
 
 // ---------------------------------------------------------------------------
+// mapCcxtTrade
+// ---------------------------------------------------------------------------
+import { mapCcxtTrade } from '../ccxt-utils'
+
+describe('mapCcxtTrade', () => {
+  describe('tradeType detection', () => {
+    it('classifies spot symbol (no colon) as spot', () => {
+      const trade = mapCcxtTrade({ symbol: 'BTC/USDT', side: 'buy' }, 'binance')
+      expect(trade.tradeType).toBe('spot')
+    })
+
+    it('classifies linear futures symbol (colon-separated) as futures', () => {
+      const trade = mapCcxtTrade({ symbol: 'BTC/USDT:USDT', side: 'buy' }, 'bybit')
+      expect(trade.tradeType).toBe('futures')
+    })
+
+    it('classifies inverse futures symbol as futures', () => {
+      const trade = mapCcxtTrade({ symbol: 'BTC/USD:BTC', side: 'buy' }, 'bybit')
+      expect(trade.tradeType).toBe('futures')
+    })
+
+    it('classifies option symbol as futures', () => {
+      const trade = mapCcxtTrade({ symbol: 'BTC/USDT:USDT-250101-50000-C', side: 'buy' }, 'okx')
+      expect(trade.tradeType).toBe('futures')
+    })
+
+    it('classifies 1x leverage futures correctly as futures (regression test)', () => {
+      // leverage=1 + colon symbol = futures (old heuristic would misclassify this as spot)
+      const trade = mapCcxtTrade({ symbol: 'ETH/USDT:USDT', side: 'buy', info: { leverage: 1 } }, 'bybit')
+      expect(trade.tradeType).toBe('futures')
+    })
+  })
+})
+
+// ---------------------------------------------------------------------------
 // BybitAdapter
 // ---------------------------------------------------------------------------
 describe('BybitAdapter', () => {
