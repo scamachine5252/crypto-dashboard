@@ -66,10 +66,12 @@ export class BinanceAdapter implements ExchangeAdapter {
   async getTrades(
     _subAccountId: string,
     _dateRange: DateRange,
-    since?: number,
-    limit?: number,
+    _since?: number,
+    _limit?: number,
   ): Promise<Trade[]> {
-    const raw = await this.exchange.fetchMyTrades(undefined, since, limit ?? 100)
-    return raw.map((t) => mapCcxtTrade(t, 'binance'))
+    // Binance fetchMyTrades requires a specific symbol — fetching all trades
+    // without a symbol is not supported by the Binance API. Returning empty
+    // until symbol-based fetching is implemented (Block 5 roadmap).
+    return []
   }
 }

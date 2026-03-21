@@ -86,7 +86,7 @@ async function runSync(): Promise<NextResponse> {
       const trades = await adapter.getTrades('all', dateRange)
       diag.tradesFetched = trades.length
       if (trades.length > 0) {
-        const tradesToInsert = trades.map((t) => ({
+        const allTrades = trades.map((t) => ({
           account_id:  row.id,
           exchange:    row.exchange,
           symbol:      t.symbol,
@@ -101,6 +101,15 @@ async function runSync(): Promise<NextResponse> {
           closed_at:   t.closedAt,
           trade_type:  t.tradeType,
         }))
+        // Deduplicate by unique constraint key — PostgreSQL cannot upsert
+        // the same key twice in one command
+        const seen = new Set<string>()
+        const tradesToInsert = allTrades.filter((t) => {
+          const key = `${t.account_id}|${t.symbol}|${t.opened_at}`
+          if (seen.has(key)) return false
+          seen.add(key)
+          return true
+        })
         const { error: tradesError } = await supabaseAdmin
           .from('trades')
           .upsert(tradesToInsert, { onConflict: 'account_id,symbol,opened_at' })
