@@ -289,6 +289,102 @@ describe('BinanceAdapter', () => {
       await expect(adapter.fetchBalance()).rejects.toThrow()
     })
   })
+
+  describe('getTrades (quick sync)', () => {
+    beforeEach(() => {
+      jest.clearAllMocks()
+      mockFetchBalance.mockReset()
+      mockFetchTrades.mockReset()
+    })
+
+    it('calls fetchBalance({type: spot}) to derive token symbol list', async () => {
+      mockFetchBalance.mockResolvedValue({ total: { USDT: 100, BTC: 0.5 } })
+      mockFetchTrades.mockResolvedValue([])
+
+      const { BinanceAdapter } = await import('../binance')
+      const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
+      await adapter.getTrades('all', { start: '2025-01-01', end: '2025-12-31' }, Date.now() - 48 * 3600_000)
+
+      expect(mockFetchBalance).toHaveBeenCalledWith({ type: 'spot' })
+    })
+
+    it('includes token-derived symbol in the fetch list', async () => {
+      mockFetchBalance.mockResolvedValue({ total: { USDT: 100, SOL: 10 } })
+      mockFetchTrades.mockResolvedValue([])
+
+      const { BinanceAdapter } = await import('../binance')
+      const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
+      await adapter.getTrades('all', { start: '2025-01-01', end: '2025-12-31' }, Date.now() - 48 * 3600_000)
+
+      const calledSymbols = mockFetchTrades.mock.calls.map((c) => c[0] as string)
+      expect(calledSymbols).toContain('SOL/USDT')
+    })
+
+    it('always includes BTC/USDT and ETH/USDT from hardcoded top-50 list', async () => {
+      mockFetchBalance.mockResolvedValue({ total: { USDT: 100 } })
+      mockFetchTrades.mockResolvedValue([])
+
+      const { BinanceAdapter } = await import('../binance')
+      const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
+      await adapter.getTrades('all', { start: '2025-01-01', end: '2025-12-31' }, Date.now() - 48 * 3600_000)
+
+      const calledSymbols = mockFetchTrades.mock.calls.map((c) => c[0] as string)
+      expect(calledSymbols).toContain('BTC/USDT')
+      expect(calledSymbols).toContain('ETH/USDT')
+    })
+
+    it('deduplicates symbols — BTC in balance AND top-50 is fetched only once', async () => {
+      mockFetchBalance.mockResolvedValue({ total: { USDT: 100, BTC: 0.1 } })
+      mockFetchTrades.mockResolvedValue([])
+
+      const { BinanceAdapter } = await import('../binance')
+      const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
+      await adapter.getTrades('all', { start: '2025-01-01', end: '2025-12-31' }, Date.now() - 48 * 3600_000)
+
+      const calledSymbols = mockFetchTrades.mock.calls.map((c) => c[0] as string)
+      expect(calledSymbols.filter((s) => s === 'BTC/USDT')).toHaveLength(1)
+    })
+
+    it('passes since parameter to every fetchMyTrades call', async () => {
+      mockFetchBalance.mockResolvedValue({ total: { USDT: 100 } })
+      mockFetchTrades.mockResolvedValue([])
+      const since = Date.now() - 48 * 3600_000
+
+      const { BinanceAdapter } = await import('../binance')
+      const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
+      await adapter.getTrades('all', { start: '2025-01-01', end: '2025-12-31' }, since)
+
+      mockFetchTrades.mock.calls.forEach((call) => {
+        expect(call[1]).toBe(since)
+      })
+    })
+
+    it('maps returned ccxt trades to Trade objects', async () => {
+      mockFetchBalance.mockResolvedValue({ total: { USDT: 100 } })
+      mockFetchTrades.mockImplementation((symbol: string) => {
+        if (symbol === 'BTC/USDT') return Promise.resolve([{ ...sampleCcxtTrade, symbol: 'BTC/USDT' }])
+        return Promise.resolve([])
+      })
+
+      const { BinanceAdapter } = await import('../binance')
+      const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
+      const trades = await adapter.getTrades('all', { start: '2025-01-01', end: '2025-12-31' }, Date.now() - 48 * 3600_000)
+
+      expect(trades.length).toBeGreaterThan(0)
+      expect(trades[0].symbol).toBe('BTC/USDT')
+    })
+
+    it('skips a symbol silently if fetchMyTrades throws — does not crash', async () => {
+      mockFetchBalance.mockResolvedValue({ total: { USDT: 100 } })
+      mockFetchTrades.mockRejectedValue(new Error('invalid symbol'))
+
+      const { BinanceAdapter } = await import('../binance')
+      const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
+      const trades = await adapter.getTrades('all', { start: '2025-01-01', end: '2025-12-31' }, Date.now() - 48 * 3600_000)
+
+      expect(trades).toEqual([])
+    })
+  })
 })
 
 // ---------------------------------------------------------------------------

@@ -9,6 +9,25 @@ interface BinanceCredentials {
   apiSecret: string
 }
 
+export interface FullTradesResult {
+  trades: Trade[]
+  failedSymbols: { symbol: string; error: string }[]
+}
+
+// Top-50 most-traded USDT pairs — always included in quick sync
+const TOP_50_SYMBOLS = [
+  'BTC/USDT',   'ETH/USDT',   'BNB/USDT',   'SOL/USDT',   'XRP/USDT',
+  'DOGE/USDT',  'ADA/USDT',   'AVAX/USDT',  'SHIB/USDT',  'TRX/USDT',
+  'TON/USDT',   'LINK/USDT',  'DOT/USDT',   'MATIC/USDT', 'DAI/USDT',
+  'LTC/USDT',   'BCH/USDT',   'UNI/USDT',   'ATOM/USDT',  'XLM/USDT',
+  'FIL/USDT',   'NEAR/USDT',  'APT/USDT',   'ARB/USDT',   'OP/USDT',
+  'ALGO/USDT',  'HBAR/USDT',  'CRO/USDT',   'QNT/USDT',   'EGLD/USDT',
+  'FLOW/USDT',  'SAND/USDT',  'MANA/USDT',  'AXS/USDT',   'THETA/USDT',
+  'XTZ/USDT',   'EOS/USDT',   'FTM/USDT',   'GALA/USDT',  'ENJ/USDT',
+  'CHZ/USDT',   'BAT/USDT',   'ZIL/USDT',   'CRV/USDT',   'AAVE/USDT',
+  'SUSHI/USDT', 'COMP/USDT',  'MKR/USDT',   'SNX/USDT',   'YFI/USDT',
+]
+
 export class BinanceAdapter implements ExchangeAdapter {
   private exchange: ccxt.binance
 
@@ -66,12 +85,41 @@ export class BinanceAdapter implements ExchangeAdapter {
   async getTrades(
     _subAccountId: string,
     _dateRange: DateRange,
-    _since?: number,
+    since?: number,
     _limit?: number,
   ): Promise<Trade[]> {
-    // Binance fetchMyTrades requires a specific symbol — fetching all trades
-    // without a symbol is not supported by the Binance API. Returning empty
-    // until symbol-based fetching is implemented (Block 5 roadmap).
-    return []
+    // Fetch spot balance to derive token-based symbol list
+    let balanceTokens: string[] = []
+    try {
+      const bal = await this.exchange.fetchBalance({ type: 'spot' })
+      const total = (bal.total ?? {}) as unknown as Record<string, number>
+      balanceTokens = Object.entries(total)
+        .filter(([sym, amt]) => sym !== 'USDT' && typeof amt === 'number' && amt > 0)
+        .map(([sym]) => `${sym}/USDT`)
+    } catch {
+      // If balance fetch fails, proceed with top-50 only
+    }
+
+    const symbolSet = new Set([...TOP_50_SYMBOLS, ...balanceTokens])
+    const symbols = Array.from(symbolSet)
+
+    const trades: Trade[] = []
+    for (const symbol of symbols) {
+      try {
+        const raw = await this.exchange.fetchMyTrades(symbol, since, 1000)
+        for (const t of raw) trades.push(mapCcxtTrade(t, 'binance'))
+      } catch {
+        // Skip symbol on error — not fatal for quick sync
+      }
+    }
+    return trades
+  }
+
+  // Full 180-day scan — called by /api/sync/binance/full only (not on ExchangeAdapter interface).
+  // Note: accountId is intentionally NOT a parameter — the route owns account identity;
+  // this method only receives the symbol slice for the current chunk.
+  async getFullTrades(_symbols: string[]): Promise<FullTradesResult> {
+    // Stub — implemented in Task 3
+    return { trades: [], failedSymbols: [] }
   }
 }
