@@ -211,6 +211,45 @@ crypto-dashboard/          ← project root (NOT src/)
 
 ---
 
+## Next Steps (approved plan)
+
+### Block 1 — Unified Account
+- Step 1.1: Migration 007 — add `'unified'` to instrument enum, make optional, update existing records
+- Step 1.2: Update `POST /api/accounts` validation to accept `'unified'` and null
+- Step 1.3: Update API Settings form — add "Unified" as default option
+- Step 1.4: Update tests
+
+### Block 2 — Header cleanup
+- Step 2.1: Remove Total PnL and Fund badge from `Header.tsx` (all pages)
+
+### Block 3 — Dashboard
+- Step 3.1: Replace exchange cards with fund cards (grouped by fund name, show AUM + PnL)
+- Step 3.2: Connect real data — metrics from Supabase trades, chart from Supabase balances
+
+### Block 4 — Open Positions (Performance page)
+- Step 4.1: Create `GET /api/positions` — real-time `fetchPositions()` via CCXT
+- Step 4.2: Add Open Positions section under Equity Curves on Performance page
+  - Columns: Symbol, Side, Size, Entry, Mark, Notional, Unrealized PnL, Leverage, Margin
+  - Header summary: Total Unrealized PnL + Total Notional
+  - Features: account/exchange filter, PnL color coding, loading state
+
+### Block 5 — Replace mock data
+- Step 5.1: History page — real trades from Supabase
+- Step 5.2: Results page — real balances and trades
+
+### Key decisions made
+- Dashboard cards grouped by Fund (not by exchange)
+- Total PnL and Fund badge removed from header
+- Account Type: `'unified'` as default, optional field
+- Existing accounts: `UPDATE` to `'unified'` in migration 007
+- Binance trades: fetch by symbol from balance (known limitation for exotic pairs)
+- Bybit trades: 4 categories (`spot`, `linear`, `inverse`, `option`)
+- OKX trades: 5 instTypes (`SPOT`, `SWAP`, `FUTURES`, `OPTION`, `MARGIN`)
+- Vercel region: `fra1` (Frankfurt) — required for Bybit CloudFront
+- Cron: daily at `09:00 UTC` (Hobby plan limitation)
+
+---
+
 ## Site Structure
 
 Five pages. All share: the same nav shell, the same period selector (1D / Week / Month / Year / Manual range picker), and the same exchange/sub-account filter state. Architecture must make adding a sixth page trivial — one new route + one new entry in the nav config.
