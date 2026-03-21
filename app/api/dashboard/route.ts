@@ -1,14 +1,7 @@
 import 'server-only'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/server'
-
-interface FundSummary { fund: string; aum: number; totalPnl: number; pnlPct: number }
-interface DashboardMetrics {
-  totalPnl: number; totalFees: number; totalTrades: number; winRate: number
-  profitFactor: number; avgWin: number; avgLoss: number; sharpeRatio: number
-  sortinoRatio: number; maxDrawdown: number; cagr: number; annualYield: number; riskRewardRatio: number
-}
-interface ChartDataPoint { period: string; pnl: number; cumulativePnl: number }
+import type { FundSummary, DashboardMetrics, ChartDataPoint } from '@/lib/types'
 
 function emptyMetrics(): DashboardMetrics {
   return { totalPnl: 0, totalFees: 0, totalTrades: 0, winRate: 0, profitFactor: 0, avgWin: 0, avgLoss: 0, sharpeRatio: 0, sortinoRatio: 0, maxDrawdown: 0, cagr: 0, annualYield: 0, riskRewardRatio: 0 }

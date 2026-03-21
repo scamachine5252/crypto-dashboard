@@ -175,6 +175,29 @@ export interface AccountSnapshot {
   pnl: number
 }
 
+export interface FundSummary {
+  fund: string
+  aum: number
+  totalPnl: number
+  pnlPct: number
+}
+
+export interface DashboardMetrics {
+  totalPnl: number
+  totalFees: number
+  totalTrades: number
+  winRate: number
+  profitFactor: number
+  avgWin: number
+  avgLoss: number
+  sharpeRatio: number
+  sortinoRatio: number
+  maxDrawdown: number
+  cagr: number
+  annualYield: number
+  riskRewardRatio: number
+}
+
 export interface ComparisonRow {
   // Identity
   subAccountId: string
