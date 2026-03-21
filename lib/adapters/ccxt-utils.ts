@@ -25,12 +25,15 @@ export function mapCcxtTrade(
   const closedAt        = t.datetime ?? new Date(t.timestamp ?? 0).toISOString()
   const info            = t.info ?? {}
 
-  // Best-effort PnL extraction from exchange-specific info fields
-  const pnl =
-    typeof info['closedPnl']    === 'number' ? info['closedPnl']    :
-    typeof info['realised_pnl'] === 'number' ? info['realised_pnl'] :
-    typeof info['pnl']          === 'number' ? info['pnl']          :
+  // Best-effort PnL extraction from exchange-specific info fields.
+  // Values may arrive as strings ("1.5000") or numbers depending on exchange.
+  const rawPnl =
+    info['realizedPnl']  ??   // Binance futures (USDT-M / COIN-M)
+    info['closedPnl']    ??   // Bybit
+    info['realised_pnl'] ??   // OKX
+    info['pnl']          ??   // generic
     0
+  const pnl = Number(rawPnl)
 
   const leverage =
     typeof info['leverage'] === 'number' ? info['leverage'] :
