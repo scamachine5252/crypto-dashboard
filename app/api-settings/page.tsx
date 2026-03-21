@@ -140,8 +140,8 @@ export default function ApiSettingsPage() {
   const [form, setForm]             = useState(EMPTY_FORM)
   const [newFundDraft, setNewFundDraft] = useState('')
 
-  type ScanEntry = { current: number; total: number; failed: { symbol: string; error: string }[] }
-  const [scanState, setScanState] = useState<Record<string, ScanEntry | 'done' | 'error'>>({})
+  type ScanEntry = { current: number; total: number; failed: { symbol: string; error: string }[]; completed?: boolean; isError?: boolean }
+  const [scanState, setScanState] = useState<Record<string, ScanEntry>>({})
 
 
   // ---------------------------------------------------------------------------
@@ -210,10 +210,13 @@ export default function ApiSettingsPage() {
         body: JSON.stringify({ account_id: accountId, done: true }),
       })
 
-      setScanState((prev) => ({ ...prev, [accountId]: 'done' }))
+      setScanState((prev) => ({
+        ...prev,
+        [accountId]: { current: totalSymbols, total: totalSymbols, failed: allFailed, completed: true },
+      }))
       await fetchAccounts()
     } catch {
-      setScanState((prev) => ({ ...prev, [accountId]: 'error' }))
+      setScanState((prev) => ({ ...prev, [accountId]: { current: 0, total: 0, failed: [], isError: true } }))
     }
   }, [fetchAccounts])
 
@@ -620,7 +623,7 @@ export default function ApiSettingsPage() {
                         <td style={{ padding: '8px 12px', fontSize: 11, color: 'var(--text-secondary)' }}>
                           {account.exchange === 'binance' ? (() => {
                             const state = scanState[account.id]
-                            if (state && state !== 'done' && state !== 'error') {
+                            if (state && !state.completed && !state.isError) {
                               return (
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                                   <span style={{ color: 'var(--text-muted)', fontFamily: 'monospace', fontSize: 10 }}>
@@ -642,8 +645,12 @@ export default function ApiSettingsPage() {
                                 </div>
                               )
                             }
-                            if (state === 'done') return <span style={{ color: 'var(--accent-profit)' }}>✓ Done</span>
-                            if (state === 'error') return <span style={{ color: 'var(--accent-loss)' }}>Error</span>
+                            if (state?.completed) return (
+                              <span style={{ color: state.failed.length > 0 ? 'var(--accent-gold)' : 'var(--accent-profit)' }}>
+                                {state.failed.length > 0 ? `✓ Done · ⚠ ${state.failed.length} failed` : '✓ Done'}
+                              </span>
+                            )
+                            if (state?.isError) return <span style={{ color: 'var(--accent-loss)' }}>Error</span>
                             if (account.last_full_sync_at) {
                               return (
                                 <span style={{ color: 'var(--text-muted)' }}>
@@ -661,7 +668,7 @@ export default function ApiSettingsPage() {
                         <td className="px-5 py-2.5 whitespace-nowrap">
                           <span className="flex items-center gap-1.5">
                             {/* Full History (Binance only) */}
-                            {account.exchange === 'binance' && !scanState[account.id] && (
+                            {account.exchange === 'binance' && (!scanState[account.id] || scanState[account.id].isError || scanState[account.id].completed) && (
                               <button
                                 onClick={() => handleFullScan(account.id)}
                                 style={{
