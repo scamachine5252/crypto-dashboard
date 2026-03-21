@@ -27,6 +27,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   if (!accountId)               return NextResponse.json({ error: 'account_id required' }, { status: 400 })
   if (chunkIndex === undefined) return NextResponse.json({ error: 'chunk_index required' }, { status: 400 })
+  if (typeof chunkIndex !== 'number' || !Number.isInteger(chunkIndex) || chunkIndex < 0) {
+    return NextResponse.json({ error: 'chunk_index must be a non-negative integer' }, { status: 400 })
+  }
 
   const { data: account, error: accountError } = await supabaseAdmin
     .from('accounts')
@@ -38,7 +41,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'Account not found' }, { status: 404 })
   }
 
-  const allSymbols = await loadSortedUsdtSymbols()
+  let allSymbols: string[]
+  try {
+    allSymbols = await loadSortedUsdtSymbols()
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return NextResponse.json({ error: message }, { status: 500 })
+  }
   const start  = chunkIndex * CHUNK_SIZE
   const symbols = allSymbols.slice(start, start + CHUNK_SIZE)
 
@@ -83,7 +92,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       .from('trades')
       .upsert(rows, { onConflict: 'account_id,symbol,opened_at' })
 
-    if (!upsertError) synced = rows.length
+    if (upsertError) {
+      console.error('Trades upsert error:', JSON.stringify(upsertError))
+      return NextResponse.json({ synced: 0, failedSymbols, upsertError: upsertError.message }, { status: 500 })
+    }
+    synced = rows.length
   }
 
   return NextResponse.json({ synced, failedSymbols })
