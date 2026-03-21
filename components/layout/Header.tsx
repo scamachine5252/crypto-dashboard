@@ -1,30 +1,17 @@
 'use client'
 
-import { useState, useRef, useCallback, useMemo } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import { useAuth } from '@/lib/auth-context'
 import { useTheme } from '@/lib/theme-context'
 import { useRouter } from 'next/navigation'
-import { TrendingUp, LogOut, User, Activity, ChevronDown, Sun, Moon, RefreshCw } from 'lucide-react'
-import { formatMoney, formatPercent } from '@/lib/utils'
-import { getAllDailyPnL } from '@/lib/mock-data'
+import { TrendingUp, LogOut, User, ChevronDown, Sun, Moon, RefreshCw } from 'lucide-react'
 import NavDropdown from './NavDropdown'
 
-const INITIAL_CAPITAL = 6_800_000
-
-interface HeaderProps {
-  totalPnl: number
-  annualYield: number
-}
-
-export default function Header({ totalPnl, annualYield }: HeaderProps) {
+export default function Header() {
   const { user, logout } = useAuth()
   const { theme, toggle: toggleTheme } = useTheme()
   const router = useRouter()
 
-  const fundValue = useMemo(() => {
-    const totalPnlAll = getAllDailyPnL().reduce((s, d) => s + d.pnl, 0)
-    return INITIAL_CAPITAL + totalPnlAll
-  }, [])
   const [navOpen, setNavOpen] = useState(false)
   const navRef = useRef<HTMLDivElement>(null)
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -42,8 +29,6 @@ export default function Header({ totalPnl, annualYield }: HeaderProps) {
     logout()
     router.push('/login')
   }
-
-  const isPositive = totalPnl >= 0
 
   const [syncing, setSyncing] = useState(false)
   const [syncMsg, setSyncMsg] = useState<string | null>(null)
@@ -110,32 +95,6 @@ export default function Header({ totalPnl, annualYield }: HeaderProps) {
         {navOpen && <NavDropdown />}
       </div>
 
-      {/* Center — total PnL */}
-      <div
-        className="hidden md:flex items-center gap-2 px-4 py-1.5"
-        style={{
-          background: 'var(--bg-secondary)',
-          border: '1px solid var(--border-subtle)',
-        }}
-      >
-        <Activity className="w-3 h-3" style={{ color: 'var(--text-muted)' }} />
-        <span className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>
-          Total P&L
-        </span>
-        <span
-          className="font-mono text-sm font-bold ml-1 tabular"
-          style={{ color: isPositive ? 'var(--accent-profit)' : 'var(--accent-loss)' }}
-        >
-          {isPositive ? '+' : ''}{formatMoney(totalPnl)}
-        </span>
-        <span
-          className="font-mono text-xs tabular"
-          style={{ color: isPositive ? 'var(--accent-profit)' : 'var(--accent-loss)', opacity: 0.65 }}
-        >
-          ({formatPercent(annualYield)})
-        </span>
-      </div>
-
       {/* Right — theme toggle + user + logout */}
       <div className="flex items-center gap-2">
         {/* Sync Now */}
@@ -174,23 +133,6 @@ export default function Header({ totalPnl, annualYield }: HeaderProps) {
         >
           <User className="w-3 h-3" />
           <span className="text-xs font-medium">{user?.username}</span>
-        </div>
-
-        {/* Fund value badge */}
-        <div
-          className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5"
-          style={{
-            background: 'var(--bg-secondary)',
-            border: '1px solid var(--border-subtle)',
-          }}
-        >
-          <span className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>Fund</span>
-          <span
-            className="font-mono text-xs font-bold tabular"
-            style={{ color: 'var(--accent-profit)' }}
-          >
-            {formatMoney(fundValue)}
-          </span>
         </div>
 
         {/* Theme toggle */}

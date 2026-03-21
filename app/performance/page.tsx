@@ -2,14 +2,12 @@
 
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import type { Period, DateRange, AccountMetricsRow } from '@/lib/types'
-import { EXCHANGES, getAllDailyPnL, getAllTrades, ACCOUNT_COLORS } from '@/lib/mock-data'
+import { EXCHANGES, getAllDailyPnL, ACCOUNT_COLORS } from '@/lib/mock-data'
 import { useAccountToggles } from '@/hooks/useAccountToggles'
 import {
   resolveDateRange,
-  filterByDateRange,
   buildOverlayData,
   buildPerAccountMetrics,
-  calculateMetrics,
 } from '@/lib/calculations'
 import { formatMoney } from '@/lib/utils'
 import Header from '@/components/layout/Header'
@@ -182,20 +180,6 @@ export default function PerformancePage() {
     [activeIds, dateRange],
   )
 
-  const headerMetrics = useMemo(() => {
-    const daily = filterByDateRange(
-      getAllDailyPnL().filter((e) => activeIds.has(e.subAccountId)),
-      dateRange,
-    )
-    const trades = getAllTrades().filter(
-      (t) =>
-        activeIds.has(t.subAccountId) &&
-        t.closedAt.slice(0, 10) >= dateRange.start &&
-        t.closedAt.slice(0, 10) <= dateRange.end,
-    )
-    return calculateMetrics(daily, trades)
-  }, [activeIds, dateRange])
-
   const cols      = l1 === 'spot' ? SPOT_COLS[spotL2] : FUTURES_COLS[futuresL2]
   const l2Tabs    = l1 === 'spot' ? SPOT_L2_TABS : FUTURES_L2_TABS
   const currentL2 = l1 === 'spot' ? spotL2 : futuresL2
@@ -221,7 +205,7 @@ export default function PerformancePage() {
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: 'var(--bg-primary)' }}>
-      <Header totalPnl={headerMetrics.totalPnl} annualYield={headerMetrics.annualYield} />
+      <Header />
 
       {/* Controls bar */}
       <div

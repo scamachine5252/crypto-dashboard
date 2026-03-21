@@ -6,7 +6,6 @@ import { EXCHANGES, getAllDailyPnL, ACCOUNT_PRIMARY_TOKEN } from '@/lib/mock-dat
 import {
   resolveDateRange,
   filterByDateRange,
-  calculateMetrics,
   aggregateChartData,
   buildAccountSnapshots,
   buildUsdtBalanceTimeSeries,
@@ -145,12 +144,6 @@ export default function ResultsPage() {
     return aggregateChartData(daily, pnlTimeframe).map((d) => ({ month: d.period, pnl: d.pnl }))
   }, [checkedIds, dateRange, pnlTimeframe])
 
-  // Header metrics — all daily PnL in range
-  const headerMetrics = useMemo(() => {
-    const daily = filterByDateRange(getAllDailyPnL(), dateRange)
-    return calculateMetrics(daily, [])
-  }, [dateRange])
-
   // Totals
   const totals = useMemo(() => ({
     deltaUsdt: visibleSnapshots.reduce((s, r) => s + r.deltaUsdt, 0),
@@ -164,7 +157,7 @@ export default function ResultsPage() {
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: 'var(--bg-primary)' }}>
-      <Header totalPnl={headerMetrics.totalPnl} annualYield={headerMetrics.annualYield} />
+      <Header />
 
       {/* Controls bar */}
       <div

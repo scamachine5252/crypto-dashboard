@@ -265,7 +265,7 @@ export default function ApiSettingsPage() {
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: 'var(--bg-primary)' }}>
-      <Header totalPnl={0} annualYield={0} />
+      <Header />
 
       {/* Two-column body */}
       <div className="flex gap-6 px-6 py-5 flex-1 items-start">

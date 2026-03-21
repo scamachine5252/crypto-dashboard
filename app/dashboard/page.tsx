@@ -45,7 +45,7 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: 'var(--bg-primary)' }}>
-      <Header totalPnl={metrics.totalPnl} annualYield={metrics.annualYield} />
+      <Header />
 
       {/* Balance cards */}
       <BalanceCards />

@@ -2,12 +2,10 @@
 
 import { useState, useMemo, useCallback } from 'react'
 import type { HistoryFilterState } from '@/lib/types'
-import { getAllTrades, getAllDailyPnL } from '@/lib/mock-data'
+import { getAllTrades } from '@/lib/mock-data'
 import {
   filterTradesAdvanced,
   summarizeFilteredTrades,
-  filterByDateRange,
-  calculateMetrics,
 } from '@/lib/calculations'
 import { formatMoney } from '@/lib/utils'
 import Header from '@/components/layout/Header'
@@ -42,21 +40,13 @@ export default function HistoryPage() {
     [filteredTrades],
   )
 
-  const headerMetrics = useMemo(
-    () => calculateMetrics(
-      filterByDateRange(getAllDailyPnL(), filter.dateRange),
-      filteredTrades,
-    ),
-    [filteredTrades, filter.dateRange],
-  )
-
   const exportFilename = `trades-${filter.dateRange.start}-to-${filter.dateRange.end}`
 
   const pnlPositive = summary.totalPnl >= 0
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: 'var(--bg-primary)' }}>
-      <Header totalPnl={headerMetrics.totalPnl} annualYield={headerMetrics.annualYield} />
+      <Header />
 
       {/* Sticky filter area */}
       <div className="sticky z-40" style={{ top: 56 }}>
