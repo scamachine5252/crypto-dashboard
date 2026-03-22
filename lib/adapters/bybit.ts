@@ -54,12 +54,14 @@ export class BybitAdapter implements ExchangeAdapter {
     limit?: number,
     until?: number,
   ): Promise<Trade[]> {
-    const untilParam = until !== undefined ? { until } : {}
+    // Note: do NOT pass `until` to CCXT — Bybit uses cursor-based pagination and
+    // passing endTime alongside paginate:true causes CCXT's untilDays logic to
+    // conflict, resulting in severe underfetching. Filter by until post-fetch instead.
     const [spotResult, linearResult, inverseResult, optionResult] = await Promise.allSettled([
-      this.exchange.fetchMyTrades(undefined, since, limit ?? 100, { category: 'spot',    paginate: true, ...untilParam }),
-      this.exchange.fetchMyTrades(undefined, since, limit ?? 100, { category: 'linear',  paginate: true, ...untilParam }),
-      this.exchange.fetchMyTrades(undefined, since, limit ?? 100, { category: 'inverse', paginate: true, ...untilParam }),
-      this.exchange.fetchMyTrades(undefined, since, limit ?? 100, { category: 'option',  paginate: true, ...untilParam }),
+      this.exchange.fetchMyTrades(undefined, since, limit ?? 100, { category: 'spot',    paginate: true }),
+      this.exchange.fetchMyTrades(undefined, since, limit ?? 100, { category: 'linear',  paginate: true }),
+      this.exchange.fetchMyTrades(undefined, since, limit ?? 100, { category: 'inverse', paginate: true }),
+      this.exchange.fetchMyTrades(undefined, since, limit ?? 100, { category: 'option',  paginate: true }),
     ])
 
     const spotTrades    = spotResult.status    === 'fulfilled' ? spotResult.value    : []

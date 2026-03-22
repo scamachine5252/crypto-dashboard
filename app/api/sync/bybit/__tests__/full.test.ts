@@ -180,7 +180,7 @@ describe('POST /api/sync/bybit/full', () => {
     expect(json.error).toMatch(/exchange timeout/)
   })
 
-  it('passes correct time window to getTrades based on chunk_index', async () => {
+  it('passes correct since and limit to getTrades (until filtered post-fetch)', async () => {
     mockSelectEqSingle.mockResolvedValue({
       data: { id: 'uuid-1', api_key: 'enc-key', api_secret: 'enc-sec' },
       error: null,
@@ -188,16 +188,19 @@ describe('POST /api/sync/bybit/full', () => {
     mockGetTrades.mockResolvedValue([])
     mockUpsert.mockResolvedValue({ error: null })
 
+    const before = Date.now()
     const { POST } = await import('../full/route')
     const res = await POST(makePost({ account_id: 'uuid-1', chunk_index: 0 }))
+    const after = Date.now()
 
     expect(res.status).toBe(200)
-    // Verify getTrades was called with since and until as numbers, 30 days apart
+    // getTrades called with only since + limit — until is NOT passed (post-fetch filtered)
     const [, , since, limit, until] = mockGetTrades.mock.calls[0]
-    expect(typeof since).toBe('number')
-    expect(typeof until).toBe('number')
+    const expectedSince = before - 6 * 30 * 24 * 60 * 60 * 1000
+    expect(since).toBeGreaterThanOrEqual(expectedSince - 1000)
+    expect(since).toBeLessThanOrEqual(after - 6 * 30 * 24 * 60 * 60 * 1000 + 1000)
     expect(limit).toBe(1000)
-    expect(until - since).toBe(30 * 24 * 60 * 60 * 1000)
+    expect(until).toBeUndefined() // not passed — filtering done post-fetch
   })
 
   it('deduplicates trades with same account_id/symbol/openedAt before upsert', async () => {

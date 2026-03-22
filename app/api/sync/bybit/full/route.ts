@@ -44,7 +44,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   let trades: Trade[]
   try {
-    trades = await adapter.getTrades('all', {} as DateRange, since, 1000, until)
+    // Pass only `since` — `until` is filtered post-fetch because passing it to
+    // CCXT breaks Bybit cursor pagination (untilDays conflict → severe underfetch)
+    const allTrades = await adapter.getTrades('all', {} as DateRange, since, 1000)
+    trades = allTrades.filter((t) => new Date(t.openedAt).getTime() < until)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return NextResponse.json({ error: message }, { status: 500 })
