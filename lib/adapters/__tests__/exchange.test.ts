@@ -183,15 +183,15 @@ describe('BybitAdapter', () => {
     expect(trades.length).toBe(1)
   })
 
-  it('does NOT pass until to CCXT params (post-fetch filtered to avoid cursor pagination bug)', async () => {
+  it('passes until to CCXT params when provided', async () => {
     mockFetchTrades.mockResolvedValue([])
     const until = 1700000000000
     const { BybitAdapter } = await import('../bybit')
     const adapter = new BybitAdapter({ apiKey: 'key', apiSecret: 'secret' })
     await adapter.getTrades('all', {} as DateRange, 0, 100, until)
-    // until must NOT reach CCXT — Bybit cursor pagination breaks when endTime is passed
-    const anyCallWithUntil = mockFetchTrades.mock.calls.find((c) => (c[3] as Record<string, unknown>)?.until !== undefined)
-    expect(anyCallWithUntil).toBeUndefined()
+    // until must reach CCXT so Bybit receives correct endTime — callers use 7-day windows
+    const anyCall = mockFetchTrades.mock.calls.find((c) => (c[3] as Record<string, unknown>)?.until === until)
+    expect(anyCall).toBeDefined()
   })
 })
 

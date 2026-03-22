@@ -5,9 +5,9 @@ import { decrypt } from '@/lib/crypto/decrypt'
 import { BybitAdapter } from '@/lib/adapters/bybit'
 import type { Trade, DateRange } from '@/lib/types'
 
-const CHUNK_DAYS   = 30
-const TOTAL_DAYS   = 180
-const TOTAL_CHUNKS = TOTAL_DAYS / CHUNK_DAYS
+const CHUNK_DAYS   = 7    // Bybit Unified API enforces 7-day max window per request
+const TOTAL_DAYS   = 182  // 26 × 7 days
+const TOTAL_CHUNKS = TOTAL_DAYS / CHUNK_DAYS  // 26
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const body       = await req.json() as Record<string, unknown>
@@ -44,10 +44,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   let trades: Trade[]
   try {
-    // Pass only `since` — `until` is filtered post-fetch because passing it to
-    // CCXT breaks Bybit cursor pagination (untilDays conflict → severe underfetch)
-    const allTrades = await adapter.getTrades('all', {} as DateRange, since, 1000)
-    trades = allTrades.filter((t) => new Date(t.openedAt).getTime() < until)
+    // since/until are exactly 7 days apart — within Bybit's API limit.
+    // CCXT receives endTime correctly and paginates via cursor until exhausted.
+    trades = await adapter.getTrades('all', {} as DateRange, since, 1000, until)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return NextResponse.json({ error: message }, { status: 500 })

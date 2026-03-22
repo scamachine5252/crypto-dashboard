@@ -12,9 +12,9 @@ describe('GET /api/sync/bybit/chunks', () => {
 
     expect(res.status).toBe(200)
     const json = await res.json()
-    expect(json.totalChunks).toBe(6)
-    expect(json.chunkDays).toBe(30)
-    expect(json.totalDays).toBe(180)
+    expect(json.totalChunks).toBe(26)
+    expect(json.chunkDays).toBe(7)
+    expect(json.totalDays).toBe(182)
   })
 
   it('totalChunks * chunkDays === totalDays', async () => {
