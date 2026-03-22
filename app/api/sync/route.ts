@@ -15,7 +15,7 @@ async function runSync(): Promise<NextResponse> {
   // Fetch all configured accounts
   const { data: accounts, error: accountsError } = await supabaseAdmin
     .from('accounts')
-    .select('id, account_name, exchange, api_key, api_secret, passphrase')
+    .select('id, account_name, exchange, api_key, api_secret, passphrase, instrument')
 
   if (accountsError) {
     return NextResponse.json({ error: 'Failed to fetch accounts' }, { status: 500 })
@@ -28,6 +28,7 @@ async function runSync(): Promise<NextResponse> {
     api_key: string
     api_secret: string
     passphrase: string | null
+    instrument: string | null
   }>
 
   let synced = 0
@@ -48,7 +49,7 @@ async function runSync(): Promise<NextResponse> {
           adapter = new BybitAdapter({ apiKey, apiSecret })
           break
         case 'binance':
-          adapter = new BinanceAdapter({ apiKey, apiSecret })
+          adapter = new BinanceAdapter({ apiKey, apiSecret, type: row.instrument === 'futures' ? 'future' : 'spot' })
           break
         case 'okx': {
           const passphrase = row.passphrase ? decrypt(row.passphrase) : ''

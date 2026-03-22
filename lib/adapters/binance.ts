@@ -7,6 +7,7 @@ import { mapCcxtTrade } from './ccxt-utils'
 interface BinanceCredentials {
   apiKey: string
   apiSecret: string
+  type?: 'spot' | 'future'
 }
 
 export interface FullTradesResult {
@@ -35,6 +36,7 @@ export class BinanceAdapter implements ExchangeAdapter {
     this.exchange = new ccxt.binance({
       apiKey: credentials.apiKey,
       secret: credentials.apiSecret,
+      ...(credentials.type === 'future' ? { options: { defaultType: 'future' } } : {}),
     })
   }
 

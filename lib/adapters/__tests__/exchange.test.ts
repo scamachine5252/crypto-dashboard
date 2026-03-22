@@ -414,6 +414,22 @@ describe('BinanceAdapter', () => {
     })
   })
 
+  it('creates futures exchange instance when type is future', async () => {
+    const ccxtMod = await import('ccxt')
+    const { BinanceAdapter } = await import('../binance')
+    new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret', type: 'future' })
+    const ctorOptions = (ccxtMod.binance as jest.Mock).mock.calls.at(-1)?.[0] as Record<string, unknown>
+    expect(ctorOptions?.options).toEqual({ defaultType: 'future' })
+  })
+
+  it('does not set defaultType when type is spot (default)', async () => {
+    const ccxtMod = await import('ccxt')
+    const { BinanceAdapter } = await import('../binance')
+    new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
+    const ctorOptions = (ccxtMod.binance as jest.Mock).mock.calls.at(-1)?.[0] as Record<string, unknown>
+    expect(ctorOptions?.options).toBeUndefined()
+  })
+
   describe('getFullTrades (full scan)', () => {
     beforeEach(() => {
       jest.clearAllMocks()

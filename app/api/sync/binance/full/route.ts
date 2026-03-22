@@ -8,11 +8,17 @@ import type { Trade } from '@/lib/types'
 
 const CHUNK_SIZE = 50
 
-async function loadSortedUsdtSymbols(): Promise<string[]> {
-  const exchange = new ccxt.binance()
+async function loadSortedUsdtSymbols(isFutures: boolean): Promise<string[]> {
+  const exchange = isFutures
+    ? new ccxt.binance({ options: { defaultType: 'future' } })
+    : new ccxt.binance()
   const markets = await exchange.loadMarkets()
   return Object.values(markets)
-    .filter((m): m is NonNullable<typeof m> => m != null && m.quote === 'USDT')
+    .filter((m): m is NonNullable<typeof m> => {
+      if (m == null) return false
+      if (isFutures) return m.quote === 'USDT' && m.linear === true
+      return m.quote === 'USDT'
+    })
     .map((m) => m.symbol)
     .sort()
 }
@@ -33,7 +39,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   const { data: account, error: accountError } = await supabaseAdmin
     .from('accounts')
-    .select('id, api_key, api_secret')
+    .select('id, api_key, api_secret, instrument')
     .eq('id', accountId)
     .single()
 
@@ -41,9 +47,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'Account not found' }, { status: 404 })
   }
 
+  const isFutures = (account as Record<string, string>).instrument === 'futures'
+
   let allSymbols: string[]
   try {
-    allSymbols = await loadSortedUsdtSymbols()
+    allSymbols = await loadSortedUsdtSymbols(isFutures)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return NextResponse.json({ error: message }, { status: 500 })
@@ -58,6 +66,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const adapter = new BinanceAdapter({
     apiKey:    decrypt((account as Record<string, string>).api_key),
     apiSecret: decrypt((account as Record<string, string>).api_secret),
+    type:      isFutures ? 'future' : 'spot',
   })
 
   const { trades, failedSymbols } = await adapter.getFullTrades(symbols)
