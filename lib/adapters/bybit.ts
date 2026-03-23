@@ -1,12 +1,29 @@
 import 'server-only'
 import * as ccxt from 'ccxt'
 import type { ExchangeAdapter, BalanceResult } from './types'
-import type { DailyPnLEntry, Trade, DateRange } from '../types'
+import type { DailyPnLEntry, Trade, DateRange, ExchangeId, TradeSide, TradeType } from '../types'
 import { mapCcxtTrade } from './ccxt-utils'
 
 interface BybitCredentials {
   apiKey: string
   apiSecret: string
+}
+
+// Convert Bybit market ID → unified CCXT symbol
+// linear:  BTCUSDT  → BTC/USDT:USDT
+// inverse: BTCUSD   → BTC/USD:BTC
+function bybitIdToSymbol(id: string, category: 'linear' | 'inverse'): string {
+  if (category === 'linear') {
+    if (id.endsWith('USDT')) return `${id.slice(0, -4)}/USDT:USDT`
+    if (id.endsWith('USDC')) return `${id.slice(0, -4)}/USDC:USDC`
+  }
+  if (category === 'inverse') {
+    if (id.endsWith('USD')) {
+      const base = id.slice(0, -3)
+      return `${base}/USD:${base}`
+    }
+  }
+  return id
 }
 
 export class BybitAdapter implements ExchangeAdapter {
@@ -47,6 +64,71 @@ export class BybitAdapter implements ExchangeAdapter {
     return []
   }
 
+  // Fetch closed futures positions from /v5/position/closed-pnl.
+  // This endpoint returns COMPLETED position records with real realized PnL —
+  // unlike fetchMyTrades (fills), which returns closedPnl=0 for opening fills
+  // and is unreliable for Bybit Unified accounts.
+  // Max 7-day window per call (Bybit API hard limit — use 7-day chunks).
+  private async fetchBybitClosedPnl(
+    category: 'linear' | 'inverse',
+    since?: number,
+    until?: number,
+  ): Promise<Trade[]> {
+    const trades: Trade[] = []
+    let cursor: string | undefined
+
+    do {
+      const params: Record<string, unknown> = { category, limit: 100 }
+      if (since !== undefined) params['startTime'] = since
+      if (until !== undefined) params['endTime'] = until
+      if (cursor) params['cursor'] = cursor
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const response = await (this.exchange as any).privateGetV5PositionClosedPnl(params) as Record<string, unknown>
+      const result = (response?.result ?? {}) as Record<string, unknown>
+      const list = (result.list ?? []) as Array<Record<string, string>>
+
+      if (list.length === 0) break
+
+      for (const pos of list) {
+        // side = direction of the CLOSING order:
+        // "Sell" = selling to close a long position → trade direction is 'long'
+        // "Buy"  = buying to close a short position → trade direction is 'short'
+        const side: TradeSide = pos.side === 'Sell' ? 'long' : 'short'
+        const symbol = bybitIdToSymbol(pos.symbol ?? 'UNKNOWN', category)
+
+        trades.push({
+          id:           pos.orderId ?? String(Math.random()),
+          subAccountId: 'bybit' as ExchangeId,
+          exchangeId:   'bybit' as ExchangeId,
+          symbol,
+          side,
+          tradeType:    'futures' as TradeType,
+          entryPrice:   Number(pos.avgEntryPrice ?? 0),
+          exitPrice:    Number(pos.avgExitPrice ?? 0),
+          quantity:     Number(pos.closedSize ?? pos.qty ?? 0),
+          pnl:          Number(pos.closedPnl ?? 0),
+          pnlPercent:   0,
+          fee:          0,
+          durationMin:  0,
+          leverage:     Number(pos.leverage ?? 1),
+          fundingCost:  0,
+          isOvernight:  false,
+          openedAt:     pos.createdTime
+            ? new Date(Number(pos.createdTime)).toISOString()
+            : new Date().toISOString(),
+          closedAt:     pos.updatedTime
+            ? new Date(Number(pos.updatedTime)).toISOString()
+            : new Date().toISOString(),
+        })
+      }
+
+      cursor = result.nextPageCursor as string | undefined
+    } while (cursor)
+
+    return trades
+  }
+
   async getTrades(
     _subAccountId: string,
     _dateRange: DateRange,
@@ -54,27 +136,27 @@ export class BybitAdapter implements ExchangeAdapter {
     limit?: number,
     until?: number,
   ): Promise<Trade[]> {
-    // until must be passed to CCXT so Bybit receives the correct endTime per page.
-    // Bybit's Unified Account API enforces a 7-day max window per request —
-    // callers must ensure until - since <= 7 days (the full route uses 7-day chunks).
     const untilParam = until !== undefined ? { until } : {}
-    const [spotResult, linearResult, inverseResult, optionResult] = await Promise.allSettled([
-      this.exchange.fetchMyTrades(undefined, since, limit ?? 100, { category: 'spot',    paginate: true, ...untilParam }),
-      this.exchange.fetchMyTrades(undefined, since, limit ?? 100, { category: 'linear',  paginate: true, ...untilParam }),
-      this.exchange.fetchMyTrades(undefined, since, limit ?? 100, { category: 'inverse', paginate: true, ...untilParam }),
-      this.exchange.fetchMyTrades(undefined, since, limit ?? 100, { category: 'option',  paginate: true, ...untilParam }),
+
+    // Spot: use fills (closedPnl concept doesn't apply to spot)
+    const [spotResult] = await Promise.allSettled([
+      this.exchange.fetchMyTrades(undefined, since, limit ?? 100, { category: 'spot', paginate: true, ...untilParam }),
+    ])
+
+    // Futures: use closed-pnl endpoint — returns real realized PnL per closed position
+    const [linearResult, inverseResult] = await Promise.allSettled([
+      this.fetchBybitClosedPnl('linear', since, until),
+      this.fetchBybitClosedPnl('inverse', since, until),
     ])
 
     const spotTrades    = spotResult.status    === 'fulfilled' ? spotResult.value    : []
     const linearTrades  = linearResult.status  === 'fulfilled' ? linearResult.value  : []
     const inverseTrades = inverseResult.status === 'fulfilled' ? inverseResult.value : []
-    const optionTrades  = optionResult.status  === 'fulfilled' ? optionResult.value  : []
 
     return [
-      ...spotTrades,
+      ...spotTrades.map((t) => mapCcxtTrade(t, 'bybit')),
       ...linearTrades,
       ...inverseTrades,
-      ...optionTrades,
-    ].map((t) => mapCcxtTrade(t, 'bybit'))
+    ]
   }
 }

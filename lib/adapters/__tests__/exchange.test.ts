@@ -1,14 +1,16 @@
 // ---------------------------------------------------------------------------
 // Mock ccxt entirely — no real network calls
 // ---------------------------------------------------------------------------
-const mockFetchBalance = jest.fn()
-const mockFetchTrades  = jest.fn()
-const mockLoadMarkets  = jest.fn()
+const mockFetchBalance               = jest.fn()
+const mockFetchTrades                = jest.fn()
+const mockLoadMarkets                = jest.fn()
+const mockPrivateGetV5ClosedPnl      = jest.fn()
 
 const mockExchangeInstance = {
-  fetchBalance:  mockFetchBalance,
-  fetchMyTrades: mockFetchTrades,
-  loadMarkets:   mockLoadMarkets,
+  fetchBalance:                    mockFetchBalance,
+  fetchMyTrades:                   mockFetchTrades,
+  loadMarkets:                     mockLoadMarkets,
+  privateGetV5PositionClosedPnl:   mockPrivateGetV5ClosedPnl,
 }
 
 jest.mock('ccxt', () => ({
@@ -78,6 +80,9 @@ describe('BybitAdapter', () => {
     mockFetchBalance.mockReset()
     mockFetchTrades.mockReset()
     mockLoadMarkets.mockReset()
+    mockPrivateGetV5ClosedPnl.mockReset()
+    // Default: return empty closed-pnl list so tests that don't care about futures pass
+    mockPrivateGetV5ClosedPnl.mockResolvedValue({ result: { list: [], nextPageCursor: '' } })
   })
 
   it('testConnection returns true on successful ping', async () => {
@@ -134,63 +139,138 @@ describe('BybitAdapter', () => {
     await expect(adapter.fetchBalance()).rejects.toThrow()
   })
 
-  it('fetches trades for all 4 categories: spot, linear, inverse, option', async () => {
+  it('calls fetchMyTrades for spot only, privateGetV5PositionClosedPnl for linear and inverse', async () => {
     mockFetchTrades.mockResolvedValue([])
 
     const { BybitAdapter } = await import('../bybit')
     const adapter = new BybitAdapter({ apiKey: 'key', apiSecret: 'secret' })
     await adapter.getTrades('all', { start: '2025-01-01', end: '2025-12-31' })
 
-    expect(mockFetchTrades).toHaveBeenCalledTimes(4)
-    const categories = mockFetchTrades.mock.calls.map(
-      (c) => (c[3] as Record<string, string>)?.category,
+    // fetchMyTrades called once for spot only (not for futures — uses closed-pnl endpoint)
+    expect(mockFetchTrades).toHaveBeenCalledTimes(1)
+    expect((mockFetchTrades.mock.calls[0][3] as Record<string, string>)?.category).toBe('spot')
+
+    // closed-pnl endpoint called twice: linear + inverse
+    expect(mockPrivateGetV5ClosedPnl).toHaveBeenCalledTimes(2)
+    const categories = mockPrivateGetV5ClosedPnl.mock.calls.map(
+      (c) => (c[0] as Record<string, string>)?.category,
     )
-    expect(categories).toContain('spot')
     expect(categories).toContain('linear')
     expect(categories).toContain('inverse')
-    expect(categories).toContain('option')
   })
 
-  it('merges trades from all categories into single array', async () => {
-    mockFetchTrades.mockImplementation(
-      (_s: unknown, _since: unknown, _limit: unknown, params: Record<string, string>) => {
-        if (params?.category === 'spot')   return Promise.resolve([{ ...sampleCcxtTrade, id: 'spot-1' }])
-        if (params?.category === 'linear') return Promise.resolve([{ ...sampleCcxtTrade, id: 'linear-1' }])
-        return Promise.resolve([])
-      },
-    )
+  it('extracts real closedPnl from privateGetV5PositionClosedPnl response', async () => {
+    mockFetchTrades.mockResolvedValue([])
+    mockPrivateGetV5ClosedPnl.mockImplementation((params: Record<string, string>) => {
+      if (params.category === 'linear') {
+        return Promise.resolve({
+          result: {
+            list: [
+              {
+                symbol: 'BTCUSDT', side: 'Sell', orderId: 'order-1',
+                avgEntryPrice: '50000', avgExitPrice: '51000',
+                closedSize: '0.1', closedPnl: '100.5',
+                leverage: '10', createdTime: '1700000000000', updatedTime: '1700000001000',
+              },
+            ],
+            nextPageCursor: '',
+          },
+        })
+      }
+      return Promise.resolve({ result: { list: [], nextPageCursor: '' } })
+    })
 
     const { BybitAdapter } = await import('../bybit')
     const adapter = new BybitAdapter({ apiKey: 'key', apiSecret: 'secret' })
-    const trades = await adapter.getTrades('all', { start: '2025-01-01', end: '2025-12-31' })
+    const trades = await adapter.getTrades('all', {} as DateRange)
 
-    expect(trades.length).toBe(2)
+    const futureTrade = trades.find((t) => t.symbol === 'BTC/USDT:USDT')
+    expect(futureTrade).toBeDefined()
+    expect(futureTrade?.pnl).toBe(100.5)
+    expect(futureTrade?.entryPrice).toBe(50000)
+    expect(futureTrade?.exitPrice).toBe(51000)
+    expect(futureTrade?.tradeType).toBe('futures')
   })
 
-  it('handles empty result for a category gracefully', async () => {
-    mockFetchTrades.mockImplementation(
-      (_s: unknown, _since: unknown, _limit: unknown, params: Record<string, string>) => {
-        if (params?.category === 'spot')   return Promise.resolve([{ ...sampleCcxtTrade, id: 'spot-1' }])
-        if (params?.category === 'linear') return Promise.reject(new Error('category not available'))
-        return Promise.resolve([])
-      },
-    )
+  it('maps Sell-side close to long direction, Buy-side close to short direction', async () => {
+    mockFetchTrades.mockResolvedValue([])
+    mockPrivateGetV5ClosedPnl.mockImplementation((params: Record<string, string>) => {
+      if (params.category === 'linear') {
+        return Promise.resolve({
+          result: {
+            list: [
+              { symbol: 'BTCUSDT', side: 'Sell', orderId: 'o1', avgEntryPrice: '50000', avgExitPrice: '51000', closedSize: '0.1', closedPnl: '100', leverage: '10', createdTime: '1700000000000', updatedTime: '1700000001000' },
+              { symbol: 'ETHUSDT', side: 'Buy',  orderId: 'o2', avgEntryPrice: '3000',  avgExitPrice: '2900',  closedSize: '1',   closedPnl: '100', leverage: '5',  createdTime: '1700000002000', updatedTime: '1700000003000' },
+            ],
+            nextPageCursor: '',
+          },
+        })
+      }
+      return Promise.resolve({ result: { list: [], nextPageCursor: '' } })
+    })
 
     const { BybitAdapter } = await import('../bybit')
     const adapter = new BybitAdapter({ apiKey: 'key', apiSecret: 'secret' })
-    const trades = await adapter.getTrades('all', { start: '2025-01-01', end: '2025-12-31' })
+    const trades = await adapter.getTrades('all', {} as DateRange)
 
-    expect(trades.length).toBe(1)
+    const btc = trades.find((t) => t.symbol === 'BTC/USDT:USDT')
+    const eth = trades.find((t) => t.symbol === 'ETH/USDT:USDT')
+    expect(btc?.side).toBe('long')   // Sell to close = was long
+    expect(eth?.side).toBe('short')  // Buy to close  = was short
   })
 
-  it('passes until to CCXT params when provided', async () => {
+  it('paginates closed-pnl until nextPageCursor is empty', async () => {
+    mockFetchTrades.mockResolvedValue([])
+    let page = 0
+    mockPrivateGetV5ClosedPnl.mockImplementation((params: Record<string, string>) => {
+      if (params.category !== 'linear') return Promise.resolve({ result: { list: [], nextPageCursor: '' } })
+      page++
+      if (page === 1) {
+        return Promise.resolve({
+          result: {
+            list: [{ symbol: 'BTCUSDT', side: 'Sell', orderId: 'o1', avgEntryPrice: '50000', avgExitPrice: '51000', closedSize: '0.1', closedPnl: '50', leverage: '10', createdTime: '1700000000000', updatedTime: '1700000001000' }],
+            nextPageCursor: 'page2cursor',
+          },
+        })
+      }
+      return Promise.resolve({
+        result: {
+          list: [{ symbol: 'BTCUSDT', side: 'Buy', orderId: 'o2', avgEntryPrice: '50000', avgExitPrice: '49000', closedSize: '0.1', closedPnl: '-50', leverage: '10', createdTime: '1700000010000', updatedTime: '1700000011000' }],
+          nextPageCursor: '',
+        },
+      })
+    })
+
+    const { BybitAdapter } = await import('../bybit')
+    const adapter = new BybitAdapter({ apiKey: 'key', apiSecret: 'secret' })
+    const trades = await adapter.getTrades('all', {} as DateRange)
+
+    const futures = trades.filter((t) => t.tradeType === 'futures')
+    expect(futures.length).toBe(2)  // fetched 2 pages
+  })
+
+  it('handles privateGetV5PositionClosedPnl failure gracefully (returns spot trades only)', async () => {
+    mockFetchTrades.mockResolvedValue([{ ...sampleCcxtTrade, id: 'spot-1' }])
+    mockPrivateGetV5ClosedPnl.mockRejectedValue(new Error('API error'))
+
+    const { BybitAdapter } = await import('../bybit')
+    const adapter = new BybitAdapter({ apiKey: 'key', apiSecret: 'secret' })
+    const trades = await adapter.getTrades('all', {} as DateRange)
+
+    expect(trades.length).toBe(1)  // only spot trades
+    expect(trades[0].symbol).toBe('BTC/USDT')
+  })
+
+  it('passes until to privateGetV5PositionClosedPnl as endTime', async () => {
     mockFetchTrades.mockResolvedValue([])
     const until = 1700000000000
     const { BybitAdapter } = await import('../bybit')
     const adapter = new BybitAdapter({ apiKey: 'key', apiSecret: 'secret' })
     await adapter.getTrades('all', {} as DateRange, 0, 100, until)
-    // until must reach CCXT so Bybit receives correct endTime — callers use 7-day windows
-    const anyCall = mockFetchTrades.mock.calls.find((c) => (c[3] as Record<string, unknown>)?.until === until)
+
+    const anyCall = mockPrivateGetV5ClosedPnl.mock.calls.find(
+      (c) => (c[0] as Record<string, unknown>)?.endTime === until,
+    )
     expect(anyCall).toBeDefined()
   })
 })
