@@ -101,9 +101,39 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const grossLoss = Math.abs(losses.reduce((s, t) => s + Number(t.pnl), 0))
   const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? 999 : 0
 
+  // Time-series metrics derived from daily PnL
+  const dailyValues = sortedDays.map((d) => dailyMap[d])
+  const N = dailyValues.length
+
+  const meanD = N > 0 ? dailyValues.reduce((s, v) => s + v, 0) / N : 0
+  const stdD = N > 1
+    ? Math.sqrt(dailyValues.reduce((s, v) => s + Math.pow(v - meanD, 2), 0) / (N - 1))
+    : 0
+  const sharpeRatio = stdD > 0 ? (meanD / stdD) * Math.sqrt(252) : 0
+
+  const negVals = dailyValues.filter((v) => v < 0)
+  const downsideDev = negVals.length > 0
+    ? Math.sqrt(negVals.reduce((s, v) => s + v * v, 0) / negVals.length)
+    : 0
+  const sortinoRatio = downsideDev > 0 ? (meanD / downsideDev) * Math.sqrt(252) : 0
+
+  let peak = 0, cum = 0, maxDrawdown = 0
+  for (const v of dailyValues) {
+    cum += v
+    if (cum > peak) peak = cum
+    const dd = peak - cum
+    if (dd > maxDrawdown) maxDrawdown = dd
+  }
+
+  const totalCurrentBalance = Object.values(latestBalance).reduce((s, v) => s + v, 0)
+  const initialCapital = Math.max(totalCurrentBalance - totalPnl, 1)
+  const years = N / 252
+  const cagr = years > 0 ? Math.pow(Math.max((initialCapital + totalPnl) / initialCapital, 0.0001), 1 / years) - 1 : 0
+  const annualYield = years > 0 ? (totalPnl / initialCapital) / years : 0
+
   const metrics: DashboardMetrics = {
     totalPnl, totalFees, totalTrades: tradeRows.length, winRate, profitFactor, avgWin, avgLoss,
-    sharpeRatio: 0, sortinoRatio: 0, maxDrawdown: 0, cagr: 0, annualYield: 0,
+    sharpeRatio, sortinoRatio, maxDrawdown, cagr, annualYield,
     riskRewardRatio: avgLoss > 0 ? avgWin / avgLoss : 0,
   }
 
