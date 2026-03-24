@@ -22,6 +22,8 @@ interface OverlayLineChartProps {
   data: MetricTimeSeries[]  // output of buildOverlayData — date + one key per active account
   activeIds: string[]       // controls which Lines are rendered and in what order
   height?: number           // chart area height in px, default 320
+  colorMap?: Record<string, string>  // optional: account ID → color override
+  nameMap?: Record<string, string>   // optional: account ID → display name override
 }
 
 const ACCOUNT_NAMES: Record<string, string> = {}
@@ -44,9 +46,10 @@ interface CustomTooltipProps {
   active?: boolean
   payload?: TooltipPayloadItem[]
   label?: string
+  nameMap?: Record<string, string>
 }
 
-function CustomTooltip({ active, payload, label }: CustomTooltipProps) {
+function CustomTooltip({ active, payload, label, nameMap: nm }: CustomTooltipProps) {
   if (!active || !payload?.length) return null
 
   return (
@@ -69,7 +72,7 @@ function CustomTooltip({ active, payload, label }: CustomTooltipProps) {
           <div key={item.dataKey} style={{ display: 'flex', justifyContent: 'space-between', gap: 16, marginBottom: 4 }}>
             <span style={{ color: item.color, fontSize: 10, display: 'flex', alignItems: 'center', gap: 5 }}>
               <span style={{ width: 8, height: 2, background: item.color, display: 'inline-block', borderRadius: 1 }} />
-              {ACCOUNT_NAMES[item.dataKey] ?? item.dataKey}
+              {nm?.[item.dataKey] ?? ACCOUNT_NAMES[item.dataKey] ?? item.dataKey}
             </span>
             <span style={{ color: 'var(--text-primary)', fontSize: 11, fontWeight: 700, fontFamily: 'var(--font-geist-mono)', fontVariantNumeric: 'tabular-nums' }}>
               {item.value >= 0 ? '+' : ''}{formatMoney(item.value)}
@@ -80,7 +83,7 @@ function CustomTooltip({ active, payload, label }: CustomTooltipProps) {
   )
 }
 
-export default function OverlayLineChart({ data, activeIds, height = 320 }: OverlayLineChartProps) {
+export default function OverlayLineChart({ data, activeIds, height = 320, colorMap, nameMap }: OverlayLineChartProps) {
   const [timeframe, setTimeframe] = useState<ChartTimeframe>('weekly')
 
   // Aggregate into the selected timeframe
@@ -146,8 +149,8 @@ export default function OverlayLineChart({ data, activeIds, height = 320 }: Over
         <div className="ml-auto flex items-center gap-3 flex-wrap">
           {activeIds.map((id) => (
             <span key={id} className="flex items-center gap-1.5 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
-              <span style={{ width: 16, height: 2, background: ACCOUNT_COLORS[id] ?? '#888', display: 'inline-block', borderRadius: 1 }} />
-              {ACCOUNT_NAMES[id] ?? id}
+              <span style={{ width: 16, height: 2, background: colorMap?.[id] ?? ACCOUNT_COLORS[id] ?? '#888', display: 'inline-block', borderRadius: 1 }} />
+              {nameMap?.[id] ?? ACCOUNT_NAMES[id] ?? id}
             </span>
           ))}
         </div>
@@ -177,14 +180,14 @@ export default function OverlayLineChart({ data, activeIds, height = 320 }: Over
 
             <ReferenceLine y={0} stroke="var(--border-medium)" strokeDasharray="4 4" strokeWidth={1} />
 
-            <Tooltip content={<CustomTooltip />} cursor={{ stroke: 'var(--border-medium)', strokeWidth: 1 }} />
+            <Tooltip content={<CustomTooltip nameMap={nameMap} />} cursor={{ stroke: 'var(--border-medium)', strokeWidth: 1 }} />
 
             {activeIds.map((id) => (
               <Line
                 key={id}
                 type="monotone"
                 dataKey={id}
-                stroke={ACCOUNT_COLORS[id] ?? '#888'}
+                stroke={colorMap?.[id] ?? ACCOUNT_COLORS[id] ?? '#888'}
                 strokeWidth={1.5}
                 dot={false}
                 activeDot={{ r: 3, strokeWidth: 0 }}

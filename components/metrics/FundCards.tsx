@@ -38,24 +38,28 @@ export default function FundCards({ funds, loading }: FundCardsProps) {
   const totalPnl = funds.reduce((s, f) => s + f.totalPnl, 0)
   const totalPnlPct = totalAum > 0 ? (totalPnl / totalAum) * 100 : 0
 
-  const cols = Math.min(funds.length + (funds.length > 1 ? 1 : 0), 5)
+  // +1 for Total Portfolio card, +1 for the divider element
+  const cols = Math.min(funds.length + (funds.length > 1 ? 2 : 0), 6)
 
   return (
     <div
       className="grid gap-3"
-      style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
+      style={{ gridTemplateColumns: `repeat(${funds.length}, minmax(0, 1fr))${funds.length > 1 ? ' 1px auto' : ''}` }}
     >
       {funds.map((fund) => (
         <FundCard key={fund.fund} {...fund} />
       ))}
       {funds.length > 1 && (
-        <FundCard
-          fund="Total Portfolio"
-          aum={totalAum}
-          totalPnl={totalPnl}
-          pnlPct={totalPnlPct}
-          isTotal
-        />
+        <>
+          <div style={{ background: 'var(--border-medium)', margin: '4px 0' }} />
+          <FundCard
+            fund="Total Portfolio"
+            aum={totalAum}
+            totalPnl={totalPnl}
+            pnlPct={totalPnlPct}
+            isTotal
+          />
+        </>
       )}
     </div>
   )
@@ -75,7 +79,7 @@ function FundCard({
     <div
       style={{
         background: 'var(--bg-secondary)',
-        border: `1px solid ${isTotal ? 'var(--border-medium)' : 'var(--border-subtle)'}`,
+        border: `1px solid ${isTotal ? 'var(--accent-gold)' : 'var(--border-subtle)'}`,
         padding: '16px 20px',
         borderRadius: 4,
       }}
@@ -109,11 +113,9 @@ function FundCard({
           fontFamily: 'var(--font-geist-mono)',
         }}
       >
-        {isPositive ? '+' : ''}
-        {formatMoney(totalPnl)}
+        {isPositive ? '+' : ''}{formatMoney(totalPnl)}
         <span style={{ opacity: 0.7, marginLeft: 6 }}>
-          ({isPositive ? '+' : ''}
-          {formatPercent(pnlPct / 100)})
+          ({formatPercent(pnlPct)})
         </span>
       </div>
     </div>

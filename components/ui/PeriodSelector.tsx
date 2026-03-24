@@ -18,8 +18,10 @@ const PERIODS: { value: Period; label: string }[] = [
 ]
 
 export default function PeriodSelector({ value, customRange, onChange }: PeriodSelectorProps) {
-  const [manualStart, setManualStart] = useState(customRange?.start ?? '2025-01-01')
-  const [manualEnd,   setManualEnd]   = useState(customRange?.end   ?? '2025-12-31')
+  const today = new Date().toISOString().slice(0, 10)
+  const oneYearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+  const [manualStart, setManualStart] = useState(customRange?.start ?? oneYearAgo)
+  const [manualEnd,   setManualEnd]   = useState(customRange?.end   ?? today)
 
   const handlePeriodClick = (period: Period) => {
     if (period === 'manual') {

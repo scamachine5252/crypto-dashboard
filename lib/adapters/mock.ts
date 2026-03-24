@@ -1,5 +1,5 @@
 import type { DailyPnLEntry, Trade, DateRange } from '../types'
-import type { ExchangeAdapter, BalanceResult } from './types'
+import type { ExchangeAdapter, BalanceResult, RawPosition } from './types'
 import { getAllDailyPnL, getAllTrades } from '../mock-data'
 import { filterByDateRange } from '../calculations'
 
@@ -25,5 +25,9 @@ export class MockAdapter implements ExchangeAdapter {
 
   async fetchBalance(): Promise<BalanceResult> {
     return { usdt: 0, tokens: {} }
+  }
+
+  async fetchPositions(): Promise<RawPosition[]> {
+    return []
   }
 }

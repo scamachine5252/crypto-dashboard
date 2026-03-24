@@ -20,6 +20,7 @@ interface BalanceSeries {
 interface BalanceLineChartProps {
   series: BalanceSeries[]
   height?: number
+  colorMap?: Record<string, string>
 }
 
 interface TooltipPayloadItem {
@@ -75,7 +76,7 @@ function mergeData(series: BalanceSeries[]): Record<string, number | string>[] {
   })
 }
 
-export default function BalanceLineChart({ series, height = 240 }: BalanceLineChartProps) {
+export default function BalanceLineChart({ series, height = 240, colorMap }: BalanceLineChartProps) {
   const data = mergeData(series)
 
   const formatY = (v: number) => {
@@ -121,7 +122,7 @@ export default function BalanceLineChart({ series, height = 240 }: BalanceLineCh
             key={s.subAccountId}
             type="monotone"
             dataKey={s.subAccountId}
-            stroke={ACCOUNT_COLORS[s.subAccountId] ?? 'var(--accent-blue)'}
+            stroke={colorMap?.[s.subAccountId] ?? ACCOUNT_COLORS[s.subAccountId] ?? 'var(--accent-blue)'}
             strokeWidth={1.5}
             dot={false}
             activeDot={{ r: 3, stroke: 'var(--bg-secondary)', strokeWidth: 2 }}

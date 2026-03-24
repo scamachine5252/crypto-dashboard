@@ -137,5 +137,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     riskRewardRatio: avgLoss > 0 ? avgWin / avgLoss : 0,
   }
 
-  return NextResponse.json({ funds, metrics, chartData })
+  const rawDailyPnl = sortedDays.map((day) => ({ date: day, pnl: dailyMap[day] }))
+
+  return NextResponse.json({ funds, metrics, chartData, rawDailyPnl })
 }

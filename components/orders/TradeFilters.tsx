@@ -1,10 +1,14 @@
 'use client'
 
-import { EXCHANGES } from '@/lib/mock-data'
 import type { HistoryFilterState, ExchangeId, TradeType, TradeSide } from '@/lib/types'
 
-const MOCK_TODAY = '2025-12-31'
 const MAX_DAYS = 180
+
+const EXCHANGE_COLORS: Record<string, string> = {
+  binance: '#F0B90B',
+  bybit:   '#FF6B2C',
+  okx:     '#4F8EF7',
+}
 
 function addDays(dateStr: string, days: number): string {
   const d = new Date(dateStr + 'T00:00:00Z')
@@ -21,9 +25,16 @@ function capEnd(start: string, end: string): string {
   return end > max ? max : end
 }
 
+export interface AccountInfo {
+  id: string
+  accountName: string
+  exchange: string
+}
+
 interface TradeFiltersProps {
   filter: HistoryFilterState
   onChange: (patch: Partial<HistoryFilterState>) => void
+  accounts: AccountInfo[]
 }
 
 const QUICK_PERIODS: { label: string; days: number }[] = [
@@ -40,14 +51,14 @@ const selectStyle = {
   borderRadius: 2,
 }
 
-export default function TradeFilters({ filter, onChange }: TradeFiltersProps) {
-  const selectedExchange =
-    filter.exchangeId !== 'all' ? EXCHANGES.find((e) => e.id === filter.exchangeId) : null
+export default function TradeFilters({ filter, onChange, accounts }: TradeFiltersProps) {
+  const today = new Date().toISOString().slice(0, 10)
 
-  const subAccounts =
-    filter.exchangeId === 'all'
-      ? []
-      : EXCHANGES.find((e) => e.id === filter.exchangeId)?.subAccounts ?? []
+  const uniqueExchanges = [...new Set(accounts.map((a) => a.exchange))]
+  const selectedColor = filter.exchangeId !== 'all' ? EXCHANGE_COLORS[filter.exchangeId] : undefined
+  const subAccounts = filter.exchangeId === 'all'
+    ? []
+    : accounts.filter((a) => a.exchange === filter.exchangeId)
 
   const maxEnd = addDays(filter.dateRange.start, MAX_DAYS)
   const isAtMaxRange = filter.dateRange.end >= maxEnd
@@ -69,14 +80,14 @@ export default function TradeFilters({ filter, onChange }: TradeFiltersProps) {
   }
 
   const handleQuickPeriod = (days: number) => {
-    const end = MOCK_TODAY
+    const end = today
     const start = subDays(end, days - 1)
     onChange({ dateRange: { start, end }, page: 1 })
   }
 
   const activeQuickDays = QUICK_PERIODS.find(({ days }) => {
-    const expectedStart = subDays(MOCK_TODAY, days - 1)
-    return filter.dateRange.end === MOCK_TODAY && filter.dateRange.start === expectedStart
+    const expectedStart = subDays(today, days - 1)
+    return filter.dateRange.end === today && filter.dateRange.start === expectedStart
   })?.days ?? null
 
   return (
@@ -91,13 +102,15 @@ export default function TradeFilters({ filter, onChange }: TradeFiltersProps) {
         className="text-xs px-2.5 py-1 outline-none cursor-pointer"
         style={{
           ...selectStyle,
-          border: `1px solid ${selectedExchange ? selectedExchange.color + '44' : 'var(--border-medium)'}`,
-          color: selectedExchange ? selectedExchange.color : 'var(--text-primary)',
+          border: `1px solid ${selectedColor ? selectedColor + '44' : 'var(--border-medium)'}`,
+          color: selectedColor ?? 'var(--text-primary)',
         }}
       >
         <option value="all">All Exchanges</option>
-        {EXCHANGES.map((ex) => (
-          <option key={ex.id} value={ex.id}>{ex.name}</option>
+        {uniqueExchanges.map((ex) => (
+          <option key={ex} value={ex} style={{ color: EXCHANGE_COLORS[ex] }}>
+            {ex.charAt(0).toUpperCase() + ex.slice(1)}
+          </option>
         ))}
       </select>
 
@@ -109,12 +122,12 @@ export default function TradeFilters({ filter, onChange }: TradeFiltersProps) {
         className="text-xs px-2.5 py-1 outline-none disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
         style={{
           ...selectStyle,
-          border: `1px solid ${selectedExchange && filter.subAccountId !== 'all' ? selectedExchange.color + '44' : 'var(--border-medium)'}`,
+          border: `1px solid ${selectedColor && filter.subAccountId !== 'all' ? selectedColor + '44' : 'var(--border-medium)'}`,
         }}
       >
         <option value="all">All Accounts</option>
-        {subAccounts.map((sa) => (
-          <option key={sa.id} value={sa.id}>{sa.name}</option>
+        {subAccounts.map((acc) => (
+          <option key={acc.id} value={acc.id}>{acc.accountName}</option>
         ))}
       </select>
 
@@ -128,13 +141,14 @@ export default function TradeFilters({ filter, onChange }: TradeFiltersProps) {
         style={selectStyle}
       />
 
-      {/* Section dropdown (Spot / Futures) */}
+      {/* Trade type dropdown */}
       <select
         value={filter.tradeType}
-        onChange={(e) => onChange({ tradeType: e.target.value as TradeType, page: 1 })}
+        onChange={(e) => onChange({ tradeType: e.target.value as TradeType | 'all', page: 1 })}
         className="text-xs px-2.5 py-1 outline-none cursor-pointer"
         style={selectStyle}
       >
+        <option value="all">All Types</option>
         <option value="spot">Spot</option>
         <option value="futures">Futures</option>
       </select>
@@ -153,7 +167,6 @@ export default function TradeFilters({ filter, onChange }: TradeFiltersProps) {
 
       {/* Date range */}
       <div className="flex items-center gap-1.5">
-        {/* Quick-period buttons */}
         <div className="flex items-center gap-px" style={{ border: '1px solid var(--border-subtle)' }}>
           {QUICK_PERIODS.map(({ label, days }) => {
             const active = activeQuickDays === days

@@ -1,6 +1,6 @@
 import 'server-only'
 import * as ccxt from 'ccxt'
-import type { ExchangeAdapter, BalanceResult } from './types'
+import type { ExchangeAdapter, BalanceResult, RawPosition } from './types'
 import type { DailyPnLEntry, Trade, DateRange } from '../types'
 import { mapCcxtTrade } from './ccxt-utils'
 
@@ -31,13 +31,44 @@ const TOP_50_SYMBOLS = [
 
 export class BinanceAdapter implements ExchangeAdapter {
   private exchange: ccxt.binance
+  private credentials: BinanceCredentials
 
   constructor(credentials: BinanceCredentials) {
+    this.credentials = credentials
     this.exchange = new ccxt.binance({
       apiKey: credentials.apiKey,
       secret: credentials.apiSecret,
       ...(credentials.type === 'future' ? { options: { defaultType: 'future' } } : {}),
     })
+  }
+
+  async fetchPositions(): Promise<RawPosition[]> {
+    try {
+      const futuresExchange = new ccxt.binance({
+        apiKey: this.credentials.apiKey,
+        secret: this.credentials.apiSecret,
+        options: { defaultType: 'future' },
+      })
+      const raw = await futuresExchange.fetchPositions()
+      return raw
+        .filter((p) => p.contracts && Math.abs(Number(p.contracts)) > 0)
+        .map((p) => {
+          const symbol = p.symbol ?? ''
+          return {
+            symbol: symbol.includes(':') ? symbol.split(':')[0] : symbol,
+            side: (p.side === 'short' ? 'short' : 'long') as 'long' | 'short',
+            size: Math.abs(Number(p.contracts ?? 0) * Number(p.contractSize ?? 1)),
+            entryPrice: Number(p.entryPrice ?? 0),
+            markPrice: Number(p.markPrice ?? 0),
+            notional: Math.abs(Number(p.notional ?? 0)),
+            unrealizedPnl: Number(p.unrealizedPnl ?? 0),
+            leverage: Number(p.leverage ?? 1),
+            margin: Number(p.initialMargin ?? 0),
+          }
+        })
+    } catch {
+      return []
+    }
   }
 
   async testConnection(): Promise<boolean> {

@@ -175,6 +175,21 @@ export interface AccountSnapshot {
   pnl: number
 }
 
+export interface Position {
+  symbol: string          // normalized display symbol e.g. 'BTC/USDT'
+  side: 'long' | 'short'
+  size: number            // position size in base currency
+  entryPrice: number
+  markPrice: number
+  notional: number        // absolute notional value in USDT
+  unrealizedPnl: number
+  leverage: number
+  margin: number          // margin used in USDT
+  accountId: string
+  accountName: string
+  exchange: string
+}
+
 export interface FundSummary {
   fund: string
   aum: number

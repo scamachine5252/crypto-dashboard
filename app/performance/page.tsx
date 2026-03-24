@@ -1,13 +1,15 @@
 'use client'
 
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
-import type { Period, DateRange, AccountMetricsRow } from '@/lib/types'
-import { EXCHANGES, getAllDailyPnL, ACCOUNT_COLORS } from '@/lib/mock-data'
-import { useAccountToggles } from '@/hooks/useAccountToggles'
+import type { Period, DateRange, AccountMetricsRow, DailyPnLEntry, ExtendedMetrics, ExchangeId, Trade } from '@/lib/types'
 import {
   resolveDateRange,
   buildOverlayData,
-  buildPerAccountMetrics,
+  calculateMetrics,
+  calculateFuturesMetrics,
+  calculateRecoveryFactor,
+  calculateAvgFeePerTrade,
+  calculateFeesAsPctOfPnl,
 } from '@/lib/calculations'
 import { formatMoney } from '@/lib/utils'
 import Header from '@/components/layout/Header'
@@ -15,16 +17,29 @@ import PeriodSelector from '@/components/ui/PeriodSelector'
 import OverlayLineChart from '@/components/charts/OverlayLineChart'
 import { ChevronDown, Check } from 'lucide-react'
 
+const EXCHANGE_COLORS: Record<string, string> = {
+  binance: '#F0B90B',
+  bybit:   '#FF6B2C',
+  okx:     '#4F8EF7',
+}
+
 type L1Tab = 'spot' | 'futures'
 type SpotL2 = 'overview' | 'returns' | 'risk' | 'costs'
 type FuturesL2 = 'overview' | 'returns' | 'risk-exposure' | 'cost' | 'execution'
+
+interface AccountInfo {
+  id: string
+  accountName: string
+  exchange: string
+  fund: string
+}
 
 interface ColDef {
   key: string
   label: string
   format: (v: number) => string
   lowerBetter?: boolean
-  sum?: boolean  // sum in totals row; otherwise avg
+  sum?: boolean
 }
 
 const SPOT_L2_TABS: { id: SpotL2; label: string }[] = [
@@ -138,6 +153,36 @@ function extremes(rows: AccountMetricsRow[], key: string, l1: L1Tab, lowerBetter
     : { best: Math.max(...vals), worst: Math.min(...vals) }
 }
 
+function buildDailyPnlEntries(
+  accounts: AccountInfo[],
+  trades: Trade[],
+): DailyPnLEntry[] {
+  const result: DailyPnLEntry[] = []
+  for (const acc of accounts) {
+    const accTrades = trades.filter((t) => t.subAccountId === acc.id)
+    // Group by date, sum pnl
+    const dayMap: Record<string, number> = {}
+    for (const t of accTrades) {
+      const date = t.closedAt.slice(0, 10)
+      dayMap[date] = (dayMap[date] ?? 0) + t.pnl
+    }
+    // Sort dates ascending, compute cumulative
+    const dates = Object.keys(dayMap).sort()
+    let cum = 0
+    for (const date of dates) {
+      cum += dayMap[date]
+      result.push({
+        date,
+        pnl: dayMap[date],
+        cumulativePnl: cum,
+        exchangeId: acc.exchange as ExchangeId,
+        subAccountId: acc.id,
+      })
+    }
+  }
+  return result
+}
+
 export default function PerformancePage() {
   const [period, setPeriod]           = useState<Period>('1Y')
   const [customRange, setCustomRange] = useState<DateRange | undefined>()
@@ -147,7 +192,10 @@ export default function PerformancePage() {
   const [acctOpen, setAcctOpen]       = useState(false)
   const dropdownRef                   = useRef<HTMLDivElement>(null)
 
-  const { activeIds, toggleAccount, toggleExchange, selectAll, reset } = useAccountToggles()
+  const [accounts, setAccounts]     = useState<AccountInfo[]>([])
+  const [trades, setTrades]         = useState<Trade[]>([])
+  const [activeIds, setActiveIds]   = useState<Set<string>>(new Set())
+  const [loading, setLoading]       = useState(true)
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -162,22 +210,148 @@ export default function PerformancePage() {
 
   const dateRange = useMemo<DateRange>(() => {
     if (period === 'manual' && customRange) return customRange
-    return resolveDateRange(period, '2025-12-31')
+    return resolveDateRange(period, new Date().toISOString().slice(0, 10))
   }, [period, customRange])
+
+  useEffect(() => {
+    const since = new Date(dateRange.start).getTime()
+    const until = new Date(dateRange.end + 'T23:59:59Z').getTime()
+    setLoading(true)
+    fetch(`/api/performance?since=${since}&until=${until}`)
+      .then((r) => r.json())
+      .then((data: {
+        accounts?: { id: string; account_name: string; exchange: string; fund: string }[]
+        trades?: Trade[]
+      }) => {
+        const accs: AccountInfo[] = (data.accounts ?? []).map((a) => ({
+          id: a.id,
+          accountName: a.account_name,
+          exchange: a.exchange,
+          fund: a.fund,
+        }))
+        setAccounts(accs)
+        setTrades(data.trades ?? [])
+        setActiveIds(new Set(accs.map((a) => a.id)))
+      })
+      .catch(() => { /* keep previous */ })
+      .finally(() => setLoading(false))
+  }, [dateRange.start, dateRange.end])
 
   const handlePeriodChange = useCallback((p: Period, range?: DateRange) => {
     setPeriod(p)
     setCustomRange(range)
   }, [])
 
-  const rows = useMemo(
-    () => buildPerAccountMetrics([...activeIds], dateRange, l1),
-    [activeIds, dateRange, l1],
+  const toggleAccount = useCallback((id: string) => {
+    setActiveIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) {
+        if (next.size > 1) next.delete(id)
+      } else {
+        next.add(id)
+      }
+      return next
+    })
+  }, [])
+
+  const toggleExchange = useCallback((exchange: string) => {
+    setActiveIds((prev) => {
+      const exIds = new Set(
+        accounts.filter((a) => a.exchange === exchange).map((a) => a.id),
+      )
+      const allOn = [...exIds].every((id) => prev.has(id))
+      const next = new Set(prev)
+      if (allOn) {
+        const remaining = [...prev].filter((id) => !exIds.has(id))
+        if (remaining.length > 0) exIds.forEach((id) => next.delete(id))
+      } else {
+        exIds.forEach((id) => next.add(id))
+      }
+      return next
+    })
+  }, [accounts])
+
+  const selectAll = useCallback(() => {
+    setActiveIds(new Set(accounts.map((a) => a.id)))
+  }, [accounts])
+
+  const resetToFirst = useCallback(() => {
+    if (accounts.length > 0) setActiveIds(new Set([accounts[0].id]))
+  }, [accounts])
+
+  // Color / name maps derived from real accounts
+  const colorMap = useMemo<Record<string, string>>(
+    () => Object.fromEntries(accounts.map((a) => [a.id, EXCHANGE_COLORS[a.exchange] ?? '#888'])),
+    [accounts],
   )
 
+  const nameMap = useMemo<Record<string, string>>(
+    () => Object.fromEntries(accounts.map((a) => [a.id, a.accountName])),
+    [accounts],
+  )
+
+  // Build daily PnL entries from trades for overlay chart
+  const dailyPnlEntries = useMemo<DailyPnLEntry[]>(
+    () => buildDailyPnlEntries(accounts, trades),
+    [accounts, trades],
+  )
+
+  // Per-account metrics table rows
+  const rows = useMemo<AccountMetricsRow[]>(() => {
+    if (accounts.length === 0) return []
+    return accounts
+      .filter((a) => activeIds.has(a.id))
+      .map((a) => {
+        const accTrades = trades.filter(
+          (t) => t.subAccountId === a.id && t.tradeType === l1,
+        )
+        // Build daily PnL from the type-filtered trades so metrics are consistent
+        const dayMap: Record<string, number> = {}
+        for (const t of accTrades) {
+          const d = t.closedAt.slice(0, 10)
+          dayMap[d] = (dayMap[d] ?? 0) + t.pnl
+        }
+        let cum = 0
+        const accDaily: DailyPnLEntry[] = Object.keys(dayMap).sort().map((date) => {
+          cum += dayMap[date]
+          return { date, pnl: dayMap[date], cumulativePnl: cum, exchangeId: a.exchange as ExchangeId, subAccountId: a.id }
+        })
+        const base = calculateMetrics(accDaily, accTrades)
+        const fut  = calculateFuturesMetrics(accTrades)
+        const extended: ExtendedMetrics = {
+          ...base,
+          recoveryFactor: calculateRecoveryFactor(base.totalPnl, base.maxDrawdown),
+          avgFeePerTrade: calculateAvgFeePerTrade(base.totalFees, base.totalTrades),
+          feesAsPctOfPnl: calculateFeesAsPctOfPnl(base.totalFees, base.totalPnl),
+        }
+        const avgFundingPerTrade = base.totalTrades > 0
+          ? fut.totalFundingCost / base.totalTrades
+          : 0
+        const avgHoldingMin = accTrades.length > 0
+          ? accTrades.reduce((s, t) => s + t.durationMin, 0) / accTrades.length
+          : 0
+        const totalNotional = accTrades.reduce((s, t) => s + t.quantity * t.entryPrice, 0)
+        return {
+          subAccountId: a.id,
+          exchangeId:   a.exchange as ExchangeId,
+          accountName:  a.accountName,
+          metrics:      extended,
+          futuresMetrics: fut,
+          extras: {
+            avgFundingPerTrade,
+            avgHoldingMin,
+            totalNotional,
+            liquidationsCount: 0,
+            rolloverCosts:     0,
+            openInterest:      0,
+          },
+        }
+      })
+  }, [accounts, activeIds, trades, l1])
+
   const overlayData = useMemo(
-    () => buildOverlayData(getAllDailyPnL(), [...activeIds], dateRange),
-    [activeIds, dateRange],
+    () => buildOverlayData(dailyPnlEntries, [...activeIds], dateRange),
+    [dailyPnlEntries, activeIds, dateRange],
   )
 
   const cols      = l1 === 'spot' ? SPOT_COLS[spotL2] : FUTURES_COLS[futuresL2]
@@ -201,7 +375,15 @@ export default function PerformancePage() {
     return result
   }, [rows, cols, l1])
 
-  const totalAccounts = EXCHANGES.reduce((s, ex) => s + ex.subAccounts.length, 0)
+  // Group accounts by exchange for dropdown
+  const exchangeGroups = useMemo(() => {
+    const groups: Record<string, AccountInfo[]> = {}
+    for (const acc of accounts) {
+      if (!groups[acc.exchange]) groups[acc.exchange] = []
+      groups[acc.exchange].push(acc)
+    }
+    return groups
+  }, [accounts])
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: 'var(--bg-primary)' }}>
@@ -233,7 +415,7 @@ export default function PerformancePage() {
               className="text-[10px] font-bold px-1.5 rounded"
               style={{ background: 'var(--accent-blue)', color: '#fff' }}
             >
-              {activeIds.size}/{totalAccounts}
+              {activeIds.size}/{accounts.length}
             </span>
             <ChevronDown className="w-3 h-3" style={{ color: 'var(--text-muted)', transform: acctOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
           </button>
@@ -250,53 +432,61 @@ export default function PerformancePage() {
               }}
             >
               <div className="flex items-center gap-3 px-3 py-1.5" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                <button onClick={selectAll} className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--accent-blue)' }}>All</button>
-                <button onClick={reset}    className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>Reset</button>
+                <button onClick={selectAll}    className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--accent-blue)' }}>All</button>
+                <button onClick={resetToFirst} className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>Reset</button>
               </div>
-              {EXCHANGES.map((ex) => (
-                <div key={ex.id}>
-                  <button
-                    onClick={() => toggleExchange(ex.id)}
-                    className="w-full flex items-center gap-2 px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-left"
-                    style={{ color: ex.color }}
-                    onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-secondary)' }}
-                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
-                  >
-                    <span className="w-1.5 h-1.5 rounded-full" style={{ background: ex.color }} />
-                    {ex.name}
-                  </button>
-                  {ex.subAccounts.map((sa) => {
-                    const on    = activeIds.has(sa.id)
-                    const color = ACCOUNT_COLORS[sa.id] ?? ex.color
-                    return (
+
+              {loading ? (
+                <div className="px-3 py-4 text-[10px]" style={{ color: 'var(--text-muted)' }}>Loading…</div>
+              ) : Object.keys(exchangeGroups).length === 0 ? (
+                <div className="px-3 py-4 text-[10px]" style={{ color: 'var(--text-muted)' }}>No accounts</div>
+              ) : (
+                Object.entries(exchangeGroups).map(([exchange, accs]) => {
+                  const exColor = EXCHANGE_COLORS[exchange] ?? '#888'
+                  return (
+                    <div key={exchange}>
                       <button
-                        key={sa.id}
-                        onClick={() => toggleAccount(sa.id)}
-                        className="w-full flex items-center gap-2 px-5 py-1.5 text-xs text-left"
-                        style={{ color: on ? 'var(--text-primary)' : 'var(--text-muted)' }}
+                        onClick={() => toggleExchange(exchange)}
+                        className="w-full flex items-center gap-2 px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-left"
+                        style={{ color: exColor }}
                         onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-secondary)' }}
                         onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
                       >
-                        <span
-                          className="w-3 h-3 border flex items-center justify-center shrink-0"
-                          style={{
-                            borderColor: on ? color : 'var(--border-medium)',
-                            background:  on ? color : 'transparent',
-                            borderRadius: 2,
-                          }}
-                        >
-                          {on && <Check className="w-2 h-2" style={{ color: '#000' }} />}
-                        </span>
-                        {sa.name}
+                        <span className="w-1.5 h-1.5 rounded-full" style={{ background: exColor }} />
+                        {exchange}
                       </button>
-                    )
-                  })}
-                </div>
-              ))}
+                      {accs.map((acc) => {
+                        const on = activeIds.has(acc.id)
+                        return (
+                          <button
+                            key={acc.id}
+                            onClick={() => toggleAccount(acc.id)}
+                            className="w-full flex items-center gap-2 px-5 py-1.5 text-xs text-left"
+                            style={{ color: on ? 'var(--text-primary)' : 'var(--text-muted)' }}
+                            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-secondary)' }}
+                            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+                          >
+                            <span
+                              className="w-3 h-3 border flex items-center justify-center shrink-0"
+                              style={{
+                                borderColor: on ? exColor : 'var(--border-medium)',
+                                background:  on ? exColor : 'transparent',
+                                borderRadius: 2,
+                              }}
+                            >
+                              {on && <Check className="w-2 h-2" style={{ color: '#000' }} />}
+                            </span>
+                            {acc.accountName}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )
+                })
+              )}
             </div>
           )}
         </div>
-
       </div>
 
       {/* L1 tabs: SPOT / FUTURES */}
@@ -347,7 +537,13 @@ export default function PerformancePage() {
 
       <main className="flex-1 pb-6">
         {/* Per-account metrics table */}
-        {rows.length > 0 ? (
+        {loading ? (
+          <div className="mx-6 mt-4 space-y-2">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="h-10 rounded animate-pulse" style={{ background: 'var(--bg-secondary)' }} />
+            ))}
+          </div>
+        ) : rows.length > 0 ? (
           <div
             className="mx-6 mt-4 overflow-x-auto"
             style={{ border: '1px solid var(--border-subtle)', background: 'var(--bg-secondary)' }}
@@ -374,8 +570,8 @@ export default function PerformancePage() {
               </thead>
               <tbody>
                 {rows.map((row) => {
-                  const exColor   = EXCHANGES.find((e) => e.id === row.exchangeId)?.color ?? '#888'
-                  const acctColor = ACCOUNT_COLORS[row.subAccountId] ?? exColor
+                  const exColor   = EXCHANGE_COLORS[row.exchangeId] ?? '#888'
+                  const acctColor = colorMap[row.subAccountId] ?? exColor
                   return (
                     <tr
                       key={row.subAccountId}
@@ -455,6 +651,8 @@ export default function PerformancePage() {
             data={overlayData}
             activeIds={[...activeIds]}
             height={280}
+            colorMap={colorMap}
+            nameMap={nameMap}
           />
         </div>
       </main>

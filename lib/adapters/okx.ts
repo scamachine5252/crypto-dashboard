@@ -1,6 +1,6 @@
 import 'server-only'
 import * as ccxt from 'ccxt'
-import type { ExchangeAdapter, BalanceResult } from './types'
+import type { ExchangeAdapter, BalanceResult, RawPosition } from './types'
 import type { DailyPnLEntry, Trade, DateRange } from '../types'
 import { mapCcxtTrade } from './ccxt-utils'
 
@@ -42,6 +42,30 @@ export class OkxAdapter implements ExchangeAdapter {
       }
     }
     return { usdt, tokens }
+  }
+
+  async fetchPositions(): Promise<RawPosition[]> {
+    try {
+      const raw = await this.exchange.fetchPositions()
+      return raw
+        .filter((p) => p.contracts && Math.abs(Number(p.contracts)) > 0)
+        .map((p) => {
+          const symbol = p.symbol ?? ''
+          return {
+            symbol: symbol.includes(':') ? symbol.split(':')[0] : symbol,
+            side: (p.side === 'short' ? 'short' : 'long') as 'long' | 'short',
+            size: Math.abs(Number(p.contracts ?? 0) * Number(p.contractSize ?? 1)),
+            entryPrice: Number(p.entryPrice ?? 0),
+            markPrice: Number(p.markPrice ?? 0),
+            notional: Math.abs(Number(p.notional ?? 0)),
+            unrealizedPnl: Number(p.unrealizedPnl ?? 0),
+            leverage: Number(p.leverage ?? 1),
+            margin: Number(p.initialMargin ?? 0),
+          }
+        })
+    } catch {
+      return []
+    }
   }
 
   async getDailyPnL(_subAccountId: string, _dateRange: DateRange): Promise<DailyPnLEntry[]> {

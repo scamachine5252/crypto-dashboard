@@ -1,32 +1,32 @@
 'use client'
 
-import React, { useState, useMemo } from 'react'
-import type { Period, DateRange, Timeframe } from '@/lib/types'
-import { EXCHANGES, getAllDailyPnL, ACCOUNT_PRIMARY_TOKEN } from '@/lib/mock-data'
-import {
-  resolveDateRange,
-  filterByDateRange,
-  aggregateChartData,
-  buildAccountSnapshots,
-  buildUsdtBalanceTimeSeries,
-  buildTokenBalanceTimeSeries,
-} from '@/lib/calculations'
+import React, { useState, useMemo, useEffect } from 'react'
+import type { Period, DateRange, Timeframe, DailyPnLEntry, ExchangeId } from '@/lib/types'
+import { resolveDateRange, aggregateChartData } from '@/lib/calculations'
 import Header from '@/components/layout/Header'
 import PeriodSelector from '@/components/ui/PeriodSelector'
 import BalanceLineChart from '@/components/charts/BalanceLineChart'
 import PnlHistogramChart from '@/components/charts/PnlHistogramChart'
 import { formatMoney } from '@/lib/utils'
 
-// All 7 sub-account IDs
-const ALL_IDS = EXCHANGES.flatMap((ex) => ex.subAccounts.map((sa) => sa.id))
-
-// Unique trading pairs derived from ACCOUNT_PRIMARY_TOKEN values
-const ALL_PAIRS = [...new Set(Object.values(ACCOUNT_PRIMARY_TOKEN).map((t) => `${t}/USDT`))].sort()
-
 const EXCHANGE_COLORS: Record<string, string> = {
   binance: '#F0B90B',
   bybit:   '#FF6B2C',
   okx:     '#4F8EF7',
+}
+
+// Generate slightly varied shades per account within the same exchange
+function buildColorMap(accounts: { id: string; exchange: string }[]): Record<string, string> {
+  const countPerExchange: Record<string, number> = {}
+  const map: Record<string, string> = {}
+  for (const acc of accounts) {
+    const idx = countPerExchange[acc.exchange] ?? 0
+    countPerExchange[acc.exchange] = idx + 1
+    const base = EXCHANGE_COLORS[acc.exchange] ?? '#4F8EF7'
+    // Vary opacity slightly for multiple accounts on same exchange
+    map[acc.id] = idx === 0 ? base : base + (idx === 1 ? 'CC' : '88')
+  }
+  return map
 }
 
 function ExchangeLogo({ id }: { id: string }) {
@@ -57,12 +57,14 @@ function ExchangeLogo({ id }: { id: string }) {
   )
 }
 
-function Delta({ value, isToken = false }: { value: number; isToken?: boolean }) {
+function Delta({ value }: { value: number }) {
   const isPos = value >= 0
   const color = isPos ? 'var(--accent-profit)' : 'var(--accent-loss)'
-  const sign  = isPos ? '+' : ''
-  const formatted = isToken ? `${sign}${value.toFixed(4)}` : `${sign}${formatMoney(value)}`
-  return <span className="font-mono text-xs tabular font-semibold" style={{ color }}>{formatted}</span>
+  return (
+    <span className="font-mono text-xs tabular font-semibold" style={{ color }}>
+      {isPos ? '+' : ''}{formatMoney(value)}
+    </span>
+  )
 }
 
 const TIMEFRAME_OPTIONS: { label: string; value: Timeframe }[] = [
@@ -71,12 +73,31 @@ const TIMEFRAME_OPTIONS: { label: string; value: Timeframe }[] = [
   { label: 'Month', value: 'monthly' },
 ]
 
+type AccountSummary = {
+  accountId:   string
+  accountName: string
+  exchange:    string
+  fund:        string
+  startUsdt:   number
+  endUsdt:     number
+  deltaUsdt:   number
+  totalFees:   number
+  totalPnl:    number
+}
+
+type AccountInfo = { id: string; account_name: string; exchange: string; fund: string }
+
 export default function ResultsPage() {
-  const [period, setPeriod]             = useState<Period>('1Y')
-  const [customRange, setCustomRange]   = useState<DateRange | undefined>()
-  const [pairFilter, setPairFilter]     = useState<string>('all')
-  const [checkedIds, setCheckedIds]     = useState<Set<string>>(new Set(ALL_IDS))
+  const [period, setPeriod]           = useState<Period>('1Y')
+  const [customRange, setCustomRange] = useState<DateRange | undefined>()
   const [pnlTimeframe, setPnlTimeframe] = useState<Timeframe>('monthly')
+
+  const [accountSummaries, setAccountSummaries] = useState<AccountSummary[]>([])
+  const [balanceHistory, setBalanceHistory]     = useState<{ accountId: string; date: string; usdt: number }[]>([])
+  const [dailyPnl, setDailyPnl]                = useState<{ accountId: string; date: string; pnl: number }[]>([])
+  const [accounts, setAccounts]                 = useState<AccountInfo[]>([])
+  const [checkedIds, setCheckedIds]             = useState<Set<string>>(new Set())
+  const [loading, setLoading]                   = useState(true)
 
   const handlePeriodChange = (p: Period, range?: DateRange) => {
     setPeriod(p)
@@ -87,7 +108,7 @@ export default function ResultsPage() {
     setCheckedIds((prev) => {
       const next = new Set(prev)
       if (next.has(id)) {
-        if (next.size === 1) return prev // keep at least one checked
+        if (next.size === 1) return prev
         next.delete(id)
       } else {
         next.add(id)
@@ -96,64 +117,73 @@ export default function ResultsPage() {
     })
   }
 
-  const allChecked   = checkedIds.size === ALL_IDS.length
-  const toggleAll    = () => setCheckedIds(allChecked ? new Set([ALL_IDS[0]]) : new Set(ALL_IDS))
-
-  const dateRange = useMemo<DateRange>(() => {
-    if (period === 'manual' && customRange) return customRange
-    return resolveDateRange(period, '2025-12-31')
-  }, [period, customRange])
-
-  const snapshots = useMemo(() => {
-    const all = buildAccountSnapshots(dateRange)
-    return pairFilter === 'all'
-      ? all
-      : all.filter((s) => `${s.token}/USDT` === pairFilter)
-  }, [dateRange, pairFilter])
-
-  // Visible snapshots = filtered by pair AND checked
-  const visibleSnapshots = useMemo(
-    () => snapshots.filter((s) => checkedIds.has(s.subAccountId)),
-    [snapshots, checkedIds],
+  const allChecked = checkedIds.size === accounts.length && accounts.length > 0
+  const toggleAll  = () => setCheckedIds(
+    allChecked ? new Set(accounts.slice(0, 1).map((a) => a.id)) : new Set(accounts.map((a) => a.id))
   )
 
-  // USDT balance series — only checked accounts
+  // Fetch real data when period changes
+  useEffect(() => {
+    const today = new Date().toISOString().slice(0, 10)
+    const range = period === 'manual' && customRange ? customRange : resolveDateRange(period, today)
+    const since = new Date(range.start).getTime()
+    const until = new Date(range.end + 'T23:59:59Z').getTime()
+
+    setLoading(true)
+    fetch(`/api/results?since=${since}&until=${until}`)
+      .then((r) => r.json())
+      .then((data: {
+        accounts?: AccountInfo[]
+        balanceHistory?: { accountId: string; date: string; usdt: number }[]
+        dailyPnl?: { accountId: string; date: string; pnl: number }[]
+        accountSummaries?: AccountSummary[]
+      }) => {
+        setAccounts(data.accounts ?? [])
+        setBalanceHistory(data.balanceHistory ?? [])
+        setDailyPnl(data.dailyPnl ?? [])
+        setAccountSummaries(data.accountSummaries ?? [])
+        setCheckedIds(new Set((data.accounts ?? []).map((a) => a.id)))
+      })
+      .catch(() => { /* keep previous */ })
+      .finally(() => setLoading(false))
+  }, [period, customRange])
+
+  const colorMap = useMemo(() => buildColorMap(accounts), [accounts])
+
+  // USDT balance chart series — checked accounts only
   const usdtSeries = useMemo(
     () => [...checkedIds].map((id) => ({
       subAccountId: id,
-      data: buildUsdtBalanceTimeSeries(id, dateRange),
+      data: balanceHistory
+        .filter((b) => b.accountId === id)
+        .sort((a, b) => a.date.localeCompare(b.date))
+        .map((b) => ({ date: b.date, value: b.usdt })),
     })),
-    [checkedIds, dateRange],
+    [checkedIds, balanceHistory]
   )
 
-  // Token balance series — only checked accounts
-  const tokenSeries = useMemo(
-    () => [...checkedIds].map((id) => ({
-      subAccountId: id,
-      data: buildTokenBalanceTimeSeries(id, dateRange),
-    })),
-    [checkedIds, dateRange],
-  )
-
-  // PnL histogram — only checked accounts, selected timeframe
+  // PnL histogram — checked accounts combined, selected timeframe
   const histogramData = useMemo(() => {
-    const daily = filterByDateRange(
-      getAllDailyPnL().filter((d) => checkedIds.has(d.subAccountId)),
-      dateRange,
-    )
-    return aggregateChartData(daily, pnlTimeframe).map((d) => ({ month: d.period, pnl: d.pnl }))
-  }, [checkedIds, dateRange, pnlTimeframe])
+    const entries: DailyPnLEntry[] = dailyPnl
+      .filter((d) => checkedIds.has(d.accountId))
+      .map((d) => ({ date: d.date, subAccountId: d.accountId, exchangeId: 'binance' as ExchangeId, pnl: d.pnl, cumulativePnl: 0 }))
+    return aggregateChartData(entries, pnlTimeframe).map((d) => ({ month: d.period, pnl: d.pnl }))
+  }, [dailyPnl, checkedIds, pnlTimeframe])
 
-  // Totals
+  // Visible summaries for totals
+  const visibleSummaries = useMemo(
+    () => accountSummaries.filter((s) => checkedIds.has(s.accountId)),
+    [accountSummaries, checkedIds]
+  )
+
   const totals = useMemo(() => ({
-    deltaUsdt: visibleSnapshots.reduce((s, r) => s + r.deltaUsdt, 0),
-    fees:      visibleSnapshots.reduce((s, r) => s + r.fees, 0),
-    pnl:       visibleSnapshots.reduce((s, r) => s + r.pnl, 0),
-  }), [visibleSnapshots])
+    deltaUsdt: visibleSummaries.reduce((s, r) => s + r.deltaUsdt, 0),
+    fees:      visibleSummaries.reduce((s, r) => s + r.totalFees, 0),
+    pnl:       visibleSummaries.reduce((s, r) => s + r.totalPnl, 0),
+  }), [visibleSummaries])
 
   const cellBorder = { borderRight: '1px solid var(--border-subtle)', borderBottom: '1px solid var(--border-subtle)' }
-  const noBtm      = { borderRight: '1px solid var(--border-subtle)', borderBottom: 'none' }
-  const numCell    = 'px-3 py-1.5 text-center font-mono tabular text-xs'
+  const numCell    = 'px-3 py-2 text-center font-mono tabular text-xs'
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: 'var(--bg-primary)' }}>
@@ -166,60 +196,27 @@ export default function ResultsPage() {
       >
         <span className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>Period</span>
         <PeriodSelector value={period} customRange={customRange} onChange={handlePeriodChange} />
-
-        <div className="ml-auto flex items-center gap-2">
-          <span className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>Pair</span>
-          <select
-            value={pairFilter}
-            onChange={(e) => setPairFilter(e.target.value)}
-            className="text-xs px-2.5 py-1 outline-none cursor-pointer"
-            style={{
-              background: 'var(--bg-tertiary)',
-              border: '1px solid var(--border-medium)',
-              color: 'var(--text-primary)',
-              borderRadius: 2,
-            }}
-          >
-            <option value="all">All Pairs</option>
-            {ALL_PAIRS.map((p) => <option key={p} value={p}>{p}</option>)}
-          </select>
-        </div>
       </div>
 
       <main className="flex-1 pb-6">
         {/* Charts row */}
-        {/* Balance charts — side by side */}
         <div className="px-4 pt-3 pb-2 grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* USDT Balance */}
+          {/* USDT Balance chart */}
           <div style={{ border: '1px solid var(--border-subtle)' }}>
             <div className="px-4 py-2 flex items-center gap-3" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
               <p className="text-xs font-semibold tracking-wide font-heading" style={{ color: 'var(--text-primary)' }}>USDT BALANCE</p>
               <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Balance over period per account</p>
             </div>
             <div className="px-3 py-3" style={{ background: 'var(--bg-secondary)' }}>
-              <BalanceLineChart series={usdtSeries} height={220} />
+              <BalanceLineChart series={usdtSeries} height={220} colorMap={colorMap} />
             </div>
           </div>
 
-          {/* Token Balance */}
-          <div style={{ border: '1px solid var(--border-subtle)' }}>
-            <div className="px-4 py-2 flex items-center gap-3" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-              <p className="text-xs font-semibold tracking-wide font-heading" style={{ color: 'var(--text-primary)' }}>TOKEN BALANCE</p>
-              <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Token holdings over period per account</p>
-            </div>
-            <div className="px-3 py-3" style={{ background: 'var(--bg-secondary)' }}>
-              <BalanceLineChart series={tokenSeries} height={220} />
-            </div>
-          </div>
-        </div>
-
-        {/* PnL histogram — full width */}
-        <div className="px-4 pb-2">
+          {/* PnL histogram */}
           <div style={{ border: '1px solid var(--border-subtle)' }}>
             <div className="px-4 py-2 flex items-center gap-3" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
               <p className="text-xs font-semibold tracking-wide font-heading" style={{ color: 'var(--text-primary)' }}>P&L</p>
               <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>All checked accounts combined</p>
-              {/* Timeframe tabs */}
               <div className="ml-auto flex items-center gap-px" style={{ border: '1px solid var(--border-subtle)' }}>
                 {TIMEFRAME_OPTIONS.map((tf) => {
                   const active = pnlTimeframe === tf.value
@@ -246,13 +243,12 @@ export default function ResultsPage() {
           </div>
         </div>
 
-        {/* Balance table */}
+        {/* Account table */}
         <div className="px-4">
           <div style={{ border: '1px solid var(--border-subtle)', overflowX: 'auto' }}>
-            <table className="w-full text-xs border-collapse" style={{ minWidth: 760 }}>
+            <table className="w-full text-xs border-collapse" style={{ minWidth: 640 }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-secondary)' }}>
-                  {/* Checkbox header */}
                   <th className="px-3 py-2 text-center" style={{ borderRight: '1px solid var(--border-subtle)', width: 36 }}>
                     <input
                       type="checkbox"
@@ -262,7 +258,7 @@ export default function ResultsPage() {
                       style={{ accentColor: 'var(--accent-blue)' }}
                     />
                   </th>
-                  {['Exchange', 'Account', 'Token', 'Opening', 'Closing', 'Difference', 'Fees', 'Avg Price', 'PnL'].map((col) => (
+                  {['Exchange', 'Account', 'Fund', 'Opening', 'Closing', 'Difference', 'Fees', 'PnL'].map((col) => (
                     <th
                       key={col}
                       className="px-3 py-2 text-center text-[10px] uppercase tracking-widest font-semibold"
@@ -274,90 +270,69 @@ export default function ResultsPage() {
                 </tr>
               </thead>
               <tbody>
-                {snapshots.length === 0 ? (
+                {loading ? (
                   <tr>
-                    <td colSpan={10} className="px-4 py-6 text-center text-xs" style={{ color: 'var(--text-muted)' }}>
-                      No accounts match the selected pair filter
+                    <td colSpan={9} className="px-4 py-8 text-center text-xs" style={{ color: 'var(--text-muted)' }}>
+                      Loading…
+                    </td>
+                  </tr>
+                ) : accountSummaries.length === 0 ? (
+                  <tr>
+                    <td colSpan={9} className="px-4 py-8 text-center text-xs" style={{ color: 'var(--text-muted)' }}>
+                      No data for selected period. Run a sync first.
                     </td>
                   </tr>
                 ) : (
-                  snapshots.map((snap) => {
-                    const exColor  = EXCHANGE_COLORS[snap.exchangeId] ?? 'var(--text-muted)'
-                    const ex       = EXCHANGES.find((e) => e.id === snap.exchangeId)
-                    const checked  = checkedIds.has(snap.subAccountId)
-                    const rowAlpha = checked ? 1 : 0.4
+                  accountSummaries.map((summary) => {
+                    const exColor = EXCHANGE_COLORS[summary.exchange] ?? 'var(--text-muted)'
+                    const checked = checkedIds.has(summary.accountId)
 
                     return (
-                      <React.Fragment key={snap.subAccountId}>
-                        {/* USDT row */}
-                        <tr
-                          key={`${snap.subAccountId}-usdt`}
-                          style={{ background: 'var(--bg-secondary)', opacity: rowAlpha }}
-                        >
-                          {/* Checkbox — spans 2 rows */}
-                          <td
-                            className="px-3 py-1.5 text-center"
-                            rowSpan={2}
-                            style={{ borderRight: '1px solid var(--border-subtle)', borderBottom: '1px solid var(--border-subtle)', verticalAlign: 'middle' }}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={() => toggleId(snap.subAccountId)}
-                              className="cursor-pointer"
-                              style={{ accentColor: 'var(--accent-blue)' }}
-                            />
-                          </td>
-                          <td className="px-3 py-1.5" style={noBtm}>
-                            <div className="flex items-center gap-1.5">
-                              <ExchangeLogo id={snap.exchangeId} />
-                              <span className="font-bold text-[10px] uppercase tracking-widest" style={{ color: exColor }}>
-                                {ex?.name}
-                              </span>
-                            </div>
-                          </td>
-                          <td className="px-3 py-1.5" style={{ ...noBtm, color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>
-                            {snap.accountName}
-                          </td>
-                          <td className="px-3 py-1.5 text-center" style={noBtm}>
-                            <span className="text-[10px] font-mono font-semibold px-1.5 py-0.5" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border-subtle)' }}>
-                              USDT
+                      <tr
+                        key={summary.accountId}
+                        style={{ background: 'var(--bg-secondary)', opacity: checked ? 1 : 0.4, borderBottom: '1px solid var(--border-subtle)' }}
+                      >
+                        <td className="px-3 py-2 text-center" style={{ borderRight: '1px solid var(--border-subtle)' }}>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleId(summary.accountId)}
+                            className="cursor-pointer"
+                            style={{ accentColor: 'var(--accent-blue)' }}
+                          />
+                        </td>
+                        <td className="px-3 py-2" style={cellBorder}>
+                          <div className="flex items-center gap-1.5">
+                            <ExchangeLogo id={summary.exchange} />
+                            <span className="font-bold text-[10px] uppercase tracking-widest" style={{ color: exColor }}>
+                              {summary.exchange}
                             </span>
-                          </td>
-                          <td className={numCell} style={{ ...noBtm, color: 'var(--text-secondary)' }}>{formatMoney(snap.usdtOpen)}</td>
-                          <td className={numCell} style={{ ...noBtm, color: 'var(--text-primary)' }}>{formatMoney(snap.usdtClose)}</td>
-                          <td className={numCell} style={noBtm}><Delta value={snap.deltaUsdt} /></td>
-                          <td className={numCell} style={{ ...noBtm, color: 'var(--accent-loss)' }}>{formatMoney(snap.fees)}</td>
-                          <td className={numCell} style={{ ...noBtm, color: 'var(--text-muted)' }}>—</td>
-                          <td className={numCell} style={noBtm}><Delta value={snap.pnl} /></td>
-                        </tr>
-
-                        {/* Token row */}
-                        <tr
-                          key={`${snap.subAccountId}-token`}
-                          style={{ background: 'var(--bg-primary)', opacity: rowAlpha }}
-                        >
-                          <td className="px-3 py-1.5" style={cellBorder} />
-                          <td className="px-3 py-1.5" style={cellBorder} />
-                          <td className="px-3 py-1.5 text-center" style={cellBorder}>
-                            <span className="text-[10px] font-mono font-semibold px-1.5 py-0.5" style={{ background: 'var(--bg-tertiary)', color: exColor, border: `1px solid ${exColor}44` }}>
-                              {snap.token}
-                            </span>
-                          </td>
-                          <td className={numCell} style={{ ...cellBorder, color: 'var(--text-secondary)' }}>{snap.tokenOpen.toFixed(4)}</td>
-                          <td className={numCell} style={{ ...cellBorder, color: 'var(--text-primary)' }}>{snap.tokenClose.toFixed(4)}</td>
-                          <td className={numCell} style={cellBorder}><Delta value={snap.deltaToken} isToken /></td>
-                          <td className={numCell} style={{ ...cellBorder, color: 'var(--text-muted)' }}>—</td>
-                          <td className={numCell} style={{ ...cellBorder, color: 'var(--text-secondary)' }}>{formatMoney(snap.avgPrice)}</td>
-                          <td className={numCell} style={cellBorder}><span style={{ color: 'var(--text-muted)' }}>—</span></td>
-                        </tr>
-                      </React.Fragment>
+                          </div>
+                        </td>
+                        <td className="px-3 py-2 whitespace-nowrap" style={{ ...cellBorder, color: 'var(--text-primary)' }}>
+                          {summary.accountName}
+                        </td>
+                        <td className="px-3 py-2 text-center" style={{ ...cellBorder, color: 'var(--text-muted)', fontSize: 10 }}>
+                          {summary.fund || '—'}
+                        </td>
+                        <td className={numCell} style={{ ...cellBorder, color: 'var(--text-secondary)' }}>
+                          {formatMoney(summary.startUsdt)}
+                        </td>
+                        <td className={numCell} style={{ ...cellBorder, color: 'var(--text-primary)' }}>
+                          {formatMoney(summary.endUsdt)}
+                        </td>
+                        <td className={numCell} style={cellBorder}><Delta value={summary.deltaUsdt} /></td>
+                        <td className={numCell} style={{ ...cellBorder, color: 'var(--accent-loss)' }}>
+                          {formatMoney(summary.totalFees)}
+                        </td>
+                        <td className={numCell} style={cellBorder}><Delta value={summary.totalPnl} /></td>
+                      </tr>
                     )
                   })
                 )}
 
                 {/* Totals row */}
-                {snapshots.length > 0 && (
+                {accountSummaries.length > 0 && (
                   <tr style={{ background: 'var(--bg-elevated)', borderTop: '1px solid var(--border-medium)' }}>
                     <td style={{ borderRight: '1px solid var(--border-subtle)' }} />
                     <td
@@ -365,7 +340,7 @@ export default function ResultsPage() {
                       className="px-3 py-2 text-[10px] uppercase tracking-widest font-bold"
                       style={{ color: 'var(--text-muted)', borderRight: '1px solid var(--border-subtle)' }}
                     >
-                      Total — {visibleSnapshots.length} account{visibleSnapshots.length !== 1 ? 's' : ''} selected
+                      Total — {visibleSummaries.length} account{visibleSummaries.length !== 1 ? 's' : ''} selected
                     </td>
                     <td className="px-3 py-2 text-center" style={{ borderRight: '1px solid var(--border-subtle)' }}>
                       <Delta value={totals.deltaUsdt} />
@@ -373,7 +348,6 @@ export default function ResultsPage() {
                     <td className="px-3 py-2 text-center font-mono tabular text-xs" style={{ color: 'var(--accent-loss)', borderRight: '1px solid var(--border-subtle)' }}>
                       {formatMoney(totals.fees)}
                     </td>
-                    <td style={{ borderRight: '1px solid var(--border-subtle)' }} />
                     <td className="px-3 py-2 text-center">
                       <Delta value={totals.pnl} />
                     </td>

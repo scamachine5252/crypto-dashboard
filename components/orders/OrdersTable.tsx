@@ -9,6 +9,7 @@ import { ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight } fro
 interface OrdersTableProps {
   trades: Trade[]
   pageSize?: number
+  accountNameMap?: Record<string, string>
 }
 
 type SortKey = 'closedAt' | 'symbol' | 'pnl' | 'fee' | 'quantity'
@@ -27,7 +28,8 @@ function SortIcon({ col, sort }: { col: SortKey; sort: { key: SortKey; dir: Sort
     : <ChevronDown className="w-3 h-3" style={{ color: 'var(--accent-blue)' }} />
 }
 
-function getSubAccountName(id: string): string {
+function getSubAccountName(id: string, accountNameMap?: Record<string, string>): string {
+  if (accountNameMap?.[id]) return accountNameMap[id]
   for (const ex of EXCHANGES) {
     const sa = ex.subAccounts.find((s) => s.id === id)
     if (sa) return sa.name
@@ -47,7 +49,7 @@ const COLUMNS: { label: string; key: SortKey | null }[] = [
   { label: 'Exchange / Account', key: null },
 ]
 
-export default function OrdersTable({ trades, pageSize = 15 }: OrdersTableProps) {
+export default function OrdersTable({ trades, pageSize = 15, accountNameMap }: OrdersTableProps) {
   const PAGE_SIZE = pageSize
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: 'closedAt', dir: 'desc' })
   const [page, setPage] = useState(1)
@@ -62,7 +64,7 @@ export default function OrdersTable({ trades, pageSize = 15 }: OrdersTableProps)
         t.side.toLowerCase().includes(q) ||
         t.tradeType.toLowerCase().includes(q) ||
         t.exchangeId.toLowerCase().includes(q) ||
-        getSubAccountName(t.subAccountId).toLowerCase().includes(q)
+        getSubAccountName(t.subAccountId, accountNameMap).toLowerCase().includes(q)
     )
   }, [trades, search])
 
@@ -261,7 +263,7 @@ export default function OrdersTable({ trades, pageSize = 15 }: OrdersTableProps)
                         </span>
                         <span style={{ color: 'var(--border-medium)' }}>/</span>
                         <span style={{ color: 'var(--text-secondary)' }}>
-                          {getSubAccountName(trade.subAccountId)}
+                          {getSubAccountName(trade.subAccountId, accountNameMap)}
                         </span>
                       </span>
                     </td>
