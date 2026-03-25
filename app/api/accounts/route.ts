@@ -3,7 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase/server'
 import { encrypt } from '@/lib/crypto/encrypt'
 
 const VALID_EXCHANGES = ['binance', 'bybit', 'okx'] as const
-const VALID_INSTRUMENTS = ['spot', 'futures', 'options', 'unified'] as const
+const VALID_INSTRUMENTS = ['spot', 'futures', 'options', 'unified', 'portfolio_margin'] as const
 
 // ---------------------------------------------------------------------------
 // POST /api/accounts — create a new exchange account

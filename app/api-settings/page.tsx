@@ -195,11 +195,21 @@ export default function ApiSettingsPage() {
       const allFailed: { symbol: string; error: string }[] = []
 
       if (exchange === 'binance') {
-        // Binance: symbol-based chunking
+        // Binance: symbol-based chunking.
+        // Markets route returns the full sorted symbol arrays once — chunk slicing
+        // happens here so the full route never needs to call loadMarkets() itself.
         const marketsRes = await fetch(`/api/sync/binance/markets?account_id=${accountId}`)
         if (!marketsRes.ok) throw new Error('Failed to load markets')
-        const { totalChunks, totalSymbols, spotChunks } = (await marketsRes.json()) as {
-          totalChunks: number; chunkSize: number; totalSymbols: number; spotChunks: number
+        const { spotSymbols, futuresSymbols, totalSymbols } = (await marketsRes.json()) as {
+          spotSymbols: string[]; futuresSymbols: string[]
+          totalSymbols: number; spotChunks: number; totalChunks: number; chunkSize: number
+        }
+
+        const CHUNK = 50
+        const allSymbols = [...spotSymbols, ...futuresSymbols]
+        const chunks: string[][] = []
+        for (let i = 0; i < allSymbols.length; i += CHUNK) {
+          chunks.push(allSymbols.slice(i, i + CHUNK))
         }
 
         setScanState((prev) => ({
@@ -207,11 +217,11 @@ export default function ApiSettingsPage() {
           [accountId]: { current: 0, total: totalSymbols, failed: [] },
         }))
 
-        for (let i = 0; i < totalChunks; i++) {
+        for (let i = 0; i < chunks.length; i++) {
           const res = await fetch('/api/sync/binance/full', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ account_id: accountId, chunk_index: i, spot_chunks: spotChunks }),
+            body: JSON.stringify({ account_id: accountId, symbols: chunks[i] }),
           })
           if (res.ok) {
             const data = (await res.json()) as {
@@ -219,7 +229,7 @@ export default function ApiSettingsPage() {
             }
             allFailed.push(...data.failedSymbols)
           }
-          const symbolsDone = Math.min((i + 1) * 50, totalSymbols)
+          const symbolsDone = Math.min((i + 1) * CHUNK, totalSymbols)
           setScanState((prev) => ({
             ...prev,
             [accountId]: { current: symbolsDone, total: totalSymbols, failed: allFailed },
@@ -457,6 +467,7 @@ export default function ApiSettingsPage() {
           {/* Account Type */}
           <FieldSelect label="Account Type" value={form.instrument} onChange={(v) => patch('instrument', v)}>
             <option value="unified">Unified</option>
+            <option value="portfolio_margin">Portfolio Margin</option>
             <option value="spot">Spot</option>
             <option value="futures">Futures</option>
             <option value="options">Options</option>

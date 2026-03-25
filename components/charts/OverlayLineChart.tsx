@@ -84,7 +84,7 @@ function CustomTooltip({ active, payload, label, nameMap: nm }: CustomTooltipPro
 }
 
 export default function OverlayLineChart({ data, activeIds, height = 320, colorMap, nameMap }: OverlayLineChartProps) {
-  const [timeframe, setTimeframe] = useState<ChartTimeframe>('weekly')
+  const [timeframe, setTimeframe] = useState<ChartTimeframe>('daily')
 
   // Aggregate into the selected timeframe
   const aggregated = aggregateOverlayData(data, timeframe)

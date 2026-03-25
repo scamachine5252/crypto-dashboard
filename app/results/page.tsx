@@ -9,25 +9,10 @@ import BalanceLineChart from '@/components/charts/BalanceLineChart'
 import PnlHistogramChart from '@/components/charts/PnlHistogramChart'
 import { formatMoney } from '@/lib/utils'
 
-const EXCHANGE_COLORS: Record<string, string> = {
-  binance: '#F0B90B',
-  bybit:   '#FF6B2C',
-  okx:     '#4F8EF7',
-}
-
-// Generate slightly varied shades per account within the same exchange
-function buildColorMap(accounts: { id: string; exchange: string }[]): Record<string, string> {
-  const countPerExchange: Record<string, number> = {}
-  const map: Record<string, string> = {}
-  for (const acc of accounts) {
-    const idx = countPerExchange[acc.exchange] ?? 0
-    countPerExchange[acc.exchange] = idx + 1
-    const base = EXCHANGE_COLORS[acc.exchange] ?? '#4F8EF7'
-    // Vary opacity slightly for multiple accounts on same exchange
-    map[acc.id] = idx === 0 ? base : base + (idx === 1 ? 'CC' : '88')
-  }
-  return map
-}
+const ACCOUNT_PALETTE = [
+  '#F0B90B', '#FF6B2C', '#4F8EF7', '#00FF88',
+  '#a855f7', '#06b6d4', '#f97316', '#e11d48',
+]
 
 function ExchangeLogo({ id }: { id: string }) {
   if (id === 'binance') return (
@@ -88,9 +73,9 @@ type AccountSummary = {
 type AccountInfo = { id: string; account_name: string; exchange: string; fund: string }
 
 export default function ResultsPage() {
-  const [period, setPeriod]           = useState<Period>('1Y')
+  const [period, setPeriod]           = useState<Period>('1M')
   const [customRange, setCustomRange] = useState<DateRange | undefined>()
-  const [pnlTimeframe, setPnlTimeframe] = useState<Timeframe>('monthly')
+  const [pnlTimeframe, setPnlTimeframe] = useState<Timeframe>('daily')
 
   const [accountSummaries, setAccountSummaries] = useState<AccountSummary[]>([])
   const [balanceHistory, setBalanceHistory]     = useState<{ accountId: string; date: string; usdt: number }[]>([])
@@ -148,7 +133,15 @@ export default function ResultsPage() {
       .finally(() => setLoading(false))
   }, [period, customRange])
 
-  const colorMap = useMemo(() => buildColorMap(accounts), [accounts])
+  const colorMap = useMemo(
+    () => Object.fromEntries(accounts.map((a, i) => [a.id, ACCOUNT_PALETTE[i % ACCOUNT_PALETTE.length]])),
+    [accounts],
+  )
+
+  const nameMap = useMemo(
+    () => Object.fromEntries(accounts.map((a) => [a.id, a.account_name])),
+    [accounts],
+  )
 
   // USDT balance chart series — checked accounts only
   const usdtSeries = useMemo(
@@ -202,15 +195,7 @@ export default function ResultsPage() {
         {/* Charts row */}
         <div className="px-4 pt-3 pb-2 grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* USDT Balance chart */}
-          <div style={{ border: '1px solid var(--border-subtle)' }}>
-            <div className="px-4 py-2 flex items-center gap-3" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-              <p className="text-xs font-semibold tracking-wide font-heading" style={{ color: 'var(--text-primary)' }}>USDT BALANCE</p>
-              <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Balance over period per account</p>
-            </div>
-            <div className="px-3 py-3" style={{ background: 'var(--bg-secondary)' }}>
-              <BalanceLineChart series={usdtSeries} height={220} colorMap={colorMap} />
-            </div>
-          </div>
+          <BalanceLineChart series={usdtSeries} height={220} colorMap={colorMap} nameMap={nameMap} />
 
           {/* PnL histogram */}
           <div style={{ border: '1px solid var(--border-subtle)' }}>
@@ -284,7 +269,7 @@ export default function ResultsPage() {
                   </tr>
                 ) : (
                   accountSummaries.map((summary) => {
-                    const exColor = EXCHANGE_COLORS[summary.exchange] ?? 'var(--text-muted)'
+                    const exColor = colorMap[summary.accountId] ?? 'var(--text-muted)'
                     const checked = checkedIds.has(summary.accountId)
 
                     return (

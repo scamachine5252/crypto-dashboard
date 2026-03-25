@@ -10,6 +10,8 @@ import {
   calculateRecoveryFactor,
   calculateAvgFeePerTrade,
   calculateFeesAsPctOfPnl,
+  calculateAvgTradePnl,
+  calculateFeeRatePct,
 } from '@/lib/calculations'
 import { formatMoney } from '@/lib/utils'
 import Header from '@/components/layout/Header'
@@ -25,7 +27,7 @@ const EXCHANGE_COLORS: Record<string, string> = {
 
 type L1Tab = 'spot' | 'futures'
 type SpotL2 = 'overview' | 'returns' | 'risk' | 'costs'
-type FuturesL2 = 'overview' | 'returns' | 'risk-exposure' | 'cost' | 'execution'
+type FuturesL2 = 'overview' | 'returns' | 'risk-exposure' | 'cost'
 
 interface AccountInfo {
   id: string
@@ -54,7 +56,6 @@ const FUTURES_L2_TABS: { id: FuturesL2; label: string }[] = [
   { id: 'returns',       label: 'Returns' },
   { id: 'risk-exposure', label: 'Risk & Exposure' },
   { id: 'cost',          label: 'Cost' },
-  { id: 'execution',     label: 'Execution' },
 ]
 
 const SPOT_COLS: Record<SpotL2, ColDef[]> = {
@@ -69,6 +70,7 @@ const SPOT_COLS: Record<SpotL2, ColDef[]> = {
     { key: 'recoveryFactor', label: 'Recovery Factor', format: (v) => v.toFixed(2) },
     { key: 'totalFees',      label: 'Total Fees',      format: (v) => formatMoney(v),        lowerBetter: true, sum: true },
     { key: 'feesAsPctOfPnl', label: 'Fees % PnL',     format: (v) => `${v.toFixed(1)}%`,   lowerBetter: true },
+    { key: 'totalNotional',  label: 'Volume',          format: (v) => formatMoney(v),        sum: true },
   ],
   returns: [
     { key: 'totalPnl',     label: 'Total PnL',    format: (v) => formatMoney(v),        sum: true },
@@ -97,40 +99,42 @@ const SPOT_COLS: Record<SpotL2, ColDef[]> = {
 
 const FUTURES_COLS: Record<FuturesL2, ColDef[]> = {
   overview: [
-    { key: 'totalPnl',               label: 'Total PnL',        format: (v) => formatMoney(v),        sum: true },
-    { key: 'annualYield',            label: 'Annual Yield',     format: (v) => `${v.toFixed(1)}%` },
-    { key: 'winRate',                label: 'Win Rate',         format: (v) => `${v.toFixed(1)}%` },
-    { key: 'riskReward',             label: 'R/R',              format: (v) => v.toFixed(2) },
-    { key: 'averageLeverage',        label: 'Avg Leverage',     format: (v) => `${v.toFixed(1)}x` },
-    { key: 'longShortRatio',         label: 'Long/Short',       format: (v) => `${v.toFixed(1)}%` },
-    { key: 'liquidationDistancePct', label: 'Liq. Distance',    format: (v) => `${v.toFixed(1)}%` },
-    { key: 'totalFundingCost',       label: 'Funding Cost',     format: (v) => formatMoney(v),        lowerBetter: true, sum: true },
-    { key: 'avgFundingPerTrade',     label: 'Avg Funding/Trade',format: (v) => formatMoney(v),        lowerBetter: true },
-    { key: 'rolloverCosts',          label: 'Rollover Costs',   format: (v) => formatMoney(v),        lowerBetter: true, sum: true },
-    { key: 'avgHoldingMin',          label: 'Avg Holding Time', format: (v) => `${v.toFixed(0)}m` },
-    { key: 'openInterest',           label: 'Open Interest',    format: (v) => formatMoney(v) },
-    { key: 'liquidationsCount',      label: 'Liquidations',     format: (v) => v.toFixed(0),          lowerBetter: true, sum: true },
+    { key: 'totalPnl',       label: 'Total PnL',      format: (v) => formatMoney(v),        sum: true },
+    { key: 'avgTradePnl',    label: 'Avg Trade PnL',  format: (v) => formatMoney(v) },
+    { key: 'totalTrades',    label: 'Trades',          format: (v) => v.toFixed(0),          sum: true },
+    { key: 'winRate',        label: 'Win Rate',        format: (v) => `${v.toFixed(1)}%` },
+    { key: 'riskReward',     label: 'R/R',             format: (v) => v.toFixed(2) },
+    { key: 'longShortRatio', label: 'Long/Short',      format: (v) => `${v.toFixed(1)}%` },
+    { key: 'sharpeRatio',    label: 'Sharpe',          format: (v) => v.toFixed(2) },
+    { key: 'maxDrawdownPct', label: 'Max DD %',        format: (v) => `${v.toFixed(1)}%`,   lowerBetter: true },
+    { key: 'totalFees',      label: 'Total Fees',      format: (v) => formatMoney(v),        lowerBetter: true, sum: true },
+    { key: 'totalNotional',  label: 'Volume',          format: (v) => formatMoney(v),        sum: true },
   ],
   returns: [
-    { key: 'totalPnl',    label: 'Total PnL',   format: (v) => formatMoney(v),        sum: true },
-    { key: 'annualYield', label: 'Annual Yield', format: (v) => `${v.toFixed(1)}%` },
-    { key: 'winRate',     label: 'Win Rate',     format: (v) => `${v.toFixed(1)}%` },
-    { key: 'riskReward',  label: 'Risk/Reward',  format: (v) => v.toFixed(2) },
+    { key: 'totalPnl',       label: 'Total PnL',      format: (v) => formatMoney(v),        sum: true },
+    { key: 'annualYield',    label: 'Annual Yield',    format: (v) => `${v.toFixed(1)}%` },
+    { key: 'cagr',           label: 'CAGR',            format: (v) => `${v.toFixed(1)}%` },
+    { key: 'sharpeRatio',    label: 'Sharpe',          format: (v) => v.toFixed(2) },
+    { key: 'sortinoRatio',   label: 'Sortino',         format: (v) => v.toFixed(2) },
+    { key: 'winRate',        label: 'Win Rate',        format: (v) => `${v.toFixed(1)}%` },
+    { key: 'profitFactor',   label: 'Profit Factor',   format: (v) => v.toFixed(2) },
+    { key: 'riskReward',     label: 'R/R',             format: (v) => v.toFixed(2) },
+    { key: 'averageWin',     label: 'Avg Win',         format: (v) => formatMoney(v) },
+    { key: 'averageLoss',    label: 'Avg Loss',        format: (v) => formatMoney(v) },
+    { key: 'recoveryFactor', label: 'Recovery Factor', format: (v) => v.toFixed(2) },
   ],
   'risk-exposure': [
-    { key: 'averageLeverage',        label: 'Avg Leverage',  format: (v) => `${v.toFixed(1)}x` },
-    { key: 'longShortRatio',         label: 'Long/Short',    format: (v) => `${v.toFixed(1)}%` },
-    { key: 'liquidationDistancePct', label: 'Liq. Distance', format: (v) => `${v.toFixed(1)}%` },
+    { key: 'maxDrawdown',    label: 'Max DD $',        format: (v) => formatMoney(v),      lowerBetter: true, sum: true },
+    { key: 'maxDrawdownPct', label: 'Max DD %',        format: (v) => `${v.toFixed(1)}%`, lowerBetter: true },
+    { key: 'riskReward',     label: 'R/R',             format: (v) => v.toFixed(2) },
+    { key: 'recoveryFactor', label: 'Recovery Factor', format: (v) => v.toFixed(2) },
+    { key: 'longShortRatio', label: 'Long/Short',      format: (v) => `${v.toFixed(1)}%` },
   ],
   cost: [
-    { key: 'totalFundingCost',   label: 'Funding Rate Costs', format: (v) => formatMoney(v), lowerBetter: true, sum: true },
-    { key: 'avgFundingPerTrade', label: 'Avg Funding/Trade',  format: (v) => formatMoney(v), lowerBetter: true },
-    { key: 'rolloverCosts',      label: 'Rollover Costs',     format: (v) => formatMoney(v), lowerBetter: true, sum: true },
-  ],
-  execution: [
-    { key: 'avgHoldingMin',     label: 'Avg Holding Time',   format: (v) => `${v.toFixed(0)}m` },
-    { key: 'openInterest',      label: 'Open Interest',      format: (v) => formatMoney(v) },
-    { key: 'liquidationsCount', label: 'Liquidations Count', format: (v) => v.toFixed(0),       lowerBetter: true, sum: true },
+    { key: 'totalFees',      label: 'Total Fees',      format: (v) => formatMoney(v),      lowerBetter: true, sum: true },
+    { key: 'avgFeePerTrade', label: 'Avg Fee/Trade',   format: (v) => formatMoney(v),      lowerBetter: true },
+    { key: 'feesAsPctOfPnl', label: 'Fees % PnL',     format: (v) => `${v.toFixed(1)}%`,  lowerBetter: true },
+    { key: 'feeRatePct',     label: 'Fee Rate %',      format: (v) => `${v.toFixed(3)}%`,  lowerBetter: true },
   ],
 }
 
@@ -184,7 +188,7 @@ function buildDailyPnlEntries(
 }
 
 export default function PerformancePage() {
-  const [period, setPeriod]           = useState<Period>('1Y')
+  const [period, setPeriod]           = useState<Period>('1M')
   const [customRange, setCustomRange] = useState<DateRange | undefined>()
   const [l1, setL1]                   = useState<L1Tab>('spot')
   const [spotL2, setSpotL2]           = useState<SpotL2>('overview')
@@ -328,11 +332,15 @@ export default function PerformancePage() {
         })
         const base = calculateMetrics(accDaily, accTrades)
         const fut  = calculateFuturesMetrics(accTrades)
+        const totalNotional = accTrades.reduce((s, t) => s + t.quantity * t.entryPrice, 0)
         const extended: ExtendedMetrics = {
           ...base,
           recoveryFactor: calculateRecoveryFactor(base.totalPnl, base.maxDrawdown),
           avgFeePerTrade: calculateAvgFeePerTrade(base.totalFees, base.totalTrades),
           feesAsPctOfPnl: calculateFeesAsPctOfPnl(base.totalFees, base.totalPnl),
+          avgTradePnl:    calculateAvgTradePnl(base.totalPnl, base.totalTrades),
+          feeRatePct:     calculateFeeRatePct(base.totalFees, totalNotional),
+          totalNotional,
         }
         const avgFundingPerTrade = base.totalTrades > 0
           ? fut.totalFundingCost / base.totalTrades
@@ -340,7 +348,6 @@ export default function PerformancePage() {
         const avgHoldingMin = accTrades.length > 0
           ? accTrades.reduce((s, t) => s + t.durationMin, 0) / accTrades.length
           : 0
-        const totalNotional = accTrades.reduce((s, t) => s + t.quantity * t.entryPrice, 0)
         return {
           subAccountId: a.id,
           exchangeId:   a.exchange as ExchangeId,

@@ -87,6 +87,9 @@ export interface ExtendedMetrics extends Metrics {
   recoveryFactor: number   // totalPnl / abs(maxDrawdown); 0 if maxDrawdown is 0
   avgFeePerTrade: number   // totalFees / totalTrades; 0 if totalTrades is 0
   feesAsPctOfPnl: number   // (totalFees / totalPnl) × 100; 0 if totalPnl is 0
+  avgTradePnl: number      // totalPnl / totalTrades; 0 if totalTrades is 0
+  feeRatePct: number       // (totalFees / totalNotional) × 100; 0 if totalNotional is 0
+  totalNotional: number    // Σ (qty × entryPrice) — total traded volume in USDT
 }
 
 export interface AccountMetricsRow {
@@ -185,6 +188,8 @@ export interface Position {
   unrealizedPnl: number
   leverage: number
   margin: number          // margin used in USDT
+  liquidationPrice: number  // 0 if not available from exchange
+  openTimestamp: number     // ms since epoch when position was opened; 0 if unavailable
   accountId: string
   accountName: string
   exchange: string
@@ -211,6 +216,7 @@ export interface DashboardMetrics {
   cagr: number
   annualYield: number
   riskRewardRatio: number
+  totalVolume: number
 }
 
 export interface ComparisonRow {

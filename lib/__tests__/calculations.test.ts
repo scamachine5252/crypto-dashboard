@@ -16,6 +16,8 @@ import {
   calculateRecoveryFactor,
   calculateAvgFeePerTrade,
   calculateFeesAsPctOfPnl,
+  calculateAvgTradePnl,
+  calculateFeeRatePct,
   buildPerAccountMetrics,
   aggregateOverlayData,
 } from '../calculations'
@@ -24,7 +26,7 @@ import type { DailyPnLEntry, Trade, HistoryFilterState } from '../types'
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-function makeDaily(days: number, pnl: number, subAccountId = 'sub-a', exchangeId: 'binance' = 'binance'): DailyPnLEntry[] {
+function makeDaily(days: number, pnl: number, subAccountId = 'sub-a', exchangeId: 'binance' | 'bybit' | 'okx' = 'binance'): DailyPnLEntry[] {
   const entries: DailyPnLEntry[] = []
   let cum = 0
   for (let i = 0; i < days; i++) {
@@ -332,6 +334,7 @@ describe('summarizeFilteredTrades', () => {
     const result = summarizeFilteredTrades([])
     expect(result.totalPnl).toBe(0)
     expect(result.totalFees).toBe(0)
+    expect(result.totalVolume).toBe(0)
     expect(result.count).toBe(0)
   })
 
@@ -344,6 +347,16 @@ describe('summarizeFilteredTrades', () => {
     expect(result.totalPnl).toBe(200)
     expect(result.totalFees).toBe(15)
     expect(result.count).toBe(2)
+  })
+
+  it('computes totalVolume as sum of qty × entryPrice', () => {
+    // Default makeTrade: quantity=0.1, entryPrice=50000 → notional=5000 each
+    const trades = [
+      makeTrade({ id: 't1', quantity: 0.1, entryPrice: 50000 }),
+      makeTrade({ id: 't2', quantity: 2,   entryPrice: 3000 }),
+    ]
+    const result = summarizeFilteredTrades(trades)
+    expect(result.totalVolume).toBeCloseTo(5000 + 6000, 2) // 11000
   })
 })
 
@@ -956,6 +969,48 @@ describe('calculateFeesAsPctOfPnl', () => {
 })
 
 // ---------------------------------------------------------------------------
+// calculateAvgTradePnl
+// ---------------------------------------------------------------------------
+describe('calculateAvgTradePnl', () => {
+  it('returns 0 when totalTrades is 0', () => {
+    expect(calculateAvgTradePnl(10000, 0)).toBe(0)
+  })
+
+  it('returns totalPnl / totalTrades for normal case', () => {
+    expect(calculateAvgTradePnl(1000, 10)).toBeCloseTo(100, 4)
+  })
+
+  it('returns negative avg when totalPnl is negative', () => {
+    expect(calculateAvgTradePnl(-500, 5)).toBeCloseTo(-100, 4)
+  })
+
+  it('returns 0 when both are 0', () => {
+    expect(calculateAvgTradePnl(0, 0)).toBe(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// calculateFeeRatePct
+// ---------------------------------------------------------------------------
+describe('calculateFeeRatePct', () => {
+  it('returns 0 when totalNotional is 0', () => {
+    expect(calculateFeeRatePct(500, 0)).toBe(0)
+  })
+
+  it('returns (totalFees / totalNotional) × 100 for normal case', () => {
+    expect(calculateFeeRatePct(10, 10000)).toBeCloseTo(0.1, 4)
+  })
+
+  it('returns 0 when totalFees is 0', () => {
+    expect(calculateFeeRatePct(0, 10000)).toBe(0)
+  })
+
+  it('handles large notional values', () => {
+    expect(calculateFeeRatePct(50, 100000)).toBeCloseTo(0.05, 4)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // buildPerAccountMetrics
 // ---------------------------------------------------------------------------
 describe('buildPerAccountMetrics', () => {
@@ -1007,6 +1062,18 @@ describe('buildPerAccountMetrics', () => {
     const rows = buildPerAccountMetrics(['binance-alpha'], range, 'spot')
     expect(typeof rows[0].extras.avgHoldingMin).toBe('number')
     expect(rows[0].extras.avgHoldingMin).toBeGreaterThanOrEqual(0)
+  })
+
+  it('metrics.totalNotional is sum of qty × entryPrice across all trades', () => {
+    const rows = buildPerAccountMetrics(['binance-alpha'], range, 'spot')
+    // totalNotional must be a non-negative number
+    expect(typeof rows[0].metrics.totalNotional).toBe('number')
+    expect(rows[0].metrics.totalNotional).toBeGreaterThanOrEqual(0)
+  })
+
+  it('metrics.totalNotional is 0 when no trades in range', () => {
+    const rows = buildPerAccountMetrics(['binance-alpha'], { start: '2020-01-01', end: '2020-01-02' }, 'spot')
+    expect(rows[0].metrics.totalNotional).toBe(0)
   })
 })
 

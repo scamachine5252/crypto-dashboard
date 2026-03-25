@@ -21,6 +21,7 @@ interface BalanceLineChartProps {
   series: BalanceSeries[]
   height?: number
   colorMap?: Record<string, string>
+  nameMap?: Record<string, string>
 }
 
 interface TooltipPayloadItem {
@@ -33,9 +34,10 @@ interface CustomTooltipProps {
   active?: boolean
   label?: string
   payload?: TooltipPayloadItem[]
+  nameMap?: Record<string, string>
 }
 
-function CustomTooltip({ active, label, payload }: CustomTooltipProps) {
+function CustomTooltip({ active, label, payload, nameMap }: CustomTooltipProps) {
   if (!active || !payload?.length) return null
   return (
     <div
@@ -52,7 +54,7 @@ function CustomTooltip({ active, label, payload }: CustomTooltipProps) {
       </p>
       {payload.map((p) => (
         <div key={p.dataKey} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 3 }}>
-          <span style={{ color: p.color, fontSize: 10 }}>{p.dataKey}</span>
+          <span style={{ color: p.color, fontSize: 10 }}>{nameMap?.[p.dataKey] ?? p.dataKey}</span>
           <span style={{ color: 'var(--text-primary)', fontSize: 11, fontWeight: 700, fontFamily: 'var(--font-geist-mono)', fontVariantNumeric: 'tabular-nums' }}>
             {formatMoney(p.value)}
           </span>
@@ -76,7 +78,7 @@ function mergeData(series: BalanceSeries[]): Record<string, number | string>[] {
   })
 }
 
-export default function BalanceLineChart({ series, height = 240, colorMap }: BalanceLineChartProps) {
+export default function BalanceLineChart({ series, height = 240, colorMap, nameMap }: BalanceLineChartProps) {
   const data = mergeData(series)
 
   const formatY = (v: number) => {
@@ -99,36 +101,62 @@ export default function BalanceLineChart({ series, height = 240, colorMap }: Bal
   }
 
   return (
-    <ResponsiveContainer width="100%" height={height}>
-      <LineChart data={data} margin={{ top: 6, right: 8, left: 8, bottom: 0 }}>
-        <CartesianGrid strokeDasharray="2 4" stroke="var(--border-subtle)" vertical={false} />
-        <XAxis
-          dataKey="date"
-          tick={{ fill: 'var(--text-muted)', fontSize: 9, fontFamily: 'var(--font-geist-mono)' }}
-          axisLine={false}
-          tickLine={false}
-          interval={tickInterval}
-        />
-        <YAxis
-          tickFormatter={formatY}
-          tick={{ fill: 'var(--text-muted)', fontSize: 9, fontFamily: 'var(--font-geist-mono)' }}
-          axisLine={false}
-          tickLine={false}
-          width={60}
-        />
-        <Tooltip content={<CustomTooltip />} cursor={{ stroke: 'var(--border-medium)', strokeWidth: 1 }} />
-        {series.map((s) => (
-          <Line
-            key={s.subAccountId}
-            type="monotone"
-            dataKey={s.subAccountId}
-            stroke={colorMap?.[s.subAccountId] ?? ACCOUNT_COLORS[s.subAccountId] ?? 'var(--accent-blue)'}
-            strokeWidth={1.5}
-            dot={false}
-            activeDot={{ r: 3, stroke: 'var(--bg-secondary)', strokeWidth: 2 }}
-          />
-        ))}
-      </LineChart>
-    </ResponsiveContainer>
+    <div style={{ border: '1px solid var(--border-subtle)' }}>
+      {/* Chart header with legend */}
+      <div
+        className="px-4 py-2.5 flex items-center gap-3 flex-wrap"
+        style={{ borderBottom: '1px solid var(--border-subtle)' }}
+      >
+        <p
+          className="text-xs font-semibold tracking-wide uppercase font-heading"
+          style={{ color: 'var(--text-primary)' }}
+        >
+          USDT Balance
+        </p>
+        <div className="ml-auto flex items-center gap-4 flex-wrap">
+          {series.map((s) => (
+            <span key={s.subAccountId} className="flex items-center gap-1.5 text-[11px] font-medium" style={{ color: 'var(--text-primary)' }}>
+              <span style={{ width: 20, height: 2.5, background: colorMap?.[s.subAccountId] ?? ACCOUNT_COLORS[s.subAccountId] ?? 'var(--accent-blue)', display: 'inline-block', borderRadius: 1 }} />
+              {nameMap?.[s.subAccountId] ?? s.subAccountId}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* Chart */}
+      <div style={{ background: 'var(--bg-secondary)', padding: '12px 8px' }}>
+        <ResponsiveContainer width="100%" height={height}>
+          <LineChart data={data} margin={{ top: 6, right: 8, left: 8, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="2 4" stroke="var(--border-subtle)" vertical={false} />
+            <XAxis
+              dataKey="date"
+              tick={{ fill: 'var(--text-muted)', fontSize: 9, fontFamily: 'var(--font-geist-mono)' }}
+              axisLine={false}
+              tickLine={false}
+              interval={tickInterval}
+            />
+            <YAxis
+              tickFormatter={formatY}
+              tick={{ fill: 'var(--text-muted)', fontSize: 9, fontFamily: 'var(--font-geist-mono)' }}
+              axisLine={false}
+              tickLine={false}
+              width={60}
+            />
+            <Tooltip content={<CustomTooltip nameMap={nameMap} />} cursor={{ stroke: 'var(--border-medium)', strokeWidth: 1 }} />
+            {series.map((s) => (
+              <Line
+                key={s.subAccountId}
+                type="monotone"
+                dataKey={s.subAccountId}
+                stroke={colorMap?.[s.subAccountId] ?? ACCOUNT_COLORS[s.subAccountId] ?? 'var(--accent-blue)'}
+                strokeWidth={1.5}
+                dot={false}
+                activeDot={{ r: 3, stroke: 'var(--bg-secondary)', strokeWidth: 2 }}
+              />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
   )
 }

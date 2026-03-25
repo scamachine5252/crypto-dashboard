@@ -4,7 +4,7 @@ import { supabaseAdmin } from '@/lib/supabase/server'
 import type { FundSummary, DashboardMetrics, ChartDataPoint } from '@/lib/types'
 
 function emptyMetrics(): DashboardMetrics {
-  return { totalPnl: 0, totalFees: 0, totalTrades: 0, winRate: 0, profitFactor: 0, avgWin: 0, avgLoss: 0, sharpeRatio: 0, sortinoRatio: 0, maxDrawdown: 0, cagr: 0, annualYield: 0, riskRewardRatio: 0 }
+  return { totalPnl: 0, totalFees: 0, totalTrades: 0, winRate: 0, profitFactor: 0, avgWin: 0, avgLoss: 0, sharpeRatio: 0, sortinoRatio: 0, maxDrawdown: 0, cagr: 0, annualYield: 0, riskRewardRatio: 0, totalVolume: 0 }
 }
 
 function formatDay(dateStr: string): string {
@@ -45,14 +45,14 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const sinceDate = new Date(since).toISOString()
 
-  type TradeRow = { account_id: string; pnl: number | null; fee: number | null; closed_at: string }
+  type TradeRow = { account_id: string; pnl: number | null; fee: number | null; closed_at: string; quantity: number | null; entry_price: number | null }
   const PAGE = 1000
   const tradeRows: TradeRow[] = []
   let from = 0
   while (true) {
     const { data, error: pageErr } = await supabaseAdmin
       .from('trades')
-      .select('account_id, pnl, fee, closed_at, side, trade_type')
+      .select('account_id, pnl, fee, closed_at, side, trade_type, quantity, entry_price')
       .in('account_id', accountIds)
       .gte('closed_at', sinceDate)
       .not('closed_at', 'is', null)
@@ -139,10 +139,13 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const cagr = years > 0 ? Math.pow(Math.max((initialCapital + totalPnl) / initialCapital, 0.0001), 1 / years) - 1 : 0
   const annualYield = years > 0 ? (totalPnl / initialCapital) / years : 0
 
+  const totalVolume = tradeRows.reduce((s, t) => s + Number(t.quantity ?? 0) * Number(t.entry_price ?? 0), 0)
+
   const metrics: DashboardMetrics = {
     totalPnl, totalFees, totalTrades: tradeRows.length, winRate, profitFactor, avgWin, avgLoss,
     sharpeRatio, sortinoRatio, maxDrawdown, cagr, annualYield,
     riskRewardRatio: avgLoss > 0 ? avgWin / avgLoss : 0,
+    totalVolume,
   }
 
   const rawDailyPnl = sortedDays.map((day) => ({ date: day, pnl: dailyMap[day] }))

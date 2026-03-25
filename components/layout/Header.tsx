@@ -106,8 +106,8 @@ export default function Header() {
             CICADA FOUNDATION
           </p>
           <p
-            className="text-[10px] tracking-widest uppercase leading-none mt-0.5"
-            style={{ color: 'var(--text-muted)' }}
+            className="text-[11px] font-semibold uppercase leading-none mt-0.5"
+            style={{ color: 'var(--accent-profit)' }}
           >
             {currentPage?.label ?? 'PnL Dashboard'}
           </p>

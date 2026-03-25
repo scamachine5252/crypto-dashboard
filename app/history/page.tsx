@@ -132,6 +132,12 @@ export default function HistoryPage() {
               -{formatMoney(summary.totalFees)}
             </span>
           </span>
+          <span className="text-xs flex items-center gap-1.5">
+            <span style={{ color: 'var(--text-muted)' }}>Volume</span>
+            <span className="font-mono font-semibold tabular" style={{ color: 'var(--text-primary)' }}>
+              {formatMoney(summary.totalVolume)}
+            </span>
+          </span>
         </div>
       </main>
     </div>

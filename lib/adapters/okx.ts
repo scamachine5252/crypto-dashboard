@@ -51,6 +51,7 @@ export class OkxAdapter implements ExchangeAdapter {
         .filter((p) => p.contracts && Math.abs(Number(p.contracts)) > 0)
         .map((p) => {
           const symbol = p.symbol ?? ''
+          const info = (p.info ?? {}) as Record<string, unknown>
           return {
             symbol: symbol.includes(':') ? symbol.split(':')[0] : symbol,
             side: (p.side === 'short' ? 'short' : 'long') as 'long' | 'short',
@@ -61,6 +62,8 @@ export class OkxAdapter implements ExchangeAdapter {
             unrealizedPnl: Number(p.unrealizedPnl ?? 0),
             leverage: Number(p.leverage ?? 1),
             margin: Number(p.initialMargin ?? 0),
+            liquidationPrice: Number(info['liqPx'] ?? 0),
+            openTimestamp: Number(p.timestamp ?? 0),
           }
         })
     } catch {

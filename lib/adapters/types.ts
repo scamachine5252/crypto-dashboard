@@ -15,6 +15,8 @@ export interface RawPosition {
   unrealizedPnl: number
   leverage: number
   margin: number
+  liquidationPrice: number  // 0 if not available
+  openTimestamp: number     // ms since epoch; 0 if not available
 }
 
 export interface ExchangeAdapter {

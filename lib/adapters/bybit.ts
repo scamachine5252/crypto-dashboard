@@ -6,6 +6,7 @@ import { mapCcxtTrade } from './ccxt-utils'
 
 function mapCcxtPosition(p: ccxt.Position): RawPosition {
   const symbol = p.symbol ?? ''
+  const info = (p.info ?? {}) as Record<string, unknown>
   return {
     symbol: symbol.includes(':') ? symbol.split(':')[0] : symbol,
     side: (p.side === 'short' ? 'short' : 'long') as 'long' | 'short',
@@ -16,6 +17,8 @@ function mapCcxtPosition(p: ccxt.Position): RawPosition {
     unrealizedPnl: Number(p.unrealizedPnl ?? 0),
     leverage: Number(p.leverage ?? 1),
     margin: Number(p.initialMargin ?? 0),
+    liquidationPrice: Number(info['liqPrice'] ?? 0),
+    openTimestamp: Number(p.timestamp ?? 0),
   }
 }
 

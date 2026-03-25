@@ -17,6 +17,8 @@ interface MetricLineChartProps {
   data: MetricTimeSeries[]
   metric: keyof Metrics
   activeIds: string[]
+  colorMap?: Record<string, string>
+  nameMap?: Record<string, string>
 }
 
 const METRIC_META: Record<keyof Metrics, { label: string; format: (v: number) => string; unit?: string }> = {
@@ -51,9 +53,10 @@ interface CustomTooltipProps {
   payload?: TooltipPayloadItem[]
   label?: string
   metric: keyof Metrics
+  nameMap?: Record<string, string>
 }
 
-function CustomTooltip({ active, payload, label, metric }: CustomTooltipProps) {
+function CustomTooltip({ active, payload, label, metric, nameMap }: CustomTooltipProps) {
   if (!active || !payload?.length) return null
   const fmt = METRIC_META[metric].format
 
@@ -77,7 +80,7 @@ function CustomTooltip({ active, payload, label, metric }: CustomTooltipProps) {
           <div key={item.dataKey} style={{ display: 'flex', justifyContent: 'space-between', gap: 16, marginBottom: 4 }}>
             <span style={{ color: item.color, fontSize: 10, display: 'flex', alignItems: 'center', gap: 5 }}>
               <span style={{ width: 8, height: 2, background: item.color, display: 'inline-block', borderRadius: 1 }} />
-              {ACCOUNT_NAMES[item.dataKey] ?? item.dataKey}
+              {nameMap?.[item.dataKey] ?? ACCOUNT_NAMES[item.dataKey] ?? item.dataKey}
             </span>
             <span style={{ color: 'var(--text-primary)', fontSize: 11, fontWeight: 700, fontFamily: 'var(--font-geist-mono)', fontVariantNumeric: 'tabular-nums' }}>
               {fmt(item.value)}
@@ -88,7 +91,7 @@ function CustomTooltip({ active, payload, label, metric }: CustomTooltipProps) {
   )
 }
 
-export default function MetricLineChart({ data, metric, activeIds }: MetricLineChartProps) {
+export default function MetricLineChart({ data, metric, activeIds, colorMap, nameMap }: MetricLineChartProps) {
   const meta = METRIC_META[metric]
 
   const formatY = (v: number) => {
@@ -125,11 +128,11 @@ export default function MetricLineChart({ data, metric, activeIds }: MetricLineC
         <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>by account over time</span>
 
         {/* Inline legend */}
-        <div className="ml-auto flex items-center gap-3 flex-wrap">
+        <div className="ml-auto flex items-center gap-4 flex-wrap">
           {activeIds.map((id) => (
-            <span key={id} className="flex items-center gap-1.5 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
-              <span style={{ width: 16, height: 2, background: ACCOUNT_COLORS[id] ?? '#888', display: 'inline-block', borderRadius: 1 }} />
-              {ACCOUNT_NAMES[id] ?? id}
+            <span key={id} className="flex items-center gap-1.5 text-[11px] font-medium" style={{ color: 'var(--text-primary)' }}>
+              <span style={{ width: 20, height: 2.5, background: colorMap?.[id] ?? ACCOUNT_COLORS[id] ?? '#888', display: 'inline-block', borderRadius: 1 }} />
+              {nameMap?.[id] ?? ACCOUNT_NAMES[id] ?? id}
             </span>
           ))}
         </div>
@@ -157,14 +160,14 @@ export default function MetricLineChart({ data, metric, activeIds }: MetricLineC
               width={52}
             />
 
-            <Tooltip content={<CustomTooltip metric={metric} />} cursor={{ stroke: 'var(--border-medium)', strokeWidth: 1 }} />
+            <Tooltip content={<CustomTooltip metric={metric} nameMap={nameMap} />} cursor={{ stroke: 'var(--border-medium)', strokeWidth: 1 }} />
 
             {activeIds.map((id) => (
               <Line
                 key={id}
                 type="monotone"
                 dataKey={id}
-                stroke={ACCOUNT_COLORS[id] ?? '#888'}
+                stroke={colorMap?.[id] ?? ACCOUNT_COLORS[id] ?? '#888'}
                 strokeWidth={1.5}
                 dot={false}
                 activeDot={{ r: 3, strokeWidth: 0 }}

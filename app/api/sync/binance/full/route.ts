@@ -1,41 +1,24 @@
 import 'server-only'
 import { NextRequest, NextResponse } from 'next/server'
-import * as ccxt from 'ccxt'
 import { supabaseAdmin } from '@/lib/supabase/server'
 import { decrypt } from '@/lib/crypto/decrypt'
 import { BinanceAdapter } from '@/lib/adapters/binance'
 import type { Trade } from '@/lib/types'
 
-const CHUNK_SIZE = 50
-
-async function loadSortedUsdtSymbols(isFutures: boolean): Promise<string[]> {
-  const exchange = isFutures
-    ? new ccxt.binance({ options: { defaultType: 'future' } })
-    : new ccxt.binance()
-  const markets = await exchange.loadMarkets()
-  return Object.values(markets)
-    .filter((m): m is NonNullable<typeof m> => {
-      if (m == null) return false
-      if (isFutures) return m.quote === 'USDT' && m.linear === true
-      return m.quote === 'USDT'
-    })
-    .map((m) => m.symbol)
-    .sort()
-}
-
 // ---------------------------------------------------------------------------
-// POST — sync one chunk of symbols for one account
+// POST — sync one pre-computed slice of symbols for one account.
+// The caller (frontend) passes `symbols: string[]` directly, computed from
+// the markets route response. This avoids redundant loadMarkets() calls per
+// chunk (was 14-28 calls per scan; now 0 — markets route does it once).
 // ---------------------------------------------------------------------------
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  const body = await req.json() as Record<string, unknown>
-  const accountId  = body.account_id  as string | undefined
-  const chunkIndex = body.chunk_index as number | undefined
-  const spotChunks = typeof body.spot_chunks === 'number' ? body.spot_chunks : null
+  const body    = await req.json() as Record<string, unknown>
+  const accountId = body.account_id as string | undefined
+  const symbols   = body.symbols as string[] | undefined
 
-  if (!accountId)               return NextResponse.json({ error: 'account_id required' }, { status: 400 })
-  if (chunkIndex === undefined) return NextResponse.json({ error: 'chunk_index required' }, { status: 400 })
-  if (typeof chunkIndex !== 'number' || !Number.isInteger(chunkIndex) || chunkIndex < 0) {
-    return NextResponse.json({ error: 'chunk_index must be a non-negative integer' }, { status: 400 })
+  if (!accountId)                    return NextResponse.json({ error: 'account_id required' }, { status: 400 })
+  if (!Array.isArray(symbols) || symbols.length === 0) {
+    return NextResponse.json({ synced: 0, failedSymbols: [] })
   }
 
   const { data: account, error: accountError } = await supabaseAdmin
@@ -48,32 +31,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'Account not found' }, { status: 404 })
   }
 
-  const isFuturesOnly = (account as Record<string, string>).instrument === 'futures'
-
-  // Determine whether this chunk targets spot or futures market
-  const useFutures = isFuturesOnly || (spotChunks !== null && chunkIndex >= spotChunks)
-  const futuresChunkIndex = spotChunks !== null ? chunkIndex - spotChunks : chunkIndex
-
-  let allSymbols: string[]
-  try {
-    allSymbols = await loadSortedUsdtSymbols(useFutures)
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    return NextResponse.json({ error: message }, { status: 500 })
-  }
-
-  const localIndex = useFutures && !isFuturesOnly ? futuresChunkIndex : chunkIndex
-  const start   = localIndex * CHUNK_SIZE
-  const symbols = allSymbols.slice(start, start + CHUNK_SIZE)
-
-  if (symbols.length === 0) {
-    return NextResponse.json({ synced: 0, failedSymbols: [] })
-  }
+  const instrument        = (account as Record<string, string>).instrument
+  const isPortfolioMargin = instrument === 'portfolio_margin'
+  // Infer market type from first symbol: CCXT futures symbols contain ':'
+  const useFutures = isPortfolioMargin || symbols[0]?.includes(':')
 
   const adapter = new BinanceAdapter({
-    apiKey:    decrypt((account as Record<string, string>).api_key),
-    apiSecret: decrypt((account as Record<string, string>).api_secret),
-    type:      useFutures ? 'future' : 'spot',
+    apiKey:          decrypt((account as Record<string, string>).api_key),
+    apiSecret:       decrypt((account as Record<string, string>).api_secret),
+    type:            useFutures ? 'future' : 'spot',
+    portfolioMargin: isPortfolioMargin,
   })
 
   const { trades, failedSymbols } = await adapter.getFullTrades(symbols)

@@ -8,6 +8,7 @@ interface BinanceCredentials {
   apiKey: string
   apiSecret: string
   type?: 'spot' | 'future'
+  portfolioMargin?: boolean
 }
 
 export interface FullTradesResult {
@@ -35,10 +36,16 @@ export class BinanceAdapter implements ExchangeAdapter {
 
   constructor(credentials: BinanceCredentials) {
     this.credentials = credentials
+    const opts: Record<string, unknown> = {}
+    if (credentials.portfolioMargin) {
+      opts['options'] = { defaultType: 'future', portfolioMargin: true }
+    } else if (credentials.type === 'future') {
+      opts['options'] = { defaultType: 'future' }
+    }
     this.exchange = new ccxt.binance({
       apiKey: credentials.apiKey,
       secret: credentials.apiSecret,
-      ...(credentials.type === 'future' ? { options: { defaultType: 'future' } } : {}),
+      ...opts,
     })
   }
 
@@ -47,13 +54,17 @@ export class BinanceAdapter implements ExchangeAdapter {
       const futuresExchange = new ccxt.binance({
         apiKey: this.credentials.apiKey,
         secret: this.credentials.apiSecret,
-        options: { defaultType: 'future' },
+        options: {
+          defaultType: 'future',
+          ...(this.credentials.portfolioMargin ? { portfolioMargin: true } : {}),
+        },
       })
       const raw = await futuresExchange.fetchPositions()
       return raw
         .filter((p) => p.contracts && Math.abs(Number(p.contracts)) > 0)
         .map((p) => {
           const symbol = p.symbol ?? ''
+          const info = (p.info ?? {}) as Record<string, unknown>
           return {
             symbol: symbol.includes(':') ? symbol.split(':')[0] : symbol,
             side: (p.side === 'short' ? 'short' : 'long') as 'long' | 'short',
@@ -62,8 +73,15 @@ export class BinanceAdapter implements ExchangeAdapter {
             markPrice: Number(p.markPrice ?? 0),
             notional: Math.abs(Number(p.notional ?? 0)),
             unrealizedPnl: Number(p.unrealizedPnl ?? 0),
-            leverage: Number(p.leverage ?? 1),
+            leverage: (() => {
+              const notional = Math.abs(Number(p.notional ?? 0))
+              const margin   = Number(p.initialMargin ?? 0)
+              if (margin > 0) return notional / margin
+              return Number(p.leverage ?? 1)
+            })(),
             margin: Number(p.initialMargin ?? 0),
+            liquidationPrice: Number(info['liquidationPrice'] ?? 0),
+            openTimestamp: Number(p.timestamp ?? 0),
           }
         })
     } catch {

@@ -3,14 +3,15 @@ import MetricCard from './MetricCard'
 import { formatMoney, formatPercent, formatRatio } from '@/lib/utils'
 import {
   TrendingUp, TrendingDown, BarChart2, Target, Percent,
-  Award, Zap, Scale, DollarSign, Receipt,
+  Award, Zap, Scale, DollarSign, Receipt, Activity,
 } from 'lucide-react'
 
 interface MetricsGridProps {
   metrics: Metrics
+  totalNotional?: number
 }
 
-export default function MetricsGrid({ metrics }: MetricsGridProps) {
+export default function MetricsGrid({ metrics, totalNotional = 0 }: MetricsGridProps) {
   const cards = [
     {
       label: 'Sharpe Ratio',
@@ -78,11 +79,11 @@ export default function MetricsGrid({ metrics }: MetricsGridProps) {
       description: 'Per-trade averages',
     },
     {
-      label: 'Total Fees',
-      value: formatMoney(metrics.totalFees),
-      trend: 'negative' as const,
-      icon: <Receipt className="w-3.5 h-3.5" />,
-      description: 'Cumulative trading fees paid',
+      label: 'Trading Volume',
+      value: formatMoney(totalNotional),
+      trend: 'neutral' as const,
+      icon: <Activity className="w-3.5 h-3.5" />,
+      description: 'Total notional traded (Σ qty × price)',
     },
   ] as const
 

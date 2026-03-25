@@ -10,6 +10,15 @@ import MetricsGrid from '@/components/metrics/MetricsGrid'
 import PnLChart from '@/components/charts/PnLChart'
 import { RefreshCw, ChevronDown, Check } from 'lucide-react'
 
+function formatHoldingTime(openTimestamp: number): string {
+  if (!openTimestamp) return '—'
+  const diffMs = Date.now() - openTimestamp
+  const diffH  = Math.floor(diffMs / 3_600_000)
+  const diffD  = Math.floor(diffH / 24)
+  if (diffD > 0) return `${diffD}d ${diffH % 24}h`
+  return `${diffH}h`
+}
+
 const EXCHANGE_COLORS: Record<string, string> = {
   binance: '#F0B90B',
   bybit:   '#FF6B2C',
@@ -27,8 +36,8 @@ export default function DashboardPage() {
   const [filter, setFilter] = useState<FilterState>({
     exchangeId: 'all',
     subAccountId: 'all',
-    timeframe: 'monthly',
-    period: '1Y',
+    timeframe: 'daily',
+    period: '1M',
   })
   const [customRange, setCustomRange] = useState<DateRange | undefined>()
 
@@ -143,6 +152,10 @@ export default function DashboardPage() {
 
   const totalUnrealizedPnl = filteredPositions.reduce((s, p) => s + p.unrealizedPnl, 0)
   const totalNotional      = filteredPositions.reduce((s, p) => s + p.notional, 0)
+  const totalMargin        = filteredPositions.reduce((s, p) => s + p.margin, 0)
+  const weightedAvgLeverage = totalNotional > 0
+    ? filteredPositions.reduce((s, p) => s + p.notional * p.leverage, 0) / totalNotional
+    : 0
 
   const togglePosAccount = (id: string) => {
     setActiveAccIds((prev) => {
@@ -171,7 +184,7 @@ export default function DashboardPage() {
       <FundCards funds={funds} loading={dataLoading} />
 
       <main className="flex-1 pt-2 pb-6">
-        <MetricsGrid metrics={metrics} />
+        <MetricsGrid metrics={metrics} totalNotional={realMetrics?.totalVolume ?? 0} />
         <PnLChart
           data={chartData}
           timeframe={filter.timeframe}
@@ -208,6 +221,18 @@ export default function DashboardPage() {
                     <span style={{ color: 'var(--text-muted)' }}>Notional</span>
                     <span className="font-mono font-semibold tabular-nums" style={{ color: 'var(--text-primary)' }}>
                       {formatMoney(totalNotional)}
+                    </span>
+                  </span>
+                  <span className="text-xs flex items-center gap-1.5">
+                    <span style={{ color: 'var(--text-muted)' }}>Margin Used</span>
+                    <span className="font-mono font-semibold tabular-nums" style={{ color: 'var(--text-primary)' }}>
+                      {formatMoney(totalMargin)}
+                    </span>
+                  </span>
+                  <span className="text-xs flex items-center gap-1.5">
+                    <span style={{ color: 'var(--text-muted)' }}>Avg Leverage</span>
+                    <span className="font-mono font-semibold tabular-nums" style={{ color: 'var(--text-primary)' }}>
+                      {weightedAvgLeverage > 0 ? `${weightedAvgLeverage.toFixed(1)}x` : '—'}
                     </span>
                   </span>
                   <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
@@ -358,7 +383,7 @@ export default function DashboardPage() {
               <table className="w-full text-xs">
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                    {['Symbol', 'Side', 'Size', 'Entry Price', 'Mark Price', 'Notional', 'Unrealized PnL', 'Leverage', 'Margin', 'Account'].map((h) => (
+                    {['Symbol', 'Side', 'Size', 'Entry Price', 'Mark Price', 'Notional', 'Unrealized PnL', 'PnL %', 'Liq. Dist.', 'Holding', 'Leverage', 'Margin', 'Account'].map((h) => (
                       <th
                         key={h}
                         className="px-4 py-2.5 text-left font-medium whitespace-nowrap"
@@ -408,6 +433,19 @@ export default function DashboardPage() {
                         </td>
                         <td className="px-4 py-2.5 tabular-nums whitespace-nowrap font-semibold font-mono" style={{ color: pnlColor }}>
                           {pos.unrealizedPnl >= 0 ? '+' : ''}{formatMoney(pos.unrealizedPnl)}
+                        </td>
+                        <td className="px-4 py-2.5 tabular-nums whitespace-nowrap font-mono" style={{ color: pnlColor }}>
+                          {pos.margin > 0
+                            ? `${pos.unrealizedPnl >= 0 ? '+' : ''}${((pos.unrealizedPnl / pos.margin) * 100).toFixed(1)}%`
+                            : '—'}
+                        </td>
+                        <td className="px-4 py-2.5 tabular-nums whitespace-nowrap font-mono" style={{ color: 'var(--text-muted)' }}>
+                          {pos.liquidationPrice > 0 && pos.markPrice > 0
+                            ? `${(Math.abs(pos.markPrice - pos.liquidationPrice) / pos.markPrice * 100).toFixed(1)}%`
+                            : '—'}
+                        </td>
+                        <td className="px-4 py-2.5 tabular-nums whitespace-nowrap" style={{ color: 'var(--text-muted)' }}>
+                          {formatHoldingTime(pos.openTimestamp)}
                         </td>
                         <td className="px-4 py-2.5 tabular-nums whitespace-nowrap" style={{ color: 'var(--text-secondary)' }}>
                           {pos.leverage.toFixed(1)}x

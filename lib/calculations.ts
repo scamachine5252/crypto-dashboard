@@ -244,11 +244,12 @@ export function filterTradesAdvanced(trades: Trade[], filter: HistoryFilterState
 // ---------------------------------------------------------------------------
 // Summarize filtered trades (for History page footer)
 // ---------------------------------------------------------------------------
-export function summarizeFilteredTrades(trades: Trade[]): { totalPnl: number; totalFees: number; count: number } {
+export function summarizeFilteredTrades(trades: Trade[]): { totalPnl: number; totalFees: number; totalVolume: number; count: number } {
   return {
-    totalPnl: trades.reduce((s, t) => s + t.pnl, 0),
-    totalFees: trades.reduce((s, t) => s + t.fee, 0),
-    count: trades.length,
+    totalPnl:    trades.reduce((s, t) => s + t.pnl, 0),
+    totalFees:   trades.reduce((s, t) => s + t.fee, 0),
+    totalVolume: trades.reduce((s, t) => s + t.quantity * t.entryPrice, 0),
+    count:       trades.length,
   }
 }
 
@@ -683,6 +684,18 @@ export function calculateFeesAsPctOfPnl(totalFees: number, totalPnl: number): nu
 }
 
 // ---------------------------------------------------------------------------
+export function calculateAvgTradePnl(totalPnl: number, totalTrades: number): number {
+  if (totalTrades === 0) return 0
+  return totalPnl / totalTrades
+}
+
+// ---------------------------------------------------------------------------
+export function calculateFeeRatePct(totalFees: number, totalNotional: number): number {
+  if (totalNotional === 0) return 0
+  return (totalFees / totalNotional) * 100
+}
+
+// ---------------------------------------------------------------------------
 // buildPerAccountMetrics
 // Returns one AccountMetricsRow per sub-account in activeIds, filtered by
 // tradeType ('spot' | 'futures') and dateRange.
@@ -718,11 +731,16 @@ export function buildPerAccountMetrics(
       const base = calculateMetrics(daily, trades)
       const fut  = calculateFuturesMetrics(trades)
 
+      const totalNotional = trades.reduce((s, t) => s + t.quantity * t.entryPrice, 0)
+
       const extended: ExtendedMetrics = {
         ...base,
         recoveryFactor: calculateRecoveryFactor(base.totalPnl, base.maxDrawdown),
         avgFeePerTrade: calculateAvgFeePerTrade(base.totalFees, base.totalTrades),
         feesAsPctOfPnl: calculateFeesAsPctOfPnl(base.totalFees, base.totalPnl),
+        avgTradePnl:    calculateAvgTradePnl(base.totalPnl, base.totalTrades),
+        feeRatePct:     calculateFeeRatePct(base.totalFees, totalNotional),
+        totalNotional,
       }
 
       // Extras: additional derived values for futures execution / cost tabs
@@ -732,7 +750,6 @@ export function buildPerAccountMetrics(
       const avgHoldingMin = trades.length > 0
         ? trades.reduce((s, t) => s + t.durationMin, 0) / trades.length
         : 0
-      const totalNotional = trades.reduce((s, t) => s + t.quantity * t.entryPrice, 0)
 
       rows.push({
         subAccountId: sa.id,
