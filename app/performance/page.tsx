@@ -279,9 +279,19 @@ export default function PerformancePage() {
     if (accounts.length > 0) setActiveIds(new Set([accounts[0].id]))
   }, [accounts])
 
-  // Color / name maps derived from real accounts
+  // Color / name maps derived from real accounts — distinct color per account
+  const ACCOUNT_PALETTE = [
+    '#F0B90B', // gold
+    '#FF6B2C', // orange
+    '#4F8EF7', // blue
+    '#00FF88', // green
+    '#a855f7', // purple
+    '#06b6d4', // cyan
+    '#f97316', // amber
+    '#e11d48', // rose
+  ]
   const colorMap = useMemo<Record<string, string>>(
-    () => Object.fromEntries(accounts.map((a) => [a.id, EXCHANGE_COLORS[a.exchange] ?? '#888'])),
+    () => Object.fromEntries(accounts.map((a, i) => [a.id, ACCOUNT_PALETTE[i % ACCOUNT_PALETTE.length]])),
     [accounts],
   )
 
@@ -364,16 +374,22 @@ export default function PerformancePage() {
   )
 
   const totalsRow = useMemo(() => {
-    if (rows.length === 0) return null
+    const activeRows = rows.filter((r) => r.metrics.totalTrades > 0)
+    if (activeRows.length === 0) return null
     const result: Record<string, number> = {}
     for (const col of cols) {
-      const vals = rows.map((r) => getValue(r, col.key, l1))
+      const vals = activeRows.map((r) => getValue(r, col.key, l1))
       result[col.key] = col.sum
         ? vals.reduce((a, b) => a + b, 0)
         : vals.reduce((a, b) => a + b, 0) / vals.length
     }
     return result
   }, [rows, cols, l1])
+
+  const totalsActiveCount = useMemo(
+    () => rows.filter((r) => r.metrics.totalTrades > 0).length,
+    [rows],
+  )
 
   // Group accounts by exchange for dropdown
   const exchangeGroups = useMemo(() => {
@@ -589,8 +605,8 @@ export default function PerformancePage() {
                       {cols.map((col, ci) => {
                         const val     = getValue(row, col.key, l1)
                         const { best, worst } = colExtremes[ci]
-                        const isBest  = rows.length > 1 && val === best
-                        const isWorst = rows.length > 1 && val === worst && best !== worst
+                        const isBest  = rows.length > 1 && val === best  && val !== 0
+                        const isWorst = rows.length > 1 && val === worst && best !== worst && val !== 0
                         return (
                           <td
                             key={col.key}
@@ -620,7 +636,9 @@ export default function PerformancePage() {
                       className="px-4 py-2.5 text-[10px] font-bold uppercase tracking-widest"
                       style={{ color: 'var(--text-muted)' }}
                     >
-                      {rows.length > 1 ? 'Total / Avg' : 'Total'}
+                      {totalsActiveCount < rows.length
+                        ? (totalsActiveCount > 1 ? 'Total / Avg (active)' : 'Total (active)')
+                        : (rows.length > 1 ? 'Total / Avg' : 'Total')}
                     </td>
                     {cols.map((col) => (
                       <td

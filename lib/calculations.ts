@@ -386,11 +386,7 @@ export function buildOverlayData(
     const lookup = new Map<string, number>()
     entries.forEach((e) => lookup.set(e.date, e.cumulativePnl))
 
-    // Baseline = cumulativePnl on the first date that has data for this account
-    const firstDate = dates.find((d) => lookup.has(d))!
-    const baseline = lookup.get(firstDate)!
-
-    accountMap.set(id, { lookup, baseline })
+    accountMap.set(id, { lookup, baseline: 0 })
   }
 
   if (accountMap.size === 0) return []
@@ -784,11 +780,13 @@ export function aggregateOverlayData(
     return String(weekIdx)
   }
 
-  // Group points by bucket, keeping last point per bucket
+  // Group points by bucket, keeping first point per bucket.
+  // First-point semantics: the chart shows where the account STARTED each period,
+  // which ensures the first displayed point equals the period-start value (0).
   const buckets = new Map<string, MetricTimeSeries>()
   for (const point of sorted) {
     const key = bucketKey(point.date)
-    buckets.set(key, point) // overwrite → last point wins
+    if (!buckets.has(key)) buckets.set(key, point) // first point wins
   }
 
   // Return in chronological order (sort by numeric week index or YYYY-MM string)

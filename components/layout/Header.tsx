@@ -3,7 +3,8 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { useAuth } from '@/lib/auth-context'
 import { useTheme } from '@/lib/theme-context'
-import { useRouter } from 'next/navigation'
+import { useRouter, usePathname } from 'next/navigation'
+import { NAV_ITEMS } from '@/lib/nav'
 import { TrendingUp, LogOut, User, ChevronDown, Sun, Moon, RefreshCw } from 'lucide-react'
 import NavDropdown from './NavDropdown'
 
@@ -17,6 +18,8 @@ export default function Header() {
   const { user, logout } = useAuth()
   const { theme, toggle: toggleTheme } = useTheme()
   const router = useRouter()
+  const pathname = usePathname()
+  const currentPage = NAV_ITEMS.find((n) => pathname.startsWith(n.href))
 
   const [navOpen, setNavOpen] = useState(false)
   const navRef = useRef<HTMLDivElement>(null)
@@ -106,7 +109,7 @@ export default function Header() {
             className="text-[10px] tracking-widest uppercase leading-none mt-0.5"
             style={{ color: 'var(--text-muted)' }}
           >
-            PnL Dashboard
+            {currentPage?.label ?? 'PnL Dashboard'}
           </p>
         </div>
         <ChevronDown

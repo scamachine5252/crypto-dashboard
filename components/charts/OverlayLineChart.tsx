@@ -91,13 +91,12 @@ export default function OverlayLineChart({ data, activeIds, height = 320, colorM
 
   // Re-normalize so the first point is always 0 for every account,
   // regardless of timeframe (weekly/monthly buckets don't start at 0 after aggregation)
-  const chartData: MetricTimeSeries[] = aggregated.map((row, i) => {
-    if (i === 0) return row
-    const first = aggregated[0]
+  const first = aggregated[0] ?? {}
+  const chartData: MetricTimeSeries[] = aggregated.map((row) => {
     const normalized: MetricTimeSeries = { date: row.date }
     for (const key of Object.keys(row)) {
       if (key === 'date') continue
-      normalized[key] = (row[key] as number) - (first[key] as number ?? 0)
+      normalized[key] = (row[key] as number) - ((first[key] as number) ?? 0)
     }
     return normalized
   })
@@ -146,10 +145,10 @@ export default function OverlayLineChart({ data, activeIds, height = 320, colorM
         </div>
 
         {/* Inline legend */}
-        <div className="ml-auto flex items-center gap-3 flex-wrap">
+        <div className="ml-auto flex items-center gap-4 flex-wrap">
           {activeIds.map((id) => (
-            <span key={id} className="flex items-center gap-1.5 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
-              <span style={{ width: 16, height: 2, background: colorMap?.[id] ?? ACCOUNT_COLORS[id] ?? '#888', display: 'inline-block', borderRadius: 1 }} />
+            <span key={id} className="flex items-center gap-1.5 text-[11px] font-medium" style={{ color: 'var(--text-primary)' }}>
+              <span style={{ width: 20, height: 2.5, background: colorMap?.[id] ?? ACCOUNT_COLORS[id] ?? '#888', display: 'inline-block', borderRadius: 1 }} />
               {nameMap?.[id] ?? ACCOUNT_NAMES[id] ?? id}
             </span>
           ))}
