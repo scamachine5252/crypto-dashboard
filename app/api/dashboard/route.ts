@@ -44,17 +44,25 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   const sinceDate = new Date(since).toISOString()
-  const { data: trades, error: tradeError } = await supabaseAdmin
-    .from('trades')
-    .select('account_id, pnl, fee, closed_at, side, trade_type')
-    .in('account_id', accountIds)
-    .gte('closed_at', sinceDate)
-    .not('closed_at', 'is', null)
-
-  if (tradeError) return NextResponse.json({ error: tradeError.message }, { status: 500 })
 
   type TradeRow = { account_id: string; pnl: number | null; fee: number | null; closed_at: string }
-  const tradeRows = (trades ?? []) as TradeRow[]
+  const PAGE = 1000
+  const tradeRows: TradeRow[] = []
+  let from = 0
+  while (true) {
+    const { data, error: pageErr } = await supabaseAdmin
+      .from('trades')
+      .select('account_id, pnl, fee, closed_at, side, trade_type')
+      .in('account_id', accountIds)
+      .gte('closed_at', sinceDate)
+      .not('closed_at', 'is', null)
+      .range(from, from + PAGE - 1)
+    if (pageErr) return NextResponse.json({ error: pageErr.message }, { status: 500 })
+    if (!data || data.length === 0) break
+    tradeRows.push(...(data as TradeRow[]))
+    if (data.length < PAGE) break
+    from += PAGE
+  }
 
   // Fund summaries
   const fundAccounts: Record<string, string[]> = {}

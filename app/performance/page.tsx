@@ -290,10 +290,10 @@ export default function PerformancePage() {
     [accounts],
   )
 
-  // Build daily PnL entries from trades for overlay chart
+  // Build daily PnL entries from trades for overlay chart — filtered by active L1 tab
   const dailyPnlEntries = useMemo<DailyPnLEntry[]>(
-    () => buildDailyPnlEntries(accounts, trades),
-    [accounts, trades],
+    () => buildDailyPnlEntries(accounts, trades.filter((t) => t.tradeType === l1)),
+    [accounts, trades, l1],
   )
 
   // Per-account metrics table rows

@@ -2,8 +2,7 @@
 
 import { useState, useMemo, useEffect, useCallback } from 'react'
 import type { FilterState, DateRange, FundSummary, DashboardMetrics, DailyPnLEntry, ExchangeId, Position } from '@/lib/types'
-import { getAllDailyPnL, getAllTrades } from '@/lib/mock-data'
-import { calculateMetrics, aggregateChartData, resolveDateRange, filterByDateRange } from '@/lib/calculations'
+import { aggregateChartData, resolveDateRange } from '@/lib/calculations'
 import { formatMoney } from '@/lib/utils'
 import Header from '@/components/layout/Header'
 import FundCards from '@/components/metrics/FundCards'
@@ -103,45 +102,33 @@ export default function DashboardPage() {
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
-  const allDaily  = useMemo(() => getAllDailyPnL(), [])
-  const allTrades = useMemo(() => getAllTrades(), [])
-  const daily     = useMemo(() => filterByDateRange(allDaily, dateRange), [allDaily, dateRange])
-
-  const metrics = useMemo(() => {
-    if (realMetrics) {
-      return {
-        sharpeRatio: realMetrics.sharpeRatio,
-        sortinoRatio: realMetrics.sortinoRatio,
-        maxDrawdown: realMetrics.maxDrawdown,
-        maxDrawdownPct: 0,
-        winRate: realMetrics.winRate,
-        profitFactor: realMetrics.profitFactor,
-        cagr: realMetrics.cagr,
-        annualYield: realMetrics.annualYield,
-        riskReward: realMetrics.riskRewardRatio,
-        averageWin: realMetrics.avgWin,
-        averageLoss: realMetrics.avgLoss,
-        totalFees: realMetrics.totalFees,
-        totalPnl: realMetrics.totalPnl,
-        totalTrades: realMetrics.totalTrades,
-      }
-    }
-    return calculateMetrics(daily, allTrades)
-  }, [realMetrics, daily, allTrades])
+  const metrics = useMemo(() => ({
+    sharpeRatio:   realMetrics?.sharpeRatio   ?? 0,
+    sortinoRatio:  realMetrics?.sortinoRatio  ?? 0,
+    maxDrawdown:   realMetrics?.maxDrawdown   ?? 0,
+    maxDrawdownPct: 0,
+    winRate:       realMetrics?.winRate       ?? 0,
+    profitFactor:  realMetrics?.profitFactor  ?? 0,
+    cagr:          realMetrics?.cagr          ?? 0,
+    annualYield:   realMetrics?.annualYield   ?? 0,
+    riskReward:    realMetrics?.riskRewardRatio ?? 0,
+    averageWin:    realMetrics?.avgWin        ?? 0,
+    averageLoss:   realMetrics?.avgLoss       ?? 0,
+    totalFees:     realMetrics?.totalFees     ?? 0,
+    totalPnl:      realMetrics?.totalPnl      ?? 0,
+    totalTrades:   realMetrics?.totalTrades   ?? 0,
+  }), [realMetrics])
 
   const chartData = useMemo(() => {
-    if (rawDailyPnl.length > 0) {
-      const entries: DailyPnLEntry[] = rawDailyPnl.map(({ date, pnl }) => ({
-        date,
-        subAccountId: 'all',
-        exchangeId: 'binance' as ExchangeId,
-        pnl,
-        cumulativePnl: 0,
-      }))
-      return aggregateChartData(entries, filter.timeframe)
-    }
-    return aggregateChartData(daily, filter.timeframe)
-  }, [rawDailyPnl, daily, filter.timeframe])
+    const entries: DailyPnLEntry[] = rawDailyPnl.map(({ date, pnl }) => ({
+      date,
+      subAccountId: 'all',
+      exchangeId: 'binance' as ExchangeId,
+      pnl,
+      cumulativePnl: 0,
+    }))
+    return aggregateChartData(entries, filter.timeframe)
+  }, [rawDailyPnl, filter.timeframe])
 
   const handlePeriodChange = (period: FilterState['period'], range?: DateRange) => {
     setFilter((f) => ({ ...f, period }))

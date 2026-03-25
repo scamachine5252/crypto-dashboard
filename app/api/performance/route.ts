@@ -20,19 +20,33 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const sinceDate = new Date(since).toISOString()
   const untilDate = new Date(until).toISOString()
 
-  const { data: rows, error: tradeErr } = await supabaseAdmin
-    .from('trades')
-    .select('id, account_id, exchange, symbol, direction, trade_type, entry_price, exit_price, quantity, pnl, fee, opened_at, closed_at')
-    .in('account_id', accountIds)
-    .gte('closed_at', sinceDate)
-    .lte('closed_at', untilDate)
-    .not('closed_at', 'is', null)
-    .order('closed_at', { ascending: true })
-    .limit(50000)
+  // Supabase PostgREST caps at 1000 rows per request — paginate to fetch all
+  const PAGE = 1000
+  const allRows: Array<{
+    id: string; account_id: string; exchange: string; symbol: string
+    direction: string | null; trade_type: string; entry_price: string | null
+    exit_price: string | null; quantity: string | null; pnl: string | null
+    fee: string | null; opened_at: string | null; closed_at: string
+  }> = []
+  let from = 0
+  while (true) {
+    const { data, error: pageErr } = await supabaseAdmin
+      .from('trades')
+      .select('id, account_id, exchange, symbol, direction, trade_type, entry_price, exit_price, quantity, pnl, fee, opened_at, closed_at')
+      .in('account_id', accountIds)
+      .gte('closed_at', sinceDate)
+      .lte('closed_at', untilDate)
+      .not('closed_at', 'is', null)
+      .order('closed_at', { ascending: true })
+      .range(from, from + PAGE - 1)
+    if (pageErr) return NextResponse.json({ error: pageErr.message }, { status: 500 })
+    if (!data || data.length === 0) break
+    allRows.push(...data)
+    if (data.length < PAGE) break
+    from += PAGE
+  }
 
-  if (tradeErr) return NextResponse.json({ error: tradeErr.message }, { status: 500 })
-
-  const trades: Trade[] = (rows ?? []).map((t: {
+  const trades: Trade[] = allRows.map((t: {
     id: string; account_id: string; exchange: string; symbol: string
     direction: string | null; trade_type: string; entry_price: string | null
     exit_price: string | null; quantity: string | null; pnl: string | null

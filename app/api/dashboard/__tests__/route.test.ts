@@ -11,7 +11,7 @@ const mockFrom = supabaseAdmin.from as jest.Mock
 function makeChain(data: unknown, error: unknown = null) {
   const result = { data, error }
   const chain: Record<string, jest.Mock> = {}
-  const methods = ['select', 'in', 'is', 'order', 'gte', 'not']
+  const methods = ['select', 'in', 'is', 'order', 'gte', 'lte', 'not', 'range']
   for (const m of methods) {
     chain[m] = jest.fn().mockReturnValue(chain)
   }

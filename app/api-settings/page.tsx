@@ -22,6 +22,24 @@ interface AccountRow {
   api_secret?: never       // never returned by API
 }
 
+// Maps raw error messages / network failures to short user-facing labels
+function friendlyError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err)
+  const lower = msg.toLowerCase()
+  if (lower.includes('failed to fetch') || lower.includes('networkerror') || lower.includes('err_network') || lower.includes('network changed')) return 'Network error — try again'
+  if (lower.includes('aborted') || lower.includes('abort')) return 'Request cancelled'
+  if (lower.includes('invalid api') || lower.includes('authentication') || lower.includes('unauthorized') || lower.includes('401')) return 'Invalid API key'
+  if (lower.includes('permission') || lower.includes('forbidden') || lower.includes('403')) return 'No API permission'
+  if (lower.includes('rate limit') || lower.includes('too many') || lower.includes('429')) return 'Rate limit — wait'
+  if (lower.includes('timeout') || lower.includes('timed out')) return 'Request timed out'
+  if (lower.includes('markets')) return 'Markets load failed'
+  if (lower.includes('chunks')) return 'Chunks load failed'
+  if (lower.includes('500') || lower.includes('internal server')) return 'Server error — retry'
+  if (lower.includes('404') || lower.includes('not found')) return 'Account not found'
+  if (lower.includes('failed to load accounts') || lower.includes('failed to load')) return 'Load failed — retry'
+  return 'Error — try again'
+}
+
 const EXCHANGE_COLORS: Record<string, string> = {
   binance: '#F0B90B',
   bybit:   '#FF6B2C',
@@ -141,7 +159,7 @@ export default function ApiSettingsPage() {
   const [form, setForm]             = useState(EMPTY_FORM)
   const [newFundDraft, setNewFundDraft] = useState('')
 
-  type ScanEntry = { current: number; total: number; failed: { symbol: string; error: string }[]; completed?: boolean; isError?: boolean }
+  type ScanEntry = { current: number; total: number; failed: { symbol: string; error: string }[]; completed?: boolean; isError?: boolean; errorMsg?: string }
   const [scanState, setScanState] = useState<Record<string, ScanEntry>>({})
 
 
@@ -157,7 +175,7 @@ export default function ApiSettingsPage() {
       const data = (await res.json()) as AccountRow[]
       setAccounts(data)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error')
+      setError(friendlyError(err))
     } finally {
       setLoading(false)
     }
@@ -180,8 +198,8 @@ export default function ApiSettingsPage() {
         // Binance: symbol-based chunking
         const marketsRes = await fetch(`/api/sync/binance/markets?account_id=${accountId}`)
         if (!marketsRes.ok) throw new Error('Failed to load markets')
-        const { totalChunks, totalSymbols } = (await marketsRes.json()) as {
-          totalChunks: number; chunkSize: number; totalSymbols: number
+        const { totalChunks, totalSymbols, spotChunks } = (await marketsRes.json()) as {
+          totalChunks: number; chunkSize: number; totalSymbols: number; spotChunks: number
         }
 
         setScanState((prev) => ({
@@ -193,7 +211,7 @@ export default function ApiSettingsPage() {
           const res = await fetch('/api/sync/binance/full', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ account_id: accountId, chunk_index: i }),
+            body: JSON.stringify({ account_id: accountId, chunk_index: i, spot_chunks: spotChunks }),
           })
           if (res.ok) {
             const data = (await res.json()) as {
@@ -261,8 +279,8 @@ export default function ApiSettingsPage() {
       }
 
       await fetchAccounts()
-    } catch {
-      setScanState((prev) => ({ ...prev, [accountId]: { current: 0, total: 0, failed: [], isError: true } }))
+    } catch (err) {
+      setScanState((prev) => ({ ...prev, [accountId]: { current: 0, total: 0, failed: [], isError: true, errorMsg: friendlyError(err) } }))
     }
   }, [fetchAccounts])
 
@@ -302,7 +320,7 @@ export default function ApiSettingsPage() {
       })
       if (!res.ok) {
         const json = await res.json() as { error?: string }
-        setError(json.error ?? 'Failed to create account')
+        setError(friendlyError(new Error(json.error ?? 'Failed to create account')))
         return
       }
       const json = await res.json() as { id?: string }
@@ -312,7 +330,7 @@ export default function ApiSettingsPage() {
         handleFullScan(json.id, form.exchangeId)
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error')
+      setError(friendlyError(err))
     }
   }, [form, newFundDraft, resetForm, fetchAccounts, handleFullScan])
 
@@ -341,13 +359,13 @@ export default function ApiSettingsPage() {
       const res = await fetch(`/api/accounts/${id}`, { method: 'DELETE' })
       if (!res.ok) {
         const json = await res.json() as { error?: string }
-        setError(json.error ?? 'Failed to remove account')
+        setError(friendlyError(new Error(json.error ?? 'Failed to remove account')))
         return
       }
       if (editingId === id) resetForm()
       await fetchAccounts()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error')
+      setError(friendlyError(err))
     }
   }, [editingId, resetForm, fetchAccounts])
 
@@ -696,7 +714,7 @@ export default function ApiSettingsPage() {
                                 {state.failed.length > 0 ? `✓ Done · ⚠ ${state.failed.length} failed` : '✓ Done'}
                               </span>
                             )
-                            if (state?.isError) return <span style={{ color: 'var(--accent-loss)' }}>Error</span>
+                            if (state?.isError) return <span style={{ color: 'var(--accent-loss)' }}>{state.errorMsg ?? 'Error — try again'}</span>
                             if (account.last_full_sync_at) {
                               const failedCount = account.full_sync_failed_count ?? 0
                               return (

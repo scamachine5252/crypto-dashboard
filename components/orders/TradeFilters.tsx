@@ -57,7 +57,7 @@ export default function TradeFilters({ filter, onChange, accounts }: TradeFilter
   const uniqueExchanges = [...new Set(accounts.map((a) => a.exchange))]
   const selectedColor = filter.exchangeId !== 'all' ? EXCHANGE_COLORS[filter.exchangeId] : undefined
   const subAccounts = filter.exchangeId === 'all'
-    ? []
+    ? accounts
     : accounts.filter((a) => a.exchange === filter.exchangeId)
 
   const maxEnd = addDays(filter.dateRange.start, MAX_DAYS)
@@ -118,8 +118,7 @@ export default function TradeFilters({ filter, onChange, accounts }: TradeFilter
       <select
         value={filter.subAccountId}
         onChange={(e) => onChange({ subAccountId: e.target.value, page: 1 })}
-        disabled={filter.exchangeId === 'all'}
-        className="text-xs px-2.5 py-1 outline-none disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+        className="text-xs px-2.5 py-1 outline-none cursor-pointer"
         style={{
           ...selectStyle,
           border: `1px solid ${selectedColor && filter.subAccountId !== 'all' ? selectedColor + '44' : 'var(--border-medium)'}`,

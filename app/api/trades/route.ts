@@ -34,19 +34,28 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const sinceDate = new Date(since).toISOString()
   const untilDate = new Date(until).toISOString()
 
-  const { data: rows, error: tradeErr } = await supabaseAdmin
-    .from('trades')
-    .select('id, account_id, exchange, symbol, direction, trade_type, entry_price, exit_price, quantity, pnl, fee, opened_at, closed_at')
-    .in('account_id', accountIds)
-    .gte('closed_at', sinceDate)
-    .lte('closed_at', untilDate)
-    .not('closed_at', 'is', null)
-    .order('closed_at', { ascending: false })
-    .limit(10000)
+  // Supabase PostgREST caps at 1000 rows per request — paginate to fetch all
+  const PAGE = 1000
+  const allRows: DbTrade[] = []
+  let from = 0
+  while (true) {
+    const { data, error: pageErr } = await supabaseAdmin
+      .from('trades')
+      .select('id, account_id, exchange, symbol, direction, trade_type, entry_price, exit_price, quantity, pnl, fee, opened_at, closed_at')
+      .in('account_id', accountIds)
+      .gte('closed_at', sinceDate)
+      .lte('closed_at', untilDate)
+      .not('closed_at', 'is', null)
+      .order('closed_at', { ascending: false })
+      .range(from, from + PAGE - 1)
+    if (pageErr) return NextResponse.json({ error: pageErr.message }, { status: 500 })
+    if (!data || data.length === 0) break
+    allRows.push(...(data as DbTrade[]))
+    if (data.length < PAGE) break
+    from += PAGE
+  }
 
-  if (tradeErr) return NextResponse.json({ error: tradeErr.message }, { status: 500 })
-
-  const trades: Trade[] = ((rows ?? []) as DbTrade[]).map((t) => ({
+  const trades: Trade[] = allRows.map((t) => ({
     id: t.id,
     subAccountId: t.account_id,
     exchangeId: t.exchange as ExchangeId,

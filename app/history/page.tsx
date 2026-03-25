@@ -11,7 +11,7 @@ import ExportButton from '@/components/orders/ExportButton'
 
 function getDefaultFilter(): HistoryFilterState {
   const end   = new Date().toISOString().slice(0, 10)
-  const start = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+  const start = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
   return {
     exchangeId:   'all',
     subAccountId: 'all',

@@ -30,6 +30,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const body = await req.json() as Record<string, unknown>
   const accountId  = body.account_id  as string | undefined
   const chunkIndex = body.chunk_index as number | undefined
+  const spotChunks = typeof body.spot_chunks === 'number' ? body.spot_chunks : null
 
   if (!accountId)               return NextResponse.json({ error: 'account_id required' }, { status: 400 })
   if (chunkIndex === undefined) return NextResponse.json({ error: 'chunk_index required' }, { status: 400 })
@@ -47,16 +48,22 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'Account not found' }, { status: 404 })
   }
 
-  const isFutures = (account as Record<string, string>).instrument === 'futures'
+  const isFuturesOnly = (account as Record<string, string>).instrument === 'futures'
+
+  // Determine whether this chunk targets spot or futures market
+  const useFutures = isFuturesOnly || (spotChunks !== null && chunkIndex >= spotChunks)
+  const futuresChunkIndex = spotChunks !== null ? chunkIndex - spotChunks : chunkIndex
 
   let allSymbols: string[]
   try {
-    allSymbols = await loadSortedUsdtSymbols(isFutures)
+    allSymbols = await loadSortedUsdtSymbols(useFutures)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return NextResponse.json({ error: message }, { status: 500 })
   }
-  const start  = chunkIndex * CHUNK_SIZE
+
+  const localIndex = useFutures && !isFuturesOnly ? futuresChunkIndex : chunkIndex
+  const start   = localIndex * CHUNK_SIZE
   const symbols = allSymbols.slice(start, start + CHUNK_SIZE)
 
   if (symbols.length === 0) {
@@ -66,7 +73,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const adapter = new BinanceAdapter({
     apiKey:    decrypt((account as Record<string, string>).api_key),
     apiSecret: decrypt((account as Record<string, string>).api_secret),
-    type:      isFutures ? 'future' : 'spot',
+    type:      useFutures ? 'future' : 'spot',
   })
 
   const { trades, failedSymbols } = await adapter.getFullTrades(symbols)

@@ -19,28 +19,36 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'Account not found' }, { status: 404 })
   }
 
-  const isFutures = (account as Record<string, string>).instrument === 'futures'
+  const isFuturesOnly = (account as Record<string, string>).instrument === 'futures'
 
   try {
-    const exchange = isFutures
-      ? new ccxt.binance({ options: { defaultType: 'future' } })
-      : new ccxt.binance()
+    const loadSymbols = async (futures: boolean): Promise<string[]> => {
+      const ex = new ccxt.binance(futures ? { options: { defaultType: 'future' } } : {})
+      const markets = await ex.loadMarkets()
+      return Object.values(markets)
+        .filter((m): m is NonNullable<typeof m> => {
+          if (m == null) return false
+          return futures ? (m.quote === 'USDT' && m.linear === true) : m.quote === 'USDT'
+        })
+        .map((m) => m.symbol)
+        .sort()
+    }
 
-    const markets = await exchange.loadMarkets()
+    let spotSymbols: string[] = []
+    let futuresSymbols: string[] = []
 
-    const symbols = Object.values(markets)
-      .filter((m): m is NonNullable<typeof m> => {
-        if (m == null) return false
-        if (isFutures) return m.quote === 'USDT' && m.linear === true
-        return m.quote === 'USDT'
-      })
-      .map((m) => m.symbol)
-      .sort()
+    if (isFuturesOnly) {
+      futuresSymbols = await loadSymbols(true)
+    } else {
+      ;[spotSymbols, futuresSymbols] = await Promise.all([loadSymbols(false), loadSymbols(true)])
+    }
 
-    const totalSymbols = symbols.length
-    const totalChunks = totalSymbols === 0 ? 0 : Math.ceil(totalSymbols / CHUNK_SIZE)
+    const spotChunks    = Math.ceil(spotSymbols.length    / CHUNK_SIZE)
+    const futuresChunks = Math.ceil(futuresSymbols.length / CHUNK_SIZE)
+    const totalChunks   = spotChunks + futuresChunks
+    const totalSymbols  = spotSymbols.length + futuresSymbols.length
 
-    return NextResponse.json({ totalChunks, chunkSize: CHUNK_SIZE, totalSymbols })
+    return NextResponse.json({ totalChunks, chunkSize: CHUNK_SIZE, totalSymbols, spotChunks })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return NextResponse.json({ error: message }, { status: 500 })
