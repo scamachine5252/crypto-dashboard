@@ -55,18 +55,27 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     from += PAGE
   }
 
-  const trades: Trade[] = allRows.map((t) => ({
+  // Filter to closing fills only (pnl≠0) — opening fills (pnl=0) are stored for
+  // entryPrice reference but should not appear in the trade history view.
+  const closingRows = allRows.filter((t) => Number(t.pnl ?? 0) !== 0)
+
+  const trades: Trade[] = closingRows.map((t) => {
+    const pnl       = Number(t.pnl ?? 0)
+    const entryPrice = Number(t.entry_price ?? 0)
+    const quantity   = Number(t.quantity ?? 0)
+    const notional   = entryPrice * quantity
+    return ({
     id: t.id,
     subAccountId: t.account_id,
     exchangeId: t.exchange as ExchangeId,
     symbol: t.symbol,
     side: (t.direction === 'long' || t.direction === 'short') ? t.direction as TradeSide : 'long',
     tradeType: t.trade_type as TradeType,
-    entryPrice: Number(t.entry_price ?? 0),
+    entryPrice,
     exitPrice: Number(t.exit_price ?? 0),
-    quantity: Number(t.quantity ?? 0),
-    pnl: Number(t.pnl ?? 0),
-    pnlPercent: 0,
+    quantity,
+    pnl,
+    pnlPercent: notional > 0 ? (pnl / notional) * 100 : 0,
     fee: Number(t.fee ?? 0),
     durationMin: t.opened_at
       ? Math.round((new Date(t.closed_at).getTime() - new Date(t.opened_at).getTime()) / 60000)
@@ -78,7 +87,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       : false,
     openedAt: t.opened_at ?? t.closed_at,
     closedAt: t.closed_at,
-  }))
+  })})
 
   return NextResponse.json({ trades, accounts })
 }

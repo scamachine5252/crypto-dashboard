@@ -97,12 +97,14 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     return { period: formatDay(day), pnl: dailyMap[day], cumulativePnl: cumulative }
   })
 
-  // Metrics
-  const wins = tradeRows.filter((t) => Number(t.pnl ?? 0) > 0)
+  // Metrics — only count fills that realised PnL (pnl≠0) for trade-level stats.
+  // Opening fills (pnl=0) are stored but must not pollute winRate / profitFactor.
+  const wins   = tradeRows.filter((t) => Number(t.pnl ?? 0) > 0)
   const losses = tradeRows.filter((t) => Number(t.pnl ?? 0) < 0)
-  const totalPnl = tradeRows.reduce((s, t) => s + Number(t.pnl ?? 0), 0)
+  const closedCount = wins.length + losses.length
+  const totalPnl  = tradeRows.reduce((s, t) => s + Number(t.pnl ?? 0), 0)
   const totalFees = tradeRows.reduce((s, t) => s + Number(t.fee ?? 0), 0)
-  const winRate = tradeRows.length > 0 ? wins.length / tradeRows.length : 0
+  const winRate = closedCount > 0 ? wins.length / closedCount : 0
   const avgWin = wins.length > 0 ? wins.reduce((s, t) => s + Number(t.pnl), 0) / wins.length : 0
   const avgLoss = losses.length > 0 ? Math.abs(losses.reduce((s, t) => s + Number(t.pnl), 0) / losses.length) : 0
   const grossProfit = wins.reduce((s, t) => s + Number(t.pnl), 0)
@@ -142,7 +144,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const totalVolume = tradeRows.reduce((s, t) => s + Number(t.quantity ?? 0) * Number(t.entry_price ?? 0), 0)
 
   const metrics: DashboardMetrics = {
-    totalPnl, totalFees, totalTrades: tradeRows.length, winRate, profitFactor, avgWin, avgLoss,
+    totalPnl, totalFees, totalTrades: closedCount, winRate, profitFactor, avgWin, avgLoss,
     sharpeRatio, sortinoRatio, maxDrawdown, cagr, annualYield,
     riskRewardRatio: avgLoss > 0 ? avgWin / avgLoss : 0,
     totalVolume,
