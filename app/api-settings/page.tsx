@@ -32,7 +32,6 @@ function friendlyError(err: unknown): string {
   if (lower.includes('permission') || lower.includes('forbidden') || lower.includes('403')) return 'No API permission'
   if (lower.includes('rate limit') || lower.includes('too many') || lower.includes('429')) return 'Rate limit — wait'
   if (lower.includes('timeout') || lower.includes('timed out')) return 'Request timed out'
-  if (lower.includes('markets')) return 'Markets load failed'
   if (lower.includes('chunks')) return 'Chunks load failed'
   if (lower.includes('500') || lower.includes('internal server')) return 'Server error — retry'
   if (lower.includes('404') || lower.includes('not found')) return 'Account not found'
@@ -52,7 +51,6 @@ const EMPTY_FORM = {
   fund:          'Cicada Foundation',
   exchangeId:    '' as ExchangeId | '',
   accountName:   '',
-  instrument:    'unified',   // account type: unified | spot | futures | options
   apiKey:        '',
   apiSecret:     '',
   passphrase:    '',
@@ -195,33 +193,55 @@ export default function ApiSettingsPage() {
       const allFailed: { symbol: string; error: string }[] = []
 
       if (exchange === 'binance') {
-        // Binance: symbol-based chunking.
-        // Markets route returns the full sorted symbol arrays once — chunk slicing
-        // happens here so the full route never needs to call loadMarkets() itself.
-        const marketsRes = await fetch(`/api/sync/binance/markets?account_id=${accountId}`)
-        if (!marketsRes.ok) throw new Error('Failed to load markets')
-        const { spotSymbols, futuresSymbols, totalSymbols } = (await marketsRes.json()) as {
-          spotSymbols: string[]; futuresSymbols: string[]
-          totalSymbols: number; spotChunks: number; totalChunks: number; chunkSize: number
-        }
+        // Auto-detect instrument before scanning — ensures PM accounts use the
+        // correct adapter regardless of what was stored at account creation time.
+        // This is silent: if ping fails we proceed with whatever is in DB.
+        try {
+          const pingRes = await fetch(`/api/exchanges/binance/ping`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ account_id: accountId }),
+          })
+          if (pingRes.ok) {
+            const pingJson = await pingRes.json() as { instrument?: string }
+            if (pingJson.instrument) {
+              // Update the badge in the accounts list immediately
+              setAccounts((prev) => prev.map((a) =>
+                a.id === accountId ? { ...a, instrument: pingJson.instrument! } : a,
+              ))
+            }
+          }
+        } catch { /* non-fatal */ }
 
-        const CHUNK = 50
-        const allSymbols = [...spotSymbols, ...futuresSymbols]
-        const chunks: string[][] = []
-        for (let i = 0; i < allSymbols.length; i += CHUNK) {
-          chunks.push(allSymbols.slice(i, i + CHUNK))
+        // Binance: discover all traded symbols first (one income call for 180d),
+        // then process each symbol individually across 26 7-day windows.
+        // Each Vercel call = 26 userTrades requests = always <10s (Hobby-safe).
+        setScanState((prev) => ({
+          ...prev,
+          [accountId]: { current: 0, total: 0, failed: [] },
+        }))
+
+        const discoverRes = await fetch('/api/sync/binance/discover', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ account_id: accountId }),
+        })
+        if (!discoverRes.ok) throw new Error('Failed to discover traded symbols')
+        const { symbols } = (await discoverRes.json()) as {
+          symbols: { rawSymbol: string; weekIndices: number[] }[]
         }
 
         setScanState((prev) => ({
           ...prev,
-          [accountId]: { current: 0, total: totalSymbols, failed: [] },
+          [accountId]: { current: 0, total: symbols.length, failed: [] },
         }))
 
-        for (let i = 0; i < chunks.length; i++) {
+        for (let i = 0; i < symbols.length; i++) {
+          const { rawSymbol, weekIndices } = symbols[i]
           const res = await fetch('/api/sync/binance/full', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ account_id: accountId, symbols: chunks[i] }),
+            body: JSON.stringify({ account_id: accountId, symbol: rawSymbol, weeks: weekIndices }),
           })
           if (res.ok) {
             const data = (await res.json()) as {
@@ -229,10 +249,9 @@ export default function ApiSettingsPage() {
             }
             allFailed.push(...data.failedSymbols)
           }
-          const symbolsDone = Math.min((i + 1) * CHUNK, totalSymbols)
           setScanState((prev) => ({
             ...prev,
-            [accountId]: { current: symbolsDone, total: totalSymbols, failed: allFailed },
+            [accountId]: { current: i + 1, total: symbols.length, failed: allFailed },
           }))
         }
 
@@ -244,7 +263,7 @@ export default function ApiSettingsPage() {
 
         setScanState((prev) => ({
           ...prev,
-          [accountId]: { current: totalSymbols, total: totalSymbols, failed: allFailed, completed: true },
+          [accountId]: { current: symbols.length, total: symbols.length, failed: allFailed, completed: true },
         }))
       } else {
         // Bybit / OKX: time-based chunking (6 × 30-day windows)
@@ -315,7 +334,6 @@ export default function ApiSettingsPage() {
       fund:          resolvedFund,
       exchange:      form.exchangeId.toLowerCase(),
       account_name:  form.accountName.trim(),
-      instrument:    form.instrument,
       api_key:       form.apiKey,
       api_secret:    form.apiSecret,
       ...(form.passphrase    ? { passphrase:       form.passphrase }          : {}),
@@ -352,7 +370,6 @@ export default function ApiSettingsPage() {
       fund:          account.fund,
       exchangeId:    account.exchange,
       accountName:   account.account_name,
-      instrument:    account.instrument,
       apiKey:        '',
       apiSecret:     '',
       passphrase:    '',
@@ -390,9 +407,13 @@ export default function ApiSettingsPage() {
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ account_id: account.id }),
       })
-      const json = await res.json() as { connected?: boolean }
+      const json = await res.json() as { connected?: boolean; instrument?: string }
       const status: AccountRow['status'] = json.connected ? 'connected' : 'error'
-      setAccounts((prev) => prev.map((a) => a.id === account.id ? { ...a, status } : a))
+      setAccounts((prev) => prev.map((a) =>
+        a.id === account.id
+          ? { ...a, status, ...(json.instrument ? { instrument: json.instrument } : {}) }
+          : a,
+      ))
     } catch {
       setAccounts((prev) => prev.map((a) => a.id === account.id ? { ...a, status: 'error' as const } : a))
     } finally {
@@ -463,15 +484,6 @@ export default function ApiSettingsPage() {
             onChange={(v) => patch('accountName', v)}
             placeholder="e.g. Alpha Fund"
           />
-
-          {/* Account Type */}
-          <FieldSelect label="Account Type" value={form.instrument} onChange={(v) => patch('instrument', v)}>
-            <option value="unified">Unified</option>
-            <option value="portfolio_margin">Portfolio Margin</option>
-            <option value="spot">Spot</option>
-            <option value="futures">Futures</option>
-            <option value="options">Options</option>
-          </FieldSelect>
 
           {/* Divider */}
           <div style={{ borderTop: '1px solid var(--border-subtle)' }} />
@@ -713,8 +725,9 @@ export default function ApiSettingsPage() {
                                     }} />
                                   </div>
                                   {state.failed.length > 0 && (
-                                    <span style={{ color: 'var(--accent-loss)', fontSize: 10 }}>
+                                    <span style={{ color: 'var(--accent-loss)', fontSize: 10 }} title={state.failed.map((f) => `${f.symbol}: ${f.error}`).join('\n')}>
                                       ⚠ {state.failed.length} failed
+                                      {state.failed[0]?.error ? ` · ${state.failed[0].error.slice(0, 35)}` : ''}
                                     </span>
                                   )}
                                 </div>

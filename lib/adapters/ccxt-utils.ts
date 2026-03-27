@@ -35,10 +35,11 @@ export function mapCcxtTrade(
     0
   const pnl = Number(rawPnl)
 
-  const leverage =
+  const rawLeverage =
     typeof info['leverage'] === 'number' ? info['leverage'] :
     typeof info['leverage'] === 'string' ? Number(info['leverage']) :
     1
+  const leverage = Number.isFinite(rawLeverage) && rawLeverage > 0 ? rawLeverage : 1
 
   const tradeType: TradeType = t.symbol?.includes(':') ? 'futures' : 'spot'
 

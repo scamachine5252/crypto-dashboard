@@ -6,19 +6,22 @@ import { BinanceAdapter } from '@/lib/adapters/binance'
 import type { Trade } from '@/lib/types'
 
 // ---------------------------------------------------------------------------
-// POST — sync one pre-computed slice of symbols for one account.
-// The caller (frontend) passes `symbols: string[]` directly, computed from
-// the markets route response. This avoids redundant loadMarkets() calls per
-// chunk (was 14-28 calls per scan; now 0 — markets route does it once).
+// POST — sync one raw Binance symbol across all 26 7-day windows (full 180 days).
+// The caller (frontend) passes symbol (e.g. 'BTCUSDT') obtained from the discover route.
+// Each call makes exactly 26 userTrades requests — always fits in Vercel's 30s timeout.
 // ---------------------------------------------------------------------------
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  const body    = await req.json() as Record<string, unknown>
-  const accountId = body.account_id as string | undefined
-  const symbols   = body.symbols as string[] | undefined
+  const body       = await req.json() as Record<string, unknown>
+  const accountId  = body.account_id as string | undefined
+  const symbol     = body.symbol     as string | undefined
+  const weeks      = body.weeks      as number[] | undefined
 
-  if (!accountId)                    return NextResponse.json({ error: 'account_id required' }, { status: 400 })
-  if (!Array.isArray(symbols) || symbols.length === 0) {
-    return NextResponse.json({ synced: 0, failedSymbols: [] })
+  if (!accountId)                        return NextResponse.json({ error: 'account_id required' }, { status: 400 })
+  if (typeof symbol !== 'string' || !symbol.trim()) {
+    return NextResponse.json({ error: 'symbol required' }, { status: 400 })
+  }
+  if (!Array.isArray(weeks) || weeks.length === 0) {
+    return NextResponse.json({ error: 'weeks required' }, { status: 400 })
   }
 
   const { data: account, error: accountError } = await supabaseAdmin
@@ -33,17 +36,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   const instrument        = (account as Record<string, string>).instrument
   const isPortfolioMargin = instrument === 'portfolio_margin'
-  // Infer market type from first symbol: CCXT futures symbols contain ':'
-  const useFutures = isPortfolioMargin || symbols[0]?.includes(':')
 
   const adapter = new BinanceAdapter({
     apiKey:          decrypt((account as Record<string, string>).api_key),
     apiSecret:       decrypt((account as Record<string, string>).api_secret),
-    type:            useFutures ? 'future' : 'spot',
     portfolioMargin: isPortfolioMargin,
   })
 
-  const { trades, failedSymbols } = await adapter.getFullTrades(symbols)
+  const { trades, failedSymbols } = await adapter.getFullTrades(symbol.trim(), weeks)
 
   let synced = 0
   if (trades.length > 0) {

@@ -48,9 +48,14 @@ async function runSync(): Promise<NextResponse> {
         case 'bybit':
           adapter = new BybitAdapter({ apiKey, apiSecret })
           break
-        case 'binance':
-          adapter = new BinanceAdapter({ apiKey, apiSecret, type: row.instrument === 'futures' ? 'future' : 'spot' })
+        case 'binance': {
+          const isPortfolioMargin = row.instrument === 'portfolio_margin'
+          adapter = new BinanceAdapter({
+            apiKey, apiSecret,
+            ...(isPortfolioMargin ? { portfolioMargin: true } : {}),
+          })
           break
+        }
         case 'okx': {
           const passphrase = row.passphrase ? decrypt(row.passphrase) : ''
           adapter = new OkxAdapter({ apiKey, apiSecret, passphrase })

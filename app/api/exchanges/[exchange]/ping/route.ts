@@ -5,6 +5,7 @@ import { decrypt } from '@/lib/crypto/decrypt'
 import { BybitAdapter }   from '@/lib/adapters/bybit'
 import { BinanceAdapter } from '@/lib/adapters/binance'
 import { OkxAdapter }     from '@/lib/adapters/okx'
+import { detectBinanceInstrument } from '@/lib/adapters/binance-detect'
 
 const VALID_EXCHANGES = ['binance', 'bybit', 'okx'] as const
 type ValidExchange = typeof VALID_EXCHANGES[number]
@@ -43,7 +44,7 @@ export async function POST(
   // Fetch account from Supabase
   const { data: account, error: dbError } = await supabaseAdmin
     .from('accounts')
-    .select('id, account_name, exchange, api_key, api_secret, passphrase')
+    .select('id, account_name, exchange, api_key, api_secret, passphrase, instrument')
     .eq('id', account_id)
     .single()
 
@@ -58,6 +59,7 @@ export async function POST(
     api_key: string
     api_secret: string
     passphrase: string | null
+    instrument: string | null
   }
 
   // Decrypt credentials — never leave this scope
@@ -89,9 +91,26 @@ export async function POST(
     connected = false
   }
 
+  // For Binance: if connected, detect and persist the correct instrument type
+  let instrument = row.instrument ?? 'unified'
+  if (connected! && exchange === 'binance') {
+    try {
+      const detected = await detectBinanceInstrument(apiKey, apiSecret)
+      if (detected !== instrument) {
+        await supabaseAdmin
+          .from('accounts')
+          .update({ instrument: detected })
+          .eq('id', row.id)
+        instrument = detected
+      }
+    } catch {
+      // Detection failure is non-fatal — existing instrument value kept
+    }
+  }
+
   // Return result — never expose decrypted credentials
   return NextResponse.json(
-    { connected: connected!, exchange, account_name: row.account_name },
+    { connected: connected!, exchange, account_name: row.account_name, instrument },
     { status: 200 },
   )
 }

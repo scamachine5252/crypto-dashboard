@@ -107,15 +107,17 @@ describe('POST /api/sync', () => {
     expect(mockAccountsSelect).toHaveBeenCalled()
   })
 
-  it('calls fetchBalance for each account', async () => {
+  it('calls fetchBalance once per account (Binance uses single futures adapter)', async () => {
     const { POST } = await import('../route')
     await POST(makePost())
+    // 1 call for Bybit + 1 call for Binance (single futures adapter) = 2
     expect(mockFetchBalance).toHaveBeenCalledTimes(2)
   })
 
-  it('calls getTrades for each account', async () => {
+  it('calls getTrades once per account (Binance futures-only adapter)', async () => {
     const { POST } = await import('../route')
     await POST(makePost())
+    // 1 call for Bybit + 1 call for Binance (single futures adapter) = 2
     expect(mockGetTrades).toHaveBeenCalledTimes(2)
   })
 

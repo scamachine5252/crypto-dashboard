@@ -399,7 +399,8 @@ All functions in `lib/calculations.ts` must be developed test-first using Jest.
 
 - **Write tests before implementation.** Never add a new calculation function without a failing test first.
 - **Test file location:** `lib/__tests__/calculations.test.ts` — no exceptions.
-- **Run tests before committing:** `npm test` must pass with zero failures.
+- **Regression tests:** `lib/__tests__/regression.test.ts` — do NOT delete tests from this file. Every bug fixed in production gets a test here.
+- **Run before claiming done:** `npx tsc --noEmit && npm test` — both must exit 0. No exceptions.
 
 ### Workflow for every new calculation
 
@@ -420,10 +421,32 @@ All functions in `lib/calculations.ts` must be developed test-first using Jest.
 | `filterByDateRange` | in-range, out-of-range, full coverage ✅ |
 | `normalizeEquityCurve` | empty; first point = 0; final value reflects relative gain ✅ |
 | `filterTradesAdvanced` | all filters; no-match combination; symbol substring ✅ |
-| `summarizeFilteredTrades` | empty; sum PnL and fees ✅ |
+| `summarizeFilteredTrades` | empty; sum PnL and fees; totalVolume = Σ qty×entryPrice ✅ |
 | `buildMetricTimeSeries` | empty; monthly/weekly buckets; multiple accounts; dateRange respected; winRate bounds ✅ |
 | `calculateFuturesMetrics` | empty; funding cost (futures only); avg leverage; L/S ratio; liq distance; overnight count ✅ |
+| `buildOverlayData` | output keyed by subAccountId; numeric values; empty range returns []; carry-forward for gaps ✅ |
+| `aggregateOverlayData` | weekly < daily row count; monthly ≤ weekly; all keys preserved; daily is passthrough ✅ |
+| `buildPerAccountMetrics` | totalNotional is finite ≥ 0; present in both metrics and extras; consistent between fields ✅ |
+| `mapCcxtTrade` (ccxt-utils) | PnL: all exchange field names; string→number; NaN-safe; tradeType from ':'; leverage string+fallback ✅ |
 | Any new metric helper | happy path, zero denominator (no division by zero), all-loss / all-win edge cases |
+
+### Regression test checklist (`lib/__tests__/regression.test.ts`)
+
+These tests guard against the 29 bugs documented in `CASE_STUDY.md`. Before shipping any change that touches the following areas, verify the corresponding regression tests still pass:
+
+| Area | Regression tests cover |
+|---|---|
+| `mapCcxtTrade` (ccxt-utils) | PnL string→number for Binance/Bybit/OKX; NaN fallback; tradeType from symbol; leverage guard |
+| Supabase pagination | Accumulator loop fetches all rows beyond 1000 |
+| Equity curve (buildOverlayData) | Numeric values; correct date range; carry-forward; multi-account keys |
+| Equity curve (aggregateOverlayData) | Weekly/monthly produce fewer rows; keys preserved |
+| normalizeEquityCurve | First point = 0 regardless of starting cumulativePnl |
+| buildPerAccountMetrics | `totalNotional` in `metrics` and `extras`; finite; ≥ 0 |
+| summarizeFilteredTrades | `totalVolume` uses entryPrice (not exitPrice) |
+| formatPercent | No double `+` prefix; takes plain percent not ratio |
+| formatMoney | Compact thresholds (K/M) and negative values |
+| History date range | 180-day window covers the full scan period |
+| Chunk size (A4) | Bybit chunk ≤ 7 days; 26 chunks × 7 days ≥ 180 |
 
 ### Jest setup
 
@@ -464,6 +487,19 @@ describe('calculateMetrics', () => {
     // build deterministic daily data, assert sharpeRatio > 0
   })
 })
+```
+
+### Pre-flight checklist before every PR / "done" claim
+
+```
+[ ] npx tsc --noEmit   → exit 0
+[ ] npm test           → exit 0, no failures
+[ ] grep -r "2025-12-31\|MOCK_TODAY" → no hits
+[ ] New enum value? → DB migration written
+[ ] New instrument? → grep "=== 'futures'" in sync routes and update
+[ ] New supabaseAdmin query returning >1000 rows? → pagination loop added
+[ ] New API route? → worst-case execution time < 5s on Vercel
+[ ] New exchange field? → raw response inspected, Number() wrapper added
 ```
 
 ---

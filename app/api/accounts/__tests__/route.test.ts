@@ -21,6 +21,16 @@ jest.mock('@/lib/crypto/encrypt', () => ({
   encrypt: jest.fn((text: string) => `enc:${text}`),
 }))
 
+// Mock decrypt — needed because accounts route now decrypts keys for Binance detection
+jest.mock('@/lib/crypto/decrypt', () => ({
+  decrypt: jest.fn((text: string) => text.replace(/^enc:/, '')),
+}))
+
+// Mock auto-detect — prevents real ccxt calls in unit tests
+jest.mock('@/lib/adapters/binance-detect', () => ({
+  detectBinanceInstrument: jest.fn().mockResolvedValue('unified'),
+}))
+
 import { NextRequest } from 'next/server'
 
 // ---------------------------------------------------------------------------
@@ -72,15 +82,6 @@ describe('POST /api/accounts', () => {
     expect(res.status).toBe(400)
     const json = await res.json()
     expect(json.error).toMatch(/exchange/i)
-  })
-
-  it('returns 400 if instrument is not valid', async () => {
-    const { POST } = await import('../route')
-    const req = makePost({ ...validBody, instrument: 'nft' })
-    const res = await POST(req)
-    expect(res.status).toBe(400)
-    const json = await res.json()
-    expect(json.error).toMatch(/instrument/i)
   })
 
   it('encrypts api_key and api_secret before saving to Supabase', async () => {

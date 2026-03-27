@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/server'
 import { encrypt } from '@/lib/crypto/encrypt'
+import { decrypt } from '@/lib/crypto/decrypt'
+import { detectBinanceInstrument } from '@/lib/adapters/binance-detect'
 
 const VALID_EXCHANGES = ['binance', 'bybit', 'okx'] as const
-const VALID_INSTRUMENTS = ['spot', 'futures', 'options', 'unified', 'portfolio_margin'] as const
 
 // ---------------------------------------------------------------------------
 // POST /api/accounts — create a new exchange account
@@ -17,7 +18,6 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
 
   const { fund, exchange, account_name, api_key, api_secret, passphrase, account_id_memo } = body as Record<string, string | undefined>
-  const instrument = (body.instrument as string | undefined) ?? 'unified'
 
   // Required field validation
   if (!fund || !exchange || !account_name || !api_key || !api_secret) {
@@ -35,14 +35,6 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     )
   }
 
-  // Instrument validation
-  if (!(VALID_INSTRUMENTS as readonly string[]).includes(instrument)) {
-    return NextResponse.json(
-      { error: `Invalid instrument. Must be one of: ${VALID_INSTRUMENTS.join(', ')}` },
-      { status: 400 },
-    )
-  }
-
   // Encrypt sensitive fields before storage
   const encryptedApiKey = encrypt(api_key)
   const encryptedApiSecret = encrypt(api_secret)
@@ -52,7 +44,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     fund,
     exchange,
     account_name,
-    instrument,
+    instrument: 'unified', // safe default; will be updated after detection below
     api_key: encryptedApiKey,
     api_secret: encryptedApiSecret,
   }
@@ -73,8 +65,29 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 
+  const row = data as Record<string, unknown>
+
+  // Auto-detect instrument for Binance accounts; Bybit/OKX always 'unified'
+  if (exchange === 'binance') {
+    try {
+      const detected = await detectBinanceInstrument(
+        decrypt(row.api_key as string),
+        decrypt(row.api_secret as string),
+      )
+      if (detected !== 'unified') {
+        await supabaseAdmin
+          .from('accounts')
+          .update({ instrument: detected })
+          .eq('id', row.id as string)
+        row.instrument = detected
+      }
+    } catch {
+      // Detection failure is non-fatal — account is saved with 'unified' default
+    }
+  }
+
   // Strip encrypted fields from response
-  const { api_key: _k, api_secret: _s, passphrase: _p, ...safe } = data as Record<string, unknown>
+  const { api_key: _k, api_secret: _s, passphrase: _p, ...safe } = row
 
   return NextResponse.json(safe, { status: 201 })
 }

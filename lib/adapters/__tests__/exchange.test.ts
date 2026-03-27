@@ -5,12 +5,16 @@ const mockFetchBalance               = jest.fn()
 const mockFetchTrades                = jest.fn()
 const mockLoadMarkets                = jest.fn()
 const mockPrivateGetV5ClosedPnl      = jest.fn()
+const mockFapiGetUserTrades          = jest.fn()
+const mockFapiGetIncome              = jest.fn()
 
 const mockExchangeInstance = {
   fetchBalance:                    mockFetchBalance,
   fetchMyTrades:                   mockFetchTrades,
   loadMarkets:                     mockLoadMarkets,
   privateGetV5PositionClosedPnl:   mockPrivateGetV5ClosedPnl,
+  fapiPrivateGetUserTrades:        mockFapiGetUserTrades,
+  fapiPrivateGetIncome:            mockFapiGetIncome,
 }
 
 jest.mock('ccxt', () => ({
@@ -382,211 +386,306 @@ describe('BinanceAdapter', () => {
     })
   })
 
-  describe('getTrades (quick sync)', () => {
+  describe('getTrades (quick sync — futures)', () => {
+    const sampleRawFapiTrade = {
+      id: 1, orderId: 2, symbol: 'BTCUSDT', side: 'BUY',
+      price: '50000', qty: '0.1', realizedPnl: '100',
+      commission: '5', commissionAsset: 'USDT',
+      time: 1704067200000, positionSide: 'LONG',
+    }
+
     beforeEach(() => {
       jest.clearAllMocks()
-      mockFetchBalance.mockReset()
-      mockFetchTrades.mockReset()
+      mockFapiGetIncome.mockReset()
+      mockFapiGetUserTrades.mockReset()
     })
 
-    it('calls fetchBalance({type: spot}) to derive token symbol list', async () => {
-      mockFetchBalance.mockResolvedValue({ total: { USDT: 100, BTC: 0.5 } })
-      mockFetchTrades.mockResolvedValue([])
+    it('uses fapiPrivateGetIncome to discover traded symbols', async () => {
+      mockFapiGetIncome.mockResolvedValue([{ symbol: 'BTCUSDT' }])
+      mockFapiGetUserTrades.mockResolvedValue([])
 
       const { BinanceAdapter } = await import('../binance')
       const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
       await adapter.getTrades('all', { start: '2025-01-01', end: '2025-12-31' }, Date.now() - 48 * 3600_000)
 
-      expect(mockFetchBalance).toHaveBeenCalledWith({ type: 'spot' })
+      expect(mockFapiGetIncome).toHaveBeenCalledTimes(1)
+      const arg = mockFapiGetIncome.mock.calls[0][0] as Record<string, unknown>
+      expect(arg.incomeType).toBe('REALIZED_PNL')
+      expect(typeof arg.startTime).toBe('number')
+      expect(typeof arg.endTime).toBe('number')
     })
 
-    it('includes token-derived symbol in the fetch list', async () => {
-      mockFetchBalance.mockResolvedValue({ total: { USDT: 100, SOL: 10 } })
-      mockFetchTrades.mockResolvedValue([])
+    it('calls fapiPrivateGetUserTrades for each discovered symbol with startTime+endTime', async () => {
+      mockFapiGetIncome.mockResolvedValue([{ symbol: 'BTCUSDT' }, { symbol: 'ETHUSDT' }])
+      mockFapiGetUserTrades.mockResolvedValue([])
 
       const { BinanceAdapter } = await import('../binance')
       const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
       await adapter.getTrades('all', { start: '2025-01-01', end: '2025-12-31' }, Date.now() - 48 * 3600_000)
 
-      const calledSymbols = mockFetchTrades.mock.calls.map((c) => c[0] as string)
-      expect(calledSymbols).toContain('SOL/USDT')
+      expect(mockFapiGetUserTrades).toHaveBeenCalledTimes(2)
+      const arg = mockFapiGetUserTrades.mock.calls[0][0] as Record<string, unknown>
+      expect(typeof arg.endTime).toBe('number')
     })
 
-    it('always includes BTC/USDT and ETH/USDT from hardcoded top-50 list', async () => {
-      mockFetchBalance.mockResolvedValue({ total: { USDT: 100 } })
-      mockFetchTrades.mockResolvedValue([])
+    it('derives entryPrice correctly: long = exitPrice - pnl/qty', async () => {
+      mockFapiGetIncome.mockResolvedValue([{ symbol: 'BTCUSDT' }])
+      mockFapiGetUserTrades.mockResolvedValue([
+        { ...sampleRawFapiTrade, price: '51000', realizedPnl: '100', qty: '0.1', positionSide: 'LONG' },
+      ])
 
       const { BinanceAdapter } = await import('../binance')
       const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
-      await adapter.getTrades('all', { start: '2025-01-01', end: '2025-12-31' }, Date.now() - 48 * 3600_000)
+      const trades = await adapter.getTrades('all', { start: '2025-01-01', end: '2025-12-31' })
 
-      const calledSymbols = mockFetchTrades.mock.calls.map((c) => c[0] as string)
-      expect(calledSymbols).toContain('BTC/USDT')
-      expect(calledSymbols).toContain('ETH/USDT')
+      expect(trades[0].exitPrice).toBe(51000)
+      expect(trades[0].entryPrice).toBeCloseTo(51000 - 100 / 0.1)  // = 50000
     })
 
-    it('deduplicates symbols — BTC in balance AND top-50 is fetched only once', async () => {
-      mockFetchBalance.mockResolvedValue({ total: { USDT: 100, BTC: 0.1 } })
-      mockFetchTrades.mockResolvedValue([])
+    it('derives entryPrice correctly: short = exitPrice + pnl/qty', async () => {
+      mockFapiGetIncome.mockResolvedValue([{ symbol: 'BTCUSDT' }])
+      mockFapiGetUserTrades.mockResolvedValue([
+        { ...sampleRawFapiTrade, price: '49000', realizedPnl: '100', qty: '0.1', positionSide: 'SHORT' },
+      ])
 
       const { BinanceAdapter } = await import('../binance')
       const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
-      await adapter.getTrades('all', { start: '2025-01-01', end: '2025-12-31' }, Date.now() - 48 * 3600_000)
+      const trades = await adapter.getTrades('all', { start: '2025-01-01', end: '2025-12-31' })
 
-      const calledSymbols = mockFetchTrades.mock.calls.map((c) => c[0] as string)
-      expect(calledSymbols.filter((s) => s === 'BTC/USDT')).toHaveLength(1)
+      expect(trades[0].exitPrice).toBe(49000)
+      expect(trades[0].entryPrice).toBeCloseTo(49000 + 100 / 0.1)  // = 50000
     })
 
-    it('passes since parameter to every fetchMyTrades call', async () => {
-      mockFetchBalance.mockResolvedValue({ total: { USDT: 100 } })
-      mockFetchTrades.mockResolvedValue([])
-      const since = Date.now() - 48 * 3600_000
+    it('returns empty if income returns nothing', async () => {
+      mockFapiGetIncome.mockResolvedValue([])
 
       const { BinanceAdapter } = await import('../binance')
       const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
-      await adapter.getTrades('all', { start: '2025-01-01', end: '2025-12-31' }, since)
-
-      mockFetchTrades.mock.calls.forEach((call) => {
-        expect(call[1]).toBe(since)
-      })
-    })
-
-    it('maps returned ccxt trades to Trade objects', async () => {
-      mockFetchBalance.mockResolvedValue({ total: { USDT: 100 } })
-      mockFetchTrades.mockImplementation((symbol: string) => {
-        if (symbol === 'BTC/USDT') return Promise.resolve([{ ...sampleCcxtTrade, symbol: 'BTC/USDT' }])
-        return Promise.resolve([])
-      })
-
-      const { BinanceAdapter } = await import('../binance')
-      const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
-      const trades = await adapter.getTrades('all', { start: '2025-01-01', end: '2025-12-31' }, Date.now() - 48 * 3600_000)
-
-      expect(trades.length).toBeGreaterThan(0)
-      expect(trades[0].symbol).toBe('BTC/USDT')
-    })
-
-    it('skips a symbol silently if fetchMyTrades throws — does not crash', async () => {
-      mockFetchBalance.mockResolvedValue({ total: { USDT: 100 } })
-      mockFetchTrades.mockRejectedValue(new Error('invalid symbol'))
-
-      const { BinanceAdapter } = await import('../binance')
-      const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
-      const trades = await adapter.getTrades('all', { start: '2025-01-01', end: '2025-12-31' }, Date.now() - 48 * 3600_000)
+      const trades = await adapter.getTrades('all', { start: '2025-01-01', end: '2025-12-31' })
 
       expect(trades).toEqual([])
+      expect(mockFapiGetUserTrades).not.toHaveBeenCalled()
     })
 
-    it('returns trades from successful symbols when some symbols fail', async () => {
-      mockFetchBalance.mockResolvedValue({ total: { USDT: 100 } })
-      mockFetchTrades.mockImplementation((symbol: string) => {
-        if (symbol === 'BTC/USDT') return Promise.resolve([{ ...sampleCcxtTrade, symbol: 'BTC/USDT' }])
-        if (symbol === 'ETH/USDT') return Promise.reject(new Error('invalid symbol'))
-        return Promise.resolve([])
+    it('skips symbol silently if fapiPrivateGetUserTrades throws', async () => {
+      mockFapiGetIncome.mockResolvedValue([{ symbol: 'BTCUSDT' }, { symbol: 'ETHUSDT' }])
+      mockFapiGetUserTrades.mockImplementation((p: Record<string, unknown>) => {
+        if (p.symbol === 'ETHUSDT') return Promise.reject(new Error('invalid symbol'))
+        return Promise.resolve([sampleRawFapiTrade])
       })
 
       const { BinanceAdapter } = await import('../binance')
       const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
-      const trades = await adapter.getTrades('all', { start: '2025-01-01', end: '2025-12-31' }, Date.now() - 48 * 3600_000)
+      const trades = await adapter.getTrades('all', { start: '2025-01-01', end: '2025-12-31' })
 
-      expect(trades.length).toBeGreaterThan(0)
-      expect(trades.some((t) => t.symbol === 'BTC/USDT')).toBe(true)
+      expect(trades).toHaveLength(1)
+      expect(trades[0].symbol).toBe('BTC/USDT:USDT')
     })
   })
 
-  it('creates futures exchange instance when type is future', async () => {
-    const ccxtMod = await import('ccxt')
-    const { BinanceAdapter } = await import('../binance')
-    new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret', type: 'future' })
-    const ctorOptions = (ccxtMod.binance as jest.Mock).mock.calls.at(-1)?.[0] as Record<string, unknown>
-    expect(ctorOptions?.options).toEqual({ defaultType: 'future' })
-  })
-
-  it('does not set defaultType when type is spot (default)', async () => {
+  it('always creates futures exchange instance (defaultType: future)', async () => {
     const ccxtMod = await import('ccxt')
     const { BinanceAdapter } = await import('../binance')
     new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
     const ctorOptions = (ccxtMod.binance as jest.Mock).mock.calls.at(-1)?.[0] as Record<string, unknown>
-    expect(ctorOptions?.options).toBeUndefined()
+    expect((ctorOptions?.options as Record<string, unknown>)?.defaultType).toBe('future')
   })
 
-  describe('getFullTrades (full scan)', () => {
+  it('sets portfolioMargin flag when portfolioMargin credential is true', async () => {
+    const ccxtMod = await import('ccxt')
+    const { BinanceAdapter } = await import('../binance')
+    new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret', portfolioMargin: true })
+    const ctorOptions = (ccxtMod.binance as jest.Mock).mock.calls.at(-1)?.[0] as Record<string, unknown>
+    expect((ctorOptions?.options as Record<string, unknown>)?.portfolioMargin).toBe(true)
+  })
+
+  describe('discoverTradedSymbols', () => {
     beforeEach(() => {
       jest.clearAllMocks()
-      mockFetchTrades.mockReset()
+      mockFapiGetIncome.mockReset()
     })
 
-    it('calls fetchMyTrades for each symbol with a ~180-day since window', async () => {
-      mockFetchTrades.mockResolvedValue([])
+    it('calls fapiPrivateGetIncome for full 180-day window', async () => {
+      mockFapiGetIncome.mockResolvedValue([{ symbol: 'BTCUSDT', time: Date.now() - 1000 }])
+
+      const { BinanceAdapter } = await import('../binance')
+      const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
       const before = Date.now()
+      await adapter.discoverTradedSymbols()
 
-      const { BinanceAdapter } = await import('../binance')
-      const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
-      await adapter.getFullTrades(['BTC/USDT', 'ETH/USDT'])
-
-      expect(mockFetchTrades).toHaveBeenCalledTimes(2)
-      const sinceArg = mockFetchTrades.mock.calls[0][1] as number
-      const expected180d = before - 180 * 24 * 3600_000
-      expect(sinceArg).toBeGreaterThanOrEqual(expected180d - 1000)
-      expect(sinceArg).toBeLessThanOrEqual(expected180d + 5000)
+      expect(mockFapiGetIncome).toHaveBeenCalledTimes(1)
+      const arg = mockFapiGetIncome.mock.calls[0][0] as Record<string, unknown>
+      expect(arg.incomeType).toBe('REALIZED_PNL')
+      const expectedStart = before - 180 * 24 * 3600_000
+      expect(arg.startTime as number).toBeGreaterThanOrEqual(expectedStart - 5000)
+      expect(typeof arg.endTime).toBe('number')
     })
 
-    it('retries a failed symbol exactly once before marking it failed', async () => {
-      let callCount = 0
-      mockFetchTrades.mockImplementation(() => {
-        callCount++
-        return Promise.reject(new Error('rate limit'))
-      })
+    it('returns DiscoveredSymbol[] with rawSymbol and weekIndices', async () => {
+      const now = Date.now()
+      const scanStart = now - 180 * 24 * 3600_000
+      mockFapiGetIncome.mockResolvedValue([
+        { symbol: 'BTCUSDT', time: scanStart + 1000 },           // week 0
+        { symbol: 'ETHUSDT', time: scanStart + 14 * 24 * 3600_000 + 1000 }, // week 2
+        { symbol: 'BTCUSDT', time: scanStart + 7 * 24 * 3600_000 + 1000 },  // week 1 (dupe symbol)
+      ])
 
       const { BinanceAdapter } = await import('../binance')
       const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
-      const result = await adapter.getFullTrades(['BTC/USDT'])
+      const result = await adapter.discoverTradedSymbols()
 
-      expect(callCount).toBe(2) // 1 original + 1 retry
+      expect(result).toHaveLength(2)
+      const btc = result.find((s) => s.rawSymbol === 'BTCUSDT')
+      const eth = result.find((s) => s.rawSymbol === 'ETHUSDT')
+      expect(btc?.weekIndices).toContain(0)
+      expect(btc?.weekIndices).toContain(1)
+      expect(eth?.weekIndices).toContain(2)
+    })
+
+    it('returns empty array if income API throws', async () => {
+      mockFapiGetIncome.mockRejectedValue(new Error('network error'))
+
+      const { BinanceAdapter } = await import('../binance')
+      const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
+      const result = await adapter.discoverTradedSymbols()
+
+      expect(result).toEqual([])
+    })
+
+    it('returns empty array if no income events', async () => {
+      mockFapiGetIncome.mockResolvedValue([])
+
+      const { BinanceAdapter } = await import('../binance')
+      const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
+      const result = await adapter.discoverTradedSymbols()
+
+      expect(result).toEqual([])
+    })
+  })
+
+  describe('getFullTrades (full scan — per symbol, 26 windows)', () => {
+    const sampleRawFapiTrade = {
+      id: 1, orderId: 2, symbol: 'BTCUSDT', side: 'BUY',
+      price: '50000', qty: '0.1', realizedPnl: '100',
+      commission: '5', commissionAsset: 'USDT',
+      time: 1704067200000, positionSide: 'LONG',
+    }
+
+    beforeEach(() => {
+      jest.clearAllMocks()
+      mockFapiGetIncome.mockReset()
+      mockFapiGetUserTrades.mockReset()
+    })
+
+    it('does NOT call fapiPrivateGetIncome (income discovery is separate)', async () => {
+      mockFapiGetUserTrades.mockResolvedValue([])
+
+      const { BinanceAdapter } = await import('../binance')
+      const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
+      await adapter.getFullTrades('BTCUSDT', [0, 3, 15])
+
+      expect(mockFapiGetIncome).not.toHaveBeenCalled()
+    })
+
+    it('calls fapiPrivateGetUserTrades only for the provided weekIndices', async () => {
+      mockFapiGetUserTrades.mockResolvedValue([])
+
+      const { BinanceAdapter } = await import('../binance')
+      const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
+      await adapter.getFullTrades('BTCUSDT', [0, 5, 12])
+
+      expect(mockFapiGetUserTrades).toHaveBeenCalledTimes(3)
+    })
+
+    it('passes the rawSymbol and time windows to fapiPrivateGetUserTrades', async () => {
+      mockFapiGetUserTrades.mockResolvedValue([])
+
+      const { BinanceAdapter } = await import('../binance')
+      const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
+      await adapter.getFullTrades('ETHUSDT', [2])
+
+      const firstCall = mockFapiGetUserTrades.mock.calls[0][0] as Record<string, unknown>
+      expect(firstCall.symbol).toBe('ETHUSDT')
+      expect(typeof firstCall.startTime).toBe('number')
+      expect(typeof firstCall.endTime).toBe('number')
+      expect(firstCall.endTime as number).toBeGreaterThan(firstCall.startTime as number)
+    })
+
+    it('maps positionSide LONG → side long with correct entryPrice derivation', async () => {
+      mockFapiGetUserTrades.mockResolvedValueOnce([
+        { ...sampleRawFapiTrade, price: '51000', realizedPnl: '100', qty: '0.1', positionSide: 'LONG' },
+      ])
+
+      const { BinanceAdapter } = await import('../binance')
+      const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
+      const result = await adapter.getFullTrades('BTCUSDT', [0])
+
+      expect(result.trades[0].side).toBe('long')
+      expect(result.trades[0].exitPrice).toBe(51000)
+      expect(result.trades[0].entryPrice).toBeCloseTo(51000 - 100 / 0.1)  // = 50000
+    })
+
+    it('maps positionSide SHORT → side short with correct entryPrice derivation', async () => {
+      mockFapiGetUserTrades.mockResolvedValueOnce([
+        { ...sampleRawFapiTrade, price: '49000', realizedPnl: '100', qty: '0.1', positionSide: 'SHORT' },
+      ])
+
+      const { BinanceAdapter } = await import('../binance')
+      const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
+      const result = await adapter.getFullTrades('BTCUSDT', [0])
+
+      expect(result.trades[0].side).toBe('short')
+      expect(result.trades[0].exitPrice).toBe(49000)
+      expect(result.trades[0].entryPrice).toBeCloseTo(49000 + 100 / 0.1)  // = 50000
+    })
+
+    it('marks symbol as failed and stops if fapiPrivateGetUserTrades throws', async () => {
+      mockFapiGetUserTrades.mockRejectedValue(new Error('rate limit'))
+
+      const { BinanceAdapter } = await import('../binance')
+      const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
+      const result = await adapter.getFullTrades('BTCUSDT', [0, 3, 15])
+
       expect(result.failedSymbols).toHaveLength(1)
-      expect(result.failedSymbols[0].symbol).toBe('BTC/USDT')
+      expect(result.failedSymbols[0].symbol).toBe('BTC/USDT:USDT')
       expect(result.failedSymbols[0].error).toMatch(/rate limit/)
-    }, 10_000)
+      // should stop after first failure (break)
+      expect(mockFapiGetUserTrades).toHaveBeenCalledTimes(1)
+    })
 
-    it('succeeds on retry if first attempt fails', async () => {
-      let callCount = 0
-      mockFetchTrades.mockImplementation(() => {
-        callCount++
-        if (callCount === 1) return Promise.reject(new Error('timeout'))
-        return Promise.resolve([{ ...sampleCcxtTrade, symbol: 'BTC/USDT' }])
-      })
+    it('maps pnl and fee from raw Binance fields', async () => {
+      mockFapiGetUserTrades.mockResolvedValueOnce([
+        { ...sampleRawFapiTrade, realizedPnl: '123.45', commission: '0.99' },
+      ])
 
       const { BinanceAdapter } = await import('../binance')
       const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
-      const result = await adapter.getFullTrades(['BTC/USDT'])
+      const result = await adapter.getFullTrades('BTCUSDT', [0])
 
-      expect(result.trades).toHaveLength(1)
+      expect(result.trades[0].pnl).toBe(123.45)
+      expect(result.trades[0].fee).toBe(0.99)
+    })
+
+    it('accumulates trades from multiple windows', async () => {
+      mockFapiGetUserTrades.mockResolvedValueOnce([sampleRawFapiTrade])
+      mockFapiGetUserTrades.mockResolvedValueOnce([sampleRawFapiTrade])
+
+      const { BinanceAdapter } = await import('../binance')
+      const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
+      const result = await adapter.getFullTrades('BTCUSDT', [0, 5])
+
+      expect(result.trades).toHaveLength(2)
       expect(result.failedSymbols).toHaveLength(0)
-    }, 10_000)
+    })
 
-    it('continues loop when one symbol fails — does not stop', async () => {
-      mockFetchTrades.mockImplementation((symbol: string) => {
-        if (symbol === 'ETH/USDT') return Promise.reject(new Error('symbol error'))
-        return Promise.resolve([{ ...sampleCcxtTrade, symbol }])
-      })
-
+    it('returns empty when weekIndices is empty', async () => {
       const { BinanceAdapter } = await import('../binance')
       const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
-      const result = await adapter.getFullTrades(['BTC/USDT', 'ETH/USDT', 'SOL/USDT'])
-
-      expect(result.trades).toHaveLength(2) // BTC + SOL
-      expect(result.failedSymbols).toHaveLength(1)
-      expect(result.failedSymbols[0].symbol).toBe('ETH/USDT')
-    }, 10_000)
-
-    it('returns empty result for empty symbol list without calling fetchMyTrades', async () => {
-      const { BinanceAdapter } = await import('../binance')
-      const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
-      const result = await adapter.getFullTrades([])
+      const result = await adapter.getFullTrades('BTCUSDT', [])
 
       expect(result.trades).toEqual([])
       expect(result.failedSymbols).toEqual([])
-      expect(mockFetchTrades).not.toHaveBeenCalled()
+      expect(mockFapiGetUserTrades).not.toHaveBeenCalled()
     })
   })
 })

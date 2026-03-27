@@ -2,12 +2,10 @@ import 'server-only'
 import * as ccxt from 'ccxt'
 import type { ExchangeAdapter, BalanceResult, RawPosition } from './types'
 import type { DailyPnLEntry, Trade, DateRange } from '../types'
-import { mapCcxtTrade } from './ccxt-utils'
 
 interface BinanceCredentials {
   apiKey: string
   apiSecret: string
-  type?: 'spot' | 'future'
   portfolioMargin?: boolean
 }
 
@@ -16,50 +14,40 @@ export interface FullTradesResult {
   failedSymbols: { symbol: string; error: string }[]
 }
 
-// Top-50 most-traded USDT pairs — always included in quick sync
-const TOP_50_SYMBOLS = [
-  'BTC/USDT',   'ETH/USDT',   'BNB/USDT',   'SOL/USDT',   'XRP/USDT',
-  'DOGE/USDT',  'ADA/USDT',   'AVAX/USDT',  'SHIB/USDT',  'TRX/USDT',
-  'TON/USDT',   'LINK/USDT',  'DOT/USDT',   'MATIC/USDT', 'DAI/USDT',
-  'LTC/USDT',   'BCH/USDT',   'UNI/USDT',   'ATOM/USDT',  'XLM/USDT',
-  'FIL/USDT',   'NEAR/USDT',  'APT/USDT',   'ARB/USDT',   'OP/USDT',
-  'ALGO/USDT',  'HBAR/USDT',  'CRO/USDT',   'QNT/USDT',   'EGLD/USDT',
-  'FLOW/USDT',  'SAND/USDT',  'MANA/USDT',  'AXS/USDT',   'THETA/USDT',
-  'XTZ/USDT',   'EOS/USDT',   'FTM/USDT',   'GALA/USDT',  'ENJ/USDT',
-  'CHZ/USDT',   'BAT/USDT',   'ZIL/USDT',   'CRV/USDT',   'AAVE/USDT',
-  'SUSHI/USDT', 'COMP/USDT',  'MKR/USDT',   'SNX/USDT',   'YFI/USDT',
-]
+type RawFapiTrade = {
+  symbol: string; side: string; price: string; qty: string
+  realizedPnl: string; commission: string; commissionAsset: string
+  time: number; positionSide: string; orderId: number; id: number
+}
+
+type FapiEx = {
+  fapiPrivateGetIncome:     (p: Record<string, unknown>) => Promise<Array<{ symbol: string; time: number }>>
+  fapiPrivateGetUserTrades: (p: Record<string, unknown>) => Promise<RawFapiTrade[]>
+}
+
+export interface DiscoveredSymbol {
+  rawSymbol: string
+  weekIndices: number[]  // which of the 26 7-day windows had income events for this symbol
+}
 
 export class BinanceAdapter implements ExchangeAdapter {
   private exchange: ccxt.binance
-  private credentials: BinanceCredentials
 
   constructor(credentials: BinanceCredentials) {
-    this.credentials = credentials
-    const opts: Record<string, unknown> = {}
-    if (credentials.portfolioMargin) {
-      opts['options'] = { defaultType: 'future', portfolioMargin: true }
-    } else if (credentials.type === 'future') {
-      opts['options'] = { defaultType: 'future' }
-    }
     this.exchange = new ccxt.binance({
       apiKey: credentials.apiKey,
       secret: credentials.apiSecret,
-      ...opts,
+      enableRateLimit: true,
+      options: {
+        defaultType: 'future',
+        ...(credentials.portfolioMargin ? { portfolioMargin: true } : {}),
+      },
     })
   }
 
   async fetchPositions(): Promise<RawPosition[]> {
     try {
-      const futuresExchange = new ccxt.binance({
-        apiKey: this.credentials.apiKey,
-        secret: this.credentials.apiSecret,
-        options: {
-          defaultType: 'future',
-          ...(this.credentials.portfolioMargin ? { portfolioMargin: true } : {}),
-        },
-      })
-      const raw = await futuresExchange.fetchPositions()
+      const raw = await this.exchange.fetchPositions()
       return raw
         .filter((p) => p.contracts && Math.abs(Number(p.contracts)) > 0)
         .map((p) => {
@@ -134,66 +122,155 @@ export class BinanceAdapter implements ExchangeAdapter {
     return []
   }
 
+  // Quick Sync (48h) — income discovery + userTrades with proper endTime
   async getTrades(
     _subAccountId: string,
     _dateRange: DateRange,
     since?: number,
     _limit?: number,
+    _until?: number,
   ): Promise<Trade[]> {
-    // Fetch spot balance to derive token-based symbol list
-    let balanceTokens: string[] = []
+    const effectiveSince = since ?? (Date.now() - 48 * 60 * 60 * 1000)
+    const effectiveEnd   = Date.now()
+    const trades: Trade[] = []
+    const fapi = this.exchange as unknown as FapiEx
+
+    // Discover symbols traded in this window
+    let activeRawSymbols: string[] = []
     try {
-      const bal = await this.exchange.fetchBalance({ type: 'spot' })
-      const total = (bal.total ?? {}) as unknown as Record<string, number>
-      balanceTokens = Object.entries(total)
-        .filter(([sym, amt]) => sym !== 'USDT' && typeof amt === 'number' && amt > 0)
-        .map(([sym]) => `${sym}/USDT`)
+      const income = await fapi.fapiPrivateGetIncome({
+        incomeType: 'REALIZED_PNL',
+        startTime:  effectiveSince,
+        endTime:    effectiveEnd,
+        limit:      1000,
+      })
+      activeRawSymbols = [...new Set(income.map((i) => i.symbol))]
     } catch {
-      // If balance fetch fails, proceed with top-50 only
+      return trades
     }
 
-    const symbolSet = new Set([...TOP_50_SYMBOLS, ...balanceTokens])
-    const symbols = Array.from(symbolSet)
-
-    const trades: Trade[] = []
-    for (const symbol of symbols) {
+    // Fetch fills per discovered symbol
+    for (const rawSymbol of activeRawSymbols) {
       try {
-        const raw = await this.exchange.fetchMyTrades(symbol, since, 1000)
-        for (const t of raw) trades.push(mapCcxtTrade(t, 'binance'))
+        const rows = await fapi.fapiPrivateGetUserTrades({
+          symbol:    rawSymbol,
+          startTime: effectiveSince,
+          endTime:   effectiveEnd,
+          limit:     1000,
+        })
+        for (const r of rows) trades.push(this.mapRawFapiTrade(r, rawSymbol))
       } catch {
-        // Skip symbol on error — not fatal for quick sync
+        // Skip symbol — not fatal
       }
     }
     return trades
   }
 
-  // Full 180-day scan — called by /api/sync/binance/full only (not on ExchangeAdapter interface).
-  // Note: accountId is intentionally NOT a parameter — the route owns account identity;
-  // this method only receives the symbol slice for the current chunk.
-  async getFullTrades(symbols: string[]): Promise<FullTradesResult> {
-    const since = Date.now() - 180 * 24 * 60 * 60 * 1000
+  // Full History — discover all traded symbols for the full 180-day scan window.
+  // Returns each symbol with the specific week indices (0–25) where it had income events.
+  // The caller uses weekIndices to only query those 7-day windows, skipping empty ones.
+  // Example: BTCUSDT traded in weeks 0,3,15 → 3 userTrades calls instead of 26.
+  async discoverTradedSymbols(): Promise<DiscoveredSymbol[]> {
+    const DAY    = 24 * 60 * 60 * 1000
+    const WINDOW = 7 * DAY
+    const scanStart = Date.now() - 180 * DAY
+    const fapi = this.exchange as unknown as FapiEx
+    try {
+      const rows = await fapi.fapiPrivateGetIncome({
+        incomeType: 'REALIZED_PNL',
+        startTime:  scanStart,
+        endTime:    Date.now(),
+        limit:      1000,
+      })
+
+      // Group income events by symbol, compute which week indices each symbol is active in
+      const symbolWeeks = new Map<string, Set<number>>()
+      for (const row of rows) {
+        const t = Number(row.time)
+        const weekIndex = Number.isFinite(t) ? Math.floor((t - scanStart) / WINDOW) : 0
+        const clamped   = Math.min(Math.max(weekIndex, 0), 25)
+        if (!symbolWeeks.has(row.symbol)) symbolWeeks.set(row.symbol, new Set())
+        symbolWeeks.get(row.symbol)!.add(clamped)
+      }
+
+      return Array.from(symbolWeeks.entries()).map(([rawSymbol, weeks]) => ({
+        rawSymbol,
+        weekIndices: Array.from(weeks).sort((a, b) => a - b),
+      }))
+    } catch {
+      return []
+    }
+  }
+
+  // Full History — ONE raw symbol, querying only the week indices where income events exist.
+  // weekIndices comes from discoverTradedSymbols() — typically 1–10 weeks per symbol,
+  // not always 26. This makes the per-symbol call much faster for infrequently-traded pairs.
+  async getFullTrades(rawSymbol: string, weekIndices: number[]): Promise<FullTradesResult> {
+    const DAY    = 24 * 60 * 60 * 1000
+    const WINDOW = 7 * DAY
+    const scanStart = Date.now() - 180 * DAY
+    const fapi = this.exchange as unknown as FapiEx
     const trades: Trade[] = []
     const failedSymbols: { symbol: string; error: string }[] = []
 
-    for (const symbol of symbols) {
-      let succeeded = false
-      let lastError = ''
-
-      for (let attempt = 0; attempt < 2; attempt++) {
-        try {
-          const raw = await this.exchange.fetchMyTrades(symbol, since, 1000)
-          for (const t of raw) trades.push(mapCcxtTrade(t, 'binance'))
-          succeeded = true
-          break
-        } catch (err) {
-          lastError = err instanceof Error ? err.message : String(err)
-          if (attempt === 0) await new Promise((r) => setTimeout(r, 500))
-        }
+    for (const weekIndex of weekIndices) {
+      const windowStart = scanStart + weekIndex * WINDOW
+      const windowEnd   = Math.min(windowStart + WINDOW, Date.now())
+      try {
+        const rows = await fapi.fapiPrivateGetUserTrades({
+          symbol:    rawSymbol,
+          startTime: windowStart,
+          endTime:   windowEnd,
+          limit:     1000,
+        })
+        for (const r of rows) trades.push(this.mapRawFapiTrade(r, rawSymbol))
+      } catch (err) {
+        const base = rawSymbol.endsWith('USDT') ? rawSymbol.slice(0, -4) : rawSymbol
+        const errMsg = err instanceof Error ? err.message : String(err)
+failedSymbols.push({
+          symbol: `${base}/USDT:USDT`,
+          error:  errMsg,
+        })
+        break  // symbol is invalid — skip remaining windows
       }
-
-      if (!succeeded) failedSymbols.push({ symbol, error: lastError })
     }
 
     return { trades, failedSymbols }
+  }
+
+  private mapRawFapiTrade(r: RawFapiTrade, rawSymbol: string): Trade {
+    const base     = rawSymbol.endsWith('USDT') ? rawSymbol.slice(0, -4) : rawSymbol
+    const qty      = Number(r.qty)
+    const pnl      = Number(r.realizedPnl)
+    const exitPrice  = Number(r.price)
+    // Hedge mode:   positionSide = 'LONG' | 'SHORT'
+    // One-way mode: positionSide = 'BOTH' — BUY closes short, SELL closes long
+    const isShort = r.positionSide === 'SHORT' ||
+      (r.positionSide === 'BOTH' && r.side === 'BUY' && pnl !== 0)
+    // entryPrice derivation: Binance calculates realizedPnl from the position's
+    // average entry price, so inverting gives the mathematically exact entryPrice.
+    const derived    = qty > 0 ? (isShort ? exitPrice + pnl / qty : exitPrice - pnl / qty) : exitPrice
+    const entryPrice = Number.isFinite(derived) && derived > 0 ? derived : exitPrice
+    const ts = new Date(Number(r.time)).toISOString()
+    return {
+      id:           String(r.id),
+      symbol:       `${base}/USDT:USDT`,
+      side:         isShort ? 'short' : 'long',
+      entryPrice,
+      exitPrice,
+      quantity:     qty,
+      pnl,
+      fee:          Number(r.commission),
+      openedAt:     ts,
+      closedAt:     ts,
+      tradeType:    'futures',
+      pnlPercent:   0,
+      durationMin:  0,
+      leverage:     1,
+      fundingCost:  0,
+      isOvernight:  false,
+      exchangeId:   'binance' as const,
+      subAccountId: '',
+    }
   }
 }

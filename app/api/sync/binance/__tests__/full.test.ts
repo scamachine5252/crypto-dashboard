@@ -2,6 +2,7 @@
 // Mocks
 // ---------------------------------------------------------------------------
 const mockGetFullTrades = jest.fn()
+const mockDiscoverTradedSymbols = jest.fn()
 
 // Mock supabase
 const mockSelectEqSingle = jest.fn()
@@ -29,7 +30,8 @@ jest.mock('@/lib/crypto/decrypt', () => ({
 
 jest.mock('@/lib/adapters/binance', () => ({
   BinanceAdapter: jest.fn().mockImplementation(() => ({
-    getFullTrades: mockGetFullTrades,
+    getFullTrades:          mockGetFullTrades,
+    discoverTradedSymbols:  mockDiscoverTradedSymbols,
   })),
 }))
 
@@ -62,28 +64,43 @@ describe('POST /api/sync/binance/full', () => {
 
   it('returns 400 if account_id is missing', async () => {
     const { POST } = await import('../full/route')
-    const res = await POST(makePost({ symbols: ['BTC/USDT'] }))
+    const res = await POST(makePost({ symbol: 'BTCUSDT' }))
     expect(res.status).toBe(400)
   })
 
-  it('returns synced=0 if symbols array is empty', async () => {
+  it('returns 400 if symbol is missing', async () => {
     const { POST } = await import('../full/route')
-    const res = await POST(makePost({ account_id: 'uuid-1', symbols: [] }))
-    expect(res.status).toBe(200)
-    const json = await res.json()
-    expect(json.synced).toBe(0)
+    const res = await POST(makePost({ account_id: 'uuid-1' }))
+    expect(res.status).toBe(400)
+  })
+
+  it('returns 400 if symbol is empty string', async () => {
+    const { POST } = await import('../full/route')
+    const res = await POST(makePost({ account_id: 'uuid-1', symbol: '', weeks: [0] }))
+    expect(res.status).toBe(400)
+  })
+
+  it('returns 400 if weeks is missing', async () => {
+    const { POST } = await import('../full/route')
+    const res = await POST(makePost({ account_id: 'uuid-1', symbol: 'BTCUSDT' }))
+    expect(res.status).toBe(400)
+  })
+
+  it('returns 400 if weeks is empty array', async () => {
+    const { POST } = await import('../full/route')
+    const res = await POST(makePost({ account_id: 'uuid-1', symbol: 'BTCUSDT', weeks: [] }))
+    expect(res.status).toBe(400)
   })
 
   it('returns 404 if account not found in Supabase', async () => {
     mockSelectEqSingle.mockResolvedValue({ data: null, error: null })
 
     const { POST } = await import('../full/route')
-    const res = await POST(makePost({ account_id: 'not-found', symbols: ['BTC/USDT'] }))
+    const res = await POST(makePost({ account_id: 'not-found', symbol: 'BTCUSDT', weeks: [0] }))
     expect(res.status).toBe(404)
   })
 
-  it('calls getFullTrades with the exact symbols array passed by the caller', async () => {
-    const symbols = ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT']
+  it('calls getFullTrades with the symbol and weeks passed by the caller', async () => {
     mockSelectEqSingle.mockResolvedValue({
       data: { id: 'uuid-1', api_key: 'enc-key', api_secret: 'enc-sec', instrument: 'unified' },
       error: null,
@@ -92,10 +109,9 @@ describe('POST /api/sync/binance/full', () => {
     mockUpsert.mockResolvedValue({ error: null })
 
     const { POST } = await import('../full/route')
-    await POST(makePost({ account_id: 'uuid-1', symbols }))
+    await POST(makePost({ account_id: 'uuid-1', symbol: 'BTCUSDT', weeks: [0, 3, 15] }))
 
-    const calledSymbols = mockGetFullTrades.mock.calls[0][0] as string[]
-    expect(calledSymbols).toEqual(symbols)
+    expect(mockGetFullTrades).toHaveBeenCalledWith('BTCUSDT', [0, 3, 15])
   })
 
   it('upserts fetched trades and returns synced count', async () => {
@@ -105,20 +121,20 @@ describe('POST /api/sync/binance/full', () => {
     })
     mockGetFullTrades.mockResolvedValue({
       trades: [{
-        id: 't1', symbol: 'BTC/USDT', side: 'long', tradeType: 'spot',
-        entryPrice: 50000, exitPrice: 50000, quantity: 0.1, pnl: 10,
-        pnlPercent: 0.2, fee: 5, durationMin: 0, leverage: 1,
+        id: 't1', symbol: 'BTC/USDT:USDT', side: 'long', tradeType: 'futures',
+        entryPrice: 50000, exitPrice: 51000, quantity: 0.1, pnl: 100,
+        pnlPercent: 0, fee: 5, durationMin: 0, leverage: 1,
         fundingCost: 0, isOvernight: false,
         openedAt: '2025-01-01T00:00:00.000Z',
         closedAt: '2025-01-01T00:00:00.000Z',
-        subAccountId: 'binance', exchangeId: 'binance',
+        subAccountId: '', exchangeId: 'binance',
       }],
       failedSymbols: [],
     })
     mockUpsert.mockResolvedValue({ error: null })
 
     const { POST } = await import('../full/route')
-    const res = await POST(makePost({ account_id: 'uuid-1', symbols: ['BTC/USDT'] }))
+    const res = await POST(makePost({ account_id: 'uuid-1', symbol: 'BTCUSDT', weeks: [0] }))
 
     expect(res.status).toBe(200)
     expect(mockUpsert).toHaveBeenCalled()
@@ -134,20 +150,20 @@ describe('POST /api/sync/binance/full', () => {
     })
     mockGetFullTrades.mockResolvedValue({
       trades: [{
-        id: 't1', symbol: 'BTC/USDT', side: 'long', tradeType: 'spot',
-        entryPrice: 50000, exitPrice: 50000, quantity: 0.1, pnl: 10,
-        pnlPercent: 0.2, fee: 5, durationMin: 0, leverage: 1,
+        id: 't1', symbol: 'BTC/USDT:USDT', side: 'long', tradeType: 'futures',
+        entryPrice: 50000, exitPrice: 51000, quantity: 0.1, pnl: 100,
+        pnlPercent: 0, fee: 5, durationMin: 0, leverage: 1,
         fundingCost: 0, isOvernight: false,
         openedAt: '2025-01-01T00:00:00.000Z',
         closedAt: '2025-01-01T00:00:00.000Z',
-        subAccountId: 'binance', exchangeId: 'binance',
+        subAccountId: '', exchangeId: 'binance',
       }],
       failedSymbols: [],
     })
     mockUpsert.mockResolvedValue({ error: { message: 'db write failed' } })
 
     const { POST } = await import('../full/route')
-    const res = await POST(makePost({ account_id: 'uuid-1', symbols: ['BTC/USDT'] }))
+    const res = await POST(makePost({ account_id: 'uuid-1', symbol: 'BTCUSDT', weeks: [0] }))
 
     expect(res.status).toBe(500)
   })
@@ -159,16 +175,16 @@ describe('POST /api/sync/binance/full', () => {
     })
     mockGetFullTrades.mockResolvedValue({
       trades: [],
-      failedSymbols: [{ symbol: 'BAD/USDT', error: 'invalid symbol' }],
+      failedSymbols: [{ symbol: 'BAD/USDT:USDT', error: 'invalid symbol' }],
     })
     mockUpsert.mockResolvedValue({ error: null })
 
     const { POST } = await import('../full/route')
-    const res = await POST(makePost({ account_id: 'uuid-1', symbols: ['BAD/USDT'] }))
+    const res = await POST(makePost({ account_id: 'uuid-1', symbol: 'BADUSDT', weeks: [0] }))
     const json = await res.json()
 
     expect(json.failedSymbols).toHaveLength(1)
-    expect(json.failedSymbols[0].symbol).toBe('BAD/USDT')
+    expect(json.failedSymbols[0].symbol).toBe('BAD/USDT:USDT')
   })
 })
 
@@ -200,7 +216,6 @@ describe('PATCH /api/sync/binance/full', () => {
   })
 
   it('writes last_full_sync_at even when previous chunks had failedSymbols', async () => {
-    // Timestamp is written regardless of symbol-level failures (per spec)
     mockUpdateEq.mockResolvedValue({ error: null })
 
     const { PATCH } = await import('../full/route')
