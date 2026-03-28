@@ -104,7 +104,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const closedCount = wins.length + losses.length
   const totalPnl  = tradeRows.reduce((s, t) => s + Number(t.pnl ?? 0), 0)
   const totalFees = tradeRows.reduce((s, t) => s + Number(t.fee ?? 0), 0)
-  const winRate = closedCount > 0 ? wins.length / closedCount : 0
+  const winRate = closedCount > 0 ? (wins.length / closedCount) * 100 : 0
   const avgWin = wins.length > 0 ? wins.reduce((s, t) => s + Number(t.pnl), 0) / wins.length : 0
   const avgLoss = losses.length > 0 ? Math.abs(losses.reduce((s, t) => s + Number(t.pnl), 0) / losses.length) : 0
   const grossProfit = wins.reduce((s, t) => s + Number(t.pnl), 0)
@@ -138,8 +138,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const totalCurrentBalance = Object.values(latestBalance).reduce((s, v) => s + v, 0)
   const initialCapital = Math.max(totalCurrentBalance - totalPnl, 1)
   const years = N / 252
-  const cagr = years > 0 ? Math.pow(Math.max((initialCapital + totalPnl) / initialCapital, 0.0001), 1 / years) - 1 : 0
-  const annualYield = years > 0 ? (totalPnl / initialCapital) / years : 0
+  const cagr = years > 0 ? (Math.pow(Math.max((initialCapital + totalPnl) / initialCapital, 0.0001), 1 / years) - 1) * 100 : 0
+  const annualYield = years > 0 ? ((totalPnl / initialCapital) / years) * 100 : 0
 
   const totalVolume = tradeRows.reduce((s, t) => s + Number(t.quantity ?? 0) * Number(t.entry_price ?? 0), 0)
 

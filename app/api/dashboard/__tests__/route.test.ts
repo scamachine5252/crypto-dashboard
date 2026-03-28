@@ -47,7 +47,7 @@ describe('GET /api/dashboard', () => {
     expect(body.metrics.totalPnl).toBe(300)
     expect(body.metrics.totalFees).toBe(15)
     expect(body.metrics.totalTrades).toBe(2)
-    expect(body.metrics.winRate).toBe(0.5)
+    expect(body.metrics.winRate).toBe(50)
     expect(body.metrics.avgWin).toBe(500)
     expect(body.metrics.avgLoss).toBe(200)
   })
