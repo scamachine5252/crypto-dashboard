@@ -2,7 +2,6 @@ import type { DailyPnLEntry, Metrics, Trade, ChartDataPoint, Timeframe, Period, 
 import { EXCHANGES, INITIAL_USDT_BALANCE, INITIAL_TOKEN_BALANCE, ACCOUNT_PRIMARY_TOKEN, getAllDailyPnL, getAllTrades, getAllTransactions } from './mock-data'
 
 const INITIAL_CAPITAL = 6_800_000
-const RISK_FREE_DAILY = 0.05 / 252
 
 // ---------------------------------------------------------------------------
 // Metrics
@@ -32,17 +31,17 @@ export function calculateMetrics(daily: DailyPnLEntry[], trades: Trade[]): Metri
   const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / n
   const std = Math.sqrt(variance)
 
-  // Sharpe
-  const sharpeRatio = std > 0 ? ((mean - RISK_FREE_DAILY) / std) * Math.sqrt(252) : 0
+  // Sharpe (no risk-free rate — irrelevant for crypto futures)
+  const sharpeRatio = std > 0 ? (mean / std) * Math.sqrt(252) : 0
 
   // Sortino
-  const downReturns = returns.filter((r) => r < RISK_FREE_DAILY)
+  const downReturns = returns.filter((r) => r < 0)
   const downsideVar =
     downReturns.length > 0
-      ? downReturns.reduce((s, r) => s + (r - RISK_FREE_DAILY) ** 2, 0) / n
+      ? downReturns.reduce((s, r) => s + r ** 2, 0) / n
       : 0
   const downsideStd = Math.sqrt(downsideVar)
-  const sortinoRatio = downsideStd > 0 ? ((mean - RISK_FREE_DAILY) / downsideStd) * Math.sqrt(252) : 0
+  const sortinoRatio = downsideStd > 0 ? (mean / downsideStd) * Math.sqrt(252) : 0
 
   // Max drawdown
   let peak = INITIAL_CAPITAL
