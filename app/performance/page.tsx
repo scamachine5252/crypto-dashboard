@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
-import type { Period, DateRange, AccountMetricsRow, DailyPnLEntry, ExtendedMetrics, ExchangeId, Trade } from '@/lib/types'
+import type { Period, DateRange, AccountMetricsRow, DailyPnLEntry, ExtendedMetrics, ExchangeId, Trade, Position } from '@/lib/types'
 import {
   resolveDateRange,
   buildOverlayData,
@@ -17,7 +17,7 @@ import { formatMoney } from '@/lib/utils'
 import Header from '@/components/layout/Header'
 import PeriodSelector from '@/components/ui/PeriodSelector'
 import OverlayLineChart from '@/components/charts/OverlayLineChart'
-import { ChevronDown, Check } from 'lucide-react'
+import { ChevronDown, Check, RefreshCw } from 'lucide-react'
 
 const EXCHANGE_COLORS: Record<string, string> = {
   binance: '#F0B90B',
@@ -157,6 +157,15 @@ function extremes(rows: AccountMetricsRow[], key: string, l1: L1Tab, lowerBetter
     : { best: Math.max(...vals), worst: Math.min(...vals) }
 }
 
+function formatHoldingTime(openTimestamp: number): string {
+  if (!openTimestamp) return '—'
+  const diffMs = Date.now() - openTimestamp
+  const diffH  = Math.floor(diffMs / 3_600_000)
+  const diffD  = Math.floor(diffH / 24)
+  if (diffD > 0) return `${diffD}d ${diffH % 24}h`
+  return `${diffH}h`
+}
+
 function buildDailyPnlEntries(
   accounts: AccountInfo[],
   trades: Trade[],
@@ -190,7 +199,7 @@ function buildDailyPnlEntries(
 export default function PerformancePage() {
   const [period, setPeriod]           = useState<Period>('1M')
   const [customRange, setCustomRange] = useState<DateRange | undefined>()
-  const [l1, setL1]                   = useState<L1Tab>('spot')
+  const [l1, setL1]                   = useState<L1Tab>('futures')
   const [spotL2, setSpotL2]           = useState<SpotL2>('overview')
   const [futuresL2, setFuturesL2]     = useState<FuturesL2>('overview')
   const [acctOpen, setAcctOpen]       = useState(false)
@@ -200,6 +209,15 @@ export default function PerformancePage() {
   const [trades, setTrades]         = useState<Trade[]>([])
   const [activeIds, setActiveIds]   = useState<Set<string>>(new Set())
   const [loading, setLoading]       = useState(true)
+
+  // Open positions state
+  const [positions, setPositions]           = useState<Position[]>([])
+  const [posAccounts, setPosAccounts]       = useState<AccountInfo[]>([])
+  const [posLoading, setPosLoading]         = useState(true)
+  const [posRefreshing, setPosRefreshing]   = useState(false)
+  const [posActiveIds, setPosActiveIds]     = useState<Set<string>>(new Set())
+  const [posDropOpen, setPosDropOpen]       = useState(false)
+  const posDropRef                          = useRef<HTMLDivElement>(null)
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -240,6 +258,33 @@ export default function PerformancePage() {
       .catch(() => { /* keep previous */ })
       .finally(() => setLoading(false))
   }, [dateRange.start, dateRange.end])
+
+  const fetchPositions = useCallback((isRefresh = false) => {
+    if (isRefresh) setPosRefreshing(true)
+    else setPosLoading(true)
+    fetch('/api/positions')
+      .then((r) => r.json())
+      .then((data: { positions?: Position[]; accounts?: { id: string; account_name: string; exchange: string; fund: string }[] }) => {
+        setPositions(data.positions ?? [])
+        const accs: AccountInfo[] = (data.accounts ?? []).map((a) => ({
+          id: a.id, accountName: a.account_name, exchange: a.exchange, fund: a.fund,
+        }))
+        setPosAccounts(accs)
+        setPosActiveIds(new Set(accs.map((a) => a.id)))
+      })
+      .catch(() => {})
+      .finally(() => { setPosLoading(false); setPosRefreshing(false) })
+  }, [])
+
+  useEffect(() => { fetchPositions() }, [fetchPositions])
+
+  useEffect(() => {
+    function handler(e: MouseEvent) {
+      if (posDropRef.current && !posDropRef.current.contains(e.target as Node)) setPosDropOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
 
   const handlePeriodChange = useCallback((p: Period, range?: DateRange) => {
     setPeriod(p)
@@ -397,6 +442,30 @@ export default function PerformancePage() {
     () => rows.filter((r) => r.metrics.totalTrades > 0).length,
     [rows],
   )
+
+  // Positions derived values
+  const filteredPositions = useMemo(
+    () => positions.filter((p) => posActiveIds.has(p.accountId)),
+    [positions, posActiveIds],
+  )
+  const posUnrealizedPnl   = filteredPositions.reduce((s, p) => s + p.unrealizedPnl, 0)
+  const posNotional        = filteredPositions.reduce((s, p) => s + p.notional, 0)
+  const posMargin          = filteredPositions.reduce((s, p) => s + p.margin, 0)
+  const posAvgLeverage     = posNotional > 0
+    ? filteredPositions.reduce((s, p) => s + p.notional * p.leverage, 0) / posNotional
+    : 0
+  const posExchangeGroups  = useMemo(() => {
+    const g: Record<string, AccountInfo[]> = {}
+    for (const a of posAccounts) { if (!g[a.exchange]) g[a.exchange] = []; g[a.exchange].push(a) }
+    return g
+  }, [posAccounts])
+  const togglePosAccount = (id: string) => {
+    setPosActiveIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) { if (next.size > 1) next.delete(id) } else next.add(id)
+      return next
+    })
+  }
 
   // Group accounts by exchange for dropdown
   const exchangeGroups = useMemo(() => {
@@ -679,6 +748,157 @@ export default function PerformancePage() {
             colorMap={colorMap}
             nameMap={nameMap}
           />
+        </div>
+
+        {/* ── Open Positions ── */}
+        <div className="mx-6 mt-6 mb-6">
+          {/* Header */}
+          <div
+            className="flex flex-wrap items-center justify-between gap-3 px-5 py-3"
+            style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}
+          >
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>
+                Open Positions
+              </p>
+              {!posLoading && (
+                <div className="flex items-center gap-4 mt-1">
+                  <span className="text-xs flex items-center gap-1.5">
+                    <span style={{ color: 'var(--text-muted)' }}>Unrealized PnL</span>
+                    <span className="font-mono font-semibold tabular-nums" style={{ color: posUnrealizedPnl >= 0 ? 'var(--accent-profit)' : 'var(--accent-loss)' }}>
+                      {posUnrealizedPnl >= 0 ? '+' : ''}{formatMoney(posUnrealizedPnl)}
+                    </span>
+                  </span>
+                  <span className="text-xs flex items-center gap-1.5">
+                    <span style={{ color: 'var(--text-muted)' }}>Notional</span>
+                    <span className="font-mono font-semibold tabular-nums" style={{ color: 'var(--text-primary)' }}>{formatMoney(posNotional)}</span>
+                  </span>
+                  <span className="text-xs flex items-center gap-1.5">
+                    <span style={{ color: 'var(--text-muted)' }}>Margin</span>
+                    <span className="font-mono font-semibold tabular-nums" style={{ color: 'var(--text-primary)' }}>{formatMoney(posMargin)}</span>
+                  </span>
+                  <span className="text-xs flex items-center gap-1.5">
+                    <span style={{ color: 'var(--text-muted)' }}>Avg Leverage</span>
+                    <span className="font-mono font-semibold tabular-nums" style={{ color: 'var(--text-primary)' }}>
+                      {posAvgLeverage > 0 ? `${posAvgLeverage.toFixed(1)}x` : '—'}
+                    </span>
+                  </span>
+                  <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                    {filteredPositions.length} position{filteredPositions.length !== 1 ? 's' : ''}
+                  </span>
+                </div>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              {posAccounts.length > 0 && (
+                <div className="relative" ref={posDropRef}>
+                  <button
+                    onClick={() => setPosDropOpen((v) => !v)}
+                    className="flex items-center gap-2 text-xs px-3 py-1.5"
+                    style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-medium)', color: 'var(--text-primary)', borderRadius: 2 }}
+                  >
+                    <span>Accounts</span>
+                    <span className="text-[10px] font-bold px-1.5 rounded" style={{ background: 'var(--accent-blue)', color: '#fff' }}>
+                      {posActiveIds.size}/{posAccounts.length}
+                    </span>
+                    <ChevronDown className="w-3 h-3" style={{ color: 'var(--text-muted)', transform: posDropOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+                  </button>
+                  {posDropOpen && (
+                    <div className="absolute top-full right-0 mt-1 z-50 py-1" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-medium)', minWidth: 200, borderRadius: 2, boxShadow: '0 8px 32px rgba(0,0,0,0.4)' }}>
+                      <div className="flex items-center gap-3 px-3 py-1.5" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                        <button onClick={() => setPosActiveIds(new Set(posAccounts.map((a) => a.id)))} className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--accent-blue)' }}>All</button>
+                        <button onClick={() => posAccounts.length > 0 && setPosActiveIds(new Set([posAccounts[0].id]))} className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>Reset</button>
+                      </div>
+                      {Object.entries(posExchangeGroups).map(([exchange, accs]) => (
+                        <div key={exchange}>
+                          <p className="px-3 py-1 text-[10px] font-bold uppercase tracking-widest" style={{ color: EXCHANGE_COLORS[exchange] ?? '#888' }}>{exchange}</p>
+                          {accs.map((acc) => {
+                            const on = posActiveIds.has(acc.id)
+                            return (
+                              <button key={acc.id} onClick={() => togglePosAccount(acc.id)} className="w-full flex items-center gap-2 px-4 py-1.5 text-xs text-left" style={{ color: on ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                                <span className="w-3 h-3 border flex items-center justify-center shrink-0" style={{ borderColor: on ? (EXCHANGE_COLORS[exchange] ?? '#888') : 'var(--border-medium)', background: on ? (EXCHANGE_COLORS[exchange] ?? '#888') : 'transparent', borderRadius: 2 }}>
+                                  {on && <Check className="w-2 h-2" style={{ color: '#000' }} />}
+                                </span>
+                                {acc.accountName}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              <button onClick={() => fetchPositions(true)} disabled={posRefreshing} className="flex items-center gap-1.5 text-xs px-3 py-1.5 disabled:opacity-50" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-medium)', color: 'var(--text-secondary)', borderRadius: 2 }}>
+                <RefreshCw className={`w-3 h-3 ${posRefreshing ? 'animate-spin' : ''}`} />
+                Refresh
+              </button>
+            </div>
+          </div>
+
+          {/* Table */}
+          {posLoading ? (
+            <div className="space-y-px" style={{ borderLeft: '1px solid var(--border-subtle)', borderRight: '1px solid var(--border-subtle)', borderBottom: '1px solid var(--border-subtle)' }}>
+              {[1, 2, 3].map((i) => <div key={i} className="h-11 animate-pulse" style={{ background: 'var(--bg-secondary)' }} />)}
+            </div>
+          ) : filteredPositions.length === 0 ? (
+            <div className="flex items-center justify-center py-10" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)', borderTop: 'none' }}>
+              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                {positions.length === 0 ? 'No open positions' : 'No positions for selected accounts'}
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)', borderTop: 'none' }}>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                    {['Symbol', 'Side', 'Size', 'Entry Price', 'Mark Price', 'Notional', 'Unrealized PnL', 'PnL %', 'Liq. Dist.', 'Holding', 'Leverage', 'Margin', 'Account'].map((h) => (
+                      <th key={h} className="px-4 py-2.5 text-left font-medium whitespace-nowrap" style={{ color: 'var(--text-muted)' }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredPositions.map((pos, i) => {
+                    const exColor  = EXCHANGE_COLORS[pos.exchange] ?? '#888'
+                    const pnlColor = pos.unrealizedPnl >= 0 ? 'var(--accent-profit)' : 'var(--accent-loss)'
+                    return (
+                      <tr key={`${pos.accountId}-${pos.symbol}-${i}`} style={{ borderBottom: '1px solid var(--border-subtle)' }}
+                        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-elevated)' }}
+                        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+                      >
+                        <td className="px-4 py-2.5 font-medium whitespace-nowrap" style={{ color: 'var(--text-primary)' }}>{pos.symbol}</td>
+                        <td className="px-4 py-2.5">
+                          <span className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider" style={{ background: pos.side === 'long' ? 'rgba(0,255,65,0.08)' : 'rgba(255,68,68,0.08)', color: pos.side === 'long' ? 'var(--accent-profit)' : 'var(--accent-loss)' }}>{pos.side}</span>
+                        </td>
+                        <td className="px-4 py-2.5 tabular-nums whitespace-nowrap" style={{ color: 'var(--text-secondary)' }}>{pos.size.toFixed(4)}</td>
+                        <td className="px-4 py-2.5 tabular-nums whitespace-nowrap font-mono" style={{ color: 'var(--text-secondary)' }}>{formatMoney(pos.entryPrice)}</td>
+                        <td className="px-4 py-2.5 tabular-nums whitespace-nowrap font-mono" style={{ color: 'var(--text-primary)' }}>{formatMoney(pos.markPrice)}</td>
+                        <td className="px-4 py-2.5 tabular-nums whitespace-nowrap font-mono" style={{ color: 'var(--text-secondary)' }}>{formatMoney(pos.notional)}</td>
+                        <td className="px-4 py-2.5 tabular-nums whitespace-nowrap font-semibold font-mono" style={{ color: pnlColor }}>{pos.unrealizedPnl >= 0 ? '+' : ''}{formatMoney(pos.unrealizedPnl)}</td>
+                        <td className="px-4 py-2.5 tabular-nums whitespace-nowrap font-mono" style={{ color: pnlColor }}>
+                          {pos.margin > 0 ? `${pos.unrealizedPnl >= 0 ? '+' : ''}${((pos.unrealizedPnl / pos.margin) * 100).toFixed(1)}%` : '—'}
+                        </td>
+                        <td className="px-4 py-2.5 tabular-nums whitespace-nowrap font-mono" style={{ color: 'var(--text-muted)' }}>
+                          {pos.liquidationPrice > 0 && pos.markPrice > 0 ? `${(Math.abs(pos.markPrice - pos.liquidationPrice) / pos.markPrice * 100).toFixed(1)}%` : '—'}
+                        </td>
+                        <td className="px-4 py-2.5 tabular-nums whitespace-nowrap" style={{ color: 'var(--text-muted)' }}>{formatHoldingTime(pos.openTimestamp)}</td>
+                        <td className="px-4 py-2.5 tabular-nums whitespace-nowrap" style={{ color: 'var(--text-secondary)' }}>{pos.leverage.toFixed(1)}x</td>
+                        <td className="px-4 py-2.5 tabular-nums whitespace-nowrap font-mono" style={{ color: 'var(--text-secondary)' }}>{formatMoney(pos.margin)}</td>
+                        <td className="px-4 py-2.5 whitespace-nowrap">
+                          <span className="flex items-center gap-1.5">
+                            <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: exColor }} />
+                            <span className="capitalize font-medium" style={{ color: exColor }}>{pos.exchange}</span>
+                            <span style={{ color: 'var(--border-medium)' }}>/</span>
+                            <span style={{ color: 'var(--text-secondary)' }}>{pos.accountName}</span>
+                          </span>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </main>
     </div>
