@@ -4,7 +4,7 @@ import { supabaseAdmin } from '@/lib/supabase/server'
 import type { FundSummary, DashboardMetrics, ChartDataPoint } from '@/lib/types'
 
 function emptyMetrics(): DashboardMetrics {
-  return { totalPnl: 0, totalFees: 0, totalTrades: 0, winRate: 0, profitFactor: 0, avgWin: 0, avgLoss: 0, sharpeRatio: 0, sortinoRatio: 0, maxDrawdown: 0, cagr: 0, annualYield: 0, riskRewardRatio: 0, totalVolume: 0 }
+  return { totalPnl: 0, totalFees: 0, totalTrades: 0, winRate: 0, profitFactor: 0, avgWin: 0, avgLoss: 0, sharpeRatio: 0, sortinoRatio: 0, maxDrawdown: 0, maxDrawdownPct: 0, cagr: 0, annualYield: 0, riskRewardRatio: 0, totalVolume: 0 }
 }
 
 function formatDay(dateStr: string): string {
@@ -127,12 +127,15 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     : 0
   const sortinoRatio = downsideDev > 0 ? (meanD / downsideDev) * Math.sqrt(252) : 0
 
-  let peak = 0, cum = 0, maxDrawdown = 0
+  let peak = 0, cum = 0, maxDrawdown = 0, maxDrawdownPct = 0
   for (const v of dailyValues) {
     cum += v
     if (cum > peak) peak = cum
     const dd = peak - cum
-    if (dd > maxDrawdown) maxDrawdown = dd
+    if (dd > maxDrawdown) {
+      maxDrawdown = dd
+      maxDrawdownPct = peak > 0 ? (dd / peak) * 100 : 0
+    }
   }
 
   const totalCurrentBalance = Object.values(latestBalance).reduce((s, v) => s + v, 0)
@@ -145,7 +148,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const metrics: DashboardMetrics = {
     totalPnl, totalFees, totalTrades: closedCount, winRate, profitFactor, avgWin, avgLoss,
-    sharpeRatio, sortinoRatio, maxDrawdown, cagr, annualYield,
+    sharpeRatio, sortinoRatio, maxDrawdown, maxDrawdownPct, cagr, annualYield,
     riskRewardRatio: avgLoss > 0 ? avgWin / avgLoss : 0,
     totalVolume,
   }

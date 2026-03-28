@@ -115,7 +115,7 @@ export default function DashboardPage() {
     sharpeRatio:   realMetrics?.sharpeRatio   ?? 0,
     sortinoRatio:  realMetrics?.sortinoRatio  ?? 0,
     maxDrawdown:   realMetrics?.maxDrawdown   ?? 0,
-    maxDrawdownPct: 0,
+    maxDrawdownPct: realMetrics?.maxDrawdownPct ?? 0,
     winRate:       realMetrics?.winRate       ?? 0,
     profitFactor:  realMetrics?.profitFactor  ?? 0,
     cagr:          realMetrics?.cagr          ?? 0,

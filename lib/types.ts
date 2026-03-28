@@ -213,6 +213,7 @@ export interface DashboardMetrics {
   sharpeRatio: number
   sortinoRatio: number
   maxDrawdown: number
+  maxDrawdownPct: number
   cagr: number
   annualYield: number
   riskRewardRatio: number
