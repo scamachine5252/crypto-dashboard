@@ -55,11 +55,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     from += PAGE
   }
 
-  // Filter to closing fills only (pnl≠0) — opening fills (pnl=0) are stored for
-  // entryPrice reference but should not appear in the trade history view.
-  const closingRows = allRows.filter((t) => Number(t.pnl ?? 0) !== 0)
-
-  const trades: Trade[] = closingRows.map((t) => {
+  // Return all rows: opening fills (pnl=0) and closing fills (pnl≠0).
+  // Bybit position records (openedAt ≠ closedAt) are expanded to Open + Close rows in the UI.
+  const trades: Trade[] = allRows.map((t) => {
     const pnl       = Number(t.pnl ?? 0)
     const entryPrice = Number(t.entry_price ?? 0)
     const quantity   = Number(t.quantity ?? 0)

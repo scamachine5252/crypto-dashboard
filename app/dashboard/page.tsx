@@ -79,7 +79,37 @@ export default function DashboardPage() {
   useEffect(() => {
     fetch('/api/positions')
       .then((r) => r.json())
-      .then((data: { positions?: Position[] }) => setPositions(data.positions ?? []))
+      .then((data: { positions?: Position[] }) => {
+        const ps = data.positions ?? []
+        setPositions(ps)
+
+        // Lazy-load real open times for Binance positions
+        const binanceRefs = ps
+          .filter((p) => p.exchange === 'binance')
+          .map((p) => ({
+            accountId: p.accountId,
+            rawSymbol: p.symbol.replace('/', '').replace(':USDT', '').replace(':USDC', ''),
+            side: p.side,
+          }))
+        if (binanceRefs.length > 0) {
+          fetch('/api/positions/open-times', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ positions: binanceRefs }),
+          })
+            .then((r) => r.json())
+            .then((ot: { openTimes?: Record<string, number> }) => {
+              const times = ot.openTimes ?? {}
+              setPositions((prev) =>
+                prev.map((p) => {
+                  const key = `${p.accountId}:${p.symbol.replace('/', '').replace(':USDT', '').replace(':USDC', '')}`
+                  return times[key] ? { ...p, openTimestamp: times[key] } : p
+                }),
+              )
+            })
+            .catch(() => {})
+        }
+      })
       .catch(() => {})
       .finally(() => setPosLoading(false))
   }, [])

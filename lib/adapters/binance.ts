@@ -238,6 +238,59 @@ failedSymbols.push({
     return { trades, failedSymbols }
   }
 
+  // Open time reconstruction via trade history.
+  // Binance FAPI positionRisk only has updateTime (last modification), no openTime field.
+  // Algorithm: walk trades ASC, find LAST moment position transitioned from flat/opposite → current side.
+  // Handles both one-way mode (positionSide='BOTH') and hedge mode (positionSide='LONG'/'SHORT').
+  async findPositionOpenTimes(
+    symbols: Array<{ rawSymbol: string; side: 'long' | 'short' }>,
+  ): Promise<Record<string, number>> {
+    const fapi   = this.exchange as unknown as FapiEx
+    const result: Record<string, number> = {}
+
+    await Promise.allSettled(
+      symbols.map(async ({ rawSymbol, side }) => {
+        try {
+          const trades = await fapi.fapiPrivateGetUserTrades({ symbol: rawSymbol, limit: 1000 })
+          if (!trades || trades.length === 0) return
+
+          const sorted  = [...trades].sort((a, b) => a.time - b.time)
+          const isHedge = sorted.some((t) => t.positionSide === 'LONG' || t.positionSide === 'SHORT')
+          const relevantPSide = side === 'long' ? 'LONG' : 'SHORT'
+
+          let netQty   = 0
+          let openTime = sorted[0].time  // fallback: oldest trade in this 1000-trade window
+
+          for (const t of sorted) {
+            const prev = netQty
+            const qty  = Number(t.qty)
+
+            if (isHedge) {
+              if (t.positionSide !== relevantPSide) continue
+              const isOpening = (side === 'long' && t.side === 'BUY') || (side === 'short' && t.side === 'SELL')
+              netQty = isOpening ? netQty + qty : netQty - qty
+            } else {
+              netQty = t.side === 'BUY' ? netQty + qty : netQty - qty
+            }
+
+            // Detect transition from flat/opposite → current side
+            const wasNotOnSide = side === 'long' ? prev <= 0.0001 : prev >= -0.0001
+            const isNowOnSide  = side === 'long' ? netQty > 0.0001 : netQty < -0.0001
+            if (wasNotOnSide && isNowOnSide) {
+              openTime = t.time  // track LAST such moment = current position run start
+            }
+          }
+
+          result[rawSymbol] = openTime
+        } catch {
+          // Symbol not found or API error — omit from result, shows '—' in UI
+        }
+      }),
+    )
+
+    return result
+  }
+
   private mapRawFapiTrade(r: RawFapiTrade, rawSymbol: string): Trade {
     const base     = rawSymbol.endsWith('USDT') ? rawSymbol.slice(0, -4) : rawSymbol
     const qty      = Number(r.qty)

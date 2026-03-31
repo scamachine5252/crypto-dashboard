@@ -13,11 +13,11 @@ import {
   calculateAvgTradePnl,
   calculateFeeRatePct,
 } from '@/lib/calculations'
-import { formatMoney } from '@/lib/utils'
+import { formatMoney, formatPrice } from '@/lib/utils'
 import Header from '@/components/layout/Header'
 import PeriodSelector from '@/components/ui/PeriodSelector'
 import OverlayLineChart from '@/components/charts/OverlayLineChart'
-import { ChevronDown, Check, RefreshCw } from 'lucide-react'
+import { ChevronDown, ChevronUp, ChevronsUpDown, Check, RefreshCw } from 'lucide-react'
 
 const EXCHANGE_COLORS: Record<string, string> = {
   binance: '#F0B90B',
@@ -218,6 +218,7 @@ export default function PerformancePage() {
   const [posActiveIds, setPosActiveIds]     = useState<Set<string>>(new Set())
   const [posDropOpen, setPosDropOpen]       = useState(false)
   const posDropRef                          = useRef<HTMLDivElement>(null)
+  const [posSort, setPosSort]               = useState<{ col: string; dir: 'asc' | 'desc' } | null>(null)
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -264,13 +265,41 @@ export default function PerformancePage() {
     else setPosLoading(true)
     fetch('/api/positions')
       .then((r) => r.json())
-      .then((data: { positions?: Position[]; accounts?: { id: string; account_name: string; exchange: string; fund: string }[] }) => {
-        setPositions(data.positions ?? [])
+      .then((data: { positions?: Position[]; accounts?: { id: string; accountName: string; exchange: string; fund: string }[] }) => {
+        const ps = data.positions ?? []
+        setPositions(ps)
         const accs: AccountInfo[] = (data.accounts ?? []).map((a) => ({
-          id: a.id, accountName: a.account_name, exchange: a.exchange, fund: a.fund,
+          id: a.id, accountName: a.accountName, exchange: a.exchange, fund: a.fund,
         }))
         setPosAccounts(accs)
         setPosActiveIds(new Set(accs.map((a) => a.id)))
+
+        // Lazy-load real open times for Binance positions (Binance FAPI has no openTime field)
+        const binanceRefs = ps
+          .filter((p) => p.exchange === 'binance')
+          .map((p) => ({
+            accountId: p.accountId,
+            rawSymbol: p.symbol.replace('/', '').replace(':USDT', '').replace(':USDC', ''),
+            side: p.side,
+          }))
+        if (binanceRefs.length > 0) {
+          fetch('/api/positions/open-times', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ positions: binanceRefs }),
+          })
+            .then((r) => r.json())
+            .then((ot: { openTimes?: Record<string, number> }) => {
+              const times = ot.openTimes ?? {}
+              setPositions((prev) =>
+                prev.map((p) => {
+                  const key = `${p.accountId}:${p.symbol.replace('/', '').replace(':USDT', '').replace(':USDC', '')}`
+                  return times[key] ? { ...p, openTimestamp: times[key] } : p
+                }),
+              )
+            })
+            .catch(() => {})
+        }
       })
       .catch(() => {})
       .finally(() => { setPosLoading(false); setPosRefreshing(false) })
@@ -444,10 +473,40 @@ export default function PerformancePage() {
   )
 
   // Positions derived values
-  const filteredPositions = useMemo(
-    () => positions.filter((p) => posActiveIds.has(p.accountId)),
-    [positions, posActiveIds],
-  )
+  const filteredPositions = useMemo(() => {
+    const filtered = positions.filter((p) => posActiveIds.has(p.accountId))
+    if (!posSort) return filtered
+
+    const { col, dir } = posSort
+    const mult = dir === 'asc' ? 1 : -1
+
+    const getSortVal = (p: Position): number | string => {
+      switch (col) {
+        case 'Symbol':        return p.symbol
+        case 'Side':          return p.side
+        case 'Size':          return p.size
+        case 'Entry Price':   return p.entryPrice
+        case 'Mark Price':    return p.markPrice
+        case 'Notional':      return p.notional
+        case 'Unrealized PnL': return p.unrealizedPnl
+        case 'ROE %':         return p.margin > 0 ? p.unrealizedPnl / p.margin : 0
+        case 'Liq. Dist.':    return p.liquidationPrice > 0 && p.markPrice > 0
+          ? Math.abs(p.markPrice - p.liquidationPrice) / p.markPrice : Infinity
+        case 'Holding':       return p.openTimestamp > 0 ? Date.now() - p.openTimestamp : -1
+        case 'Leverage':      return p.leverage
+        case 'Margin':        return p.margin
+        case 'Account':       return p.accountName
+        default:              return 0
+      }
+    }
+
+    return [...filtered].sort((a, b) => {
+      const va = getSortVal(a)
+      const vb = getSortVal(b)
+      if (typeof va === 'string' && typeof vb === 'string') return mult * va.localeCompare(vb)
+      return mult * ((va as number) - (vb as number))
+    })
+  }, [positions, posActiveIds, posSort])
   const posUnrealizedPnl   = filteredPositions.reduce((s, p) => s + p.unrealizedPnl, 0)
   const posNotional        = filteredPositions.reduce((s, p) => s + p.notional, 0)
   const posMargin          = filteredPositions.reduce((s, p) => s + p.margin, 0)
@@ -852,9 +911,29 @@ export default function PerformancePage() {
               <table className="w-full text-xs">
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                    {['Symbol', 'Side', 'Size', 'Entry Price', 'Mark Price', 'Notional', 'Unrealized PnL', 'PnL %', 'Liq. Dist.', 'Holding', 'Leverage', 'Margin', 'Account'].map((h) => (
-                      <th key={h} className="px-4 py-2.5 text-left font-medium whitespace-nowrap" style={{ color: 'var(--text-muted)' }}>{h}</th>
-                    ))}
+                    {['Symbol', 'Side', 'Size', 'Entry Price', 'Mark Price', 'Notional', 'Unrealized PnL', 'ROE %', 'Liq. Dist.', 'Holding', 'Leverage', 'Margin', 'Account'].map((h) => {
+                      const isActive = posSort?.col === h
+                      const SortIcon = isActive
+                        ? posSort!.dir === 'asc' ? ChevronUp : ChevronDown
+                        : ChevronsUpDown
+                      return (
+                        <th
+                          key={h}
+                          className="px-4 py-2.5 text-left font-medium whitespace-nowrap cursor-pointer select-none"
+                          style={{ color: isActive ? 'var(--text-primary)' : 'var(--text-muted)' }}
+                          onClick={() => setPosSort((prev) =>
+                            prev?.col === h
+                              ? { col: h, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
+                              : { col: h, dir: 'desc' }
+                          )}
+                        >
+                          <span className="flex items-center gap-1">
+                            {h}
+                            <SortIcon className="w-3 h-3 shrink-0" style={{ opacity: isActive ? 1 : 0.4 }} />
+                          </span>
+                        </th>
+                      )
+                    })}
                   </tr>
                 </thead>
                 <tbody>
@@ -871,8 +950,8 @@ export default function PerformancePage() {
                           <span className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider" style={{ background: pos.side === 'long' ? 'rgba(0,255,65,0.08)' : 'rgba(255,68,68,0.08)', color: pos.side === 'long' ? 'var(--accent-profit)' : 'var(--accent-loss)' }}>{pos.side}</span>
                         </td>
                         <td className="px-4 py-2.5 tabular-nums whitespace-nowrap" style={{ color: 'var(--text-secondary)' }}>{pos.size.toFixed(4)}</td>
-                        <td className="px-4 py-2.5 tabular-nums whitespace-nowrap font-mono" style={{ color: 'var(--text-secondary)' }}>{formatMoney(pos.entryPrice)}</td>
-                        <td className="px-4 py-2.5 tabular-nums whitespace-nowrap font-mono" style={{ color: 'var(--text-primary)' }}>{formatMoney(pos.markPrice)}</td>
+                        <td className="px-4 py-2.5 tabular-nums whitespace-nowrap font-mono" style={{ color: 'var(--text-secondary)' }}>${formatPrice(pos.entryPrice)}</td>
+                        <td className="px-4 py-2.5 tabular-nums whitespace-nowrap font-mono" style={{ color: 'var(--text-primary)' }}>${formatPrice(pos.markPrice)}</td>
                         <td className="px-4 py-2.5 tabular-nums whitespace-nowrap font-mono" style={{ color: 'var(--text-secondary)' }}>{formatMoney(pos.notional)}</td>
                         <td className="px-4 py-2.5 tabular-nums whitespace-nowrap font-semibold font-mono" style={{ color: pnlColor }}>{pos.unrealizedPnl >= 0 ? '+' : ''}{formatMoney(pos.unrealizedPnl)}</td>
                         <td className="px-4 py-2.5 tabular-nums whitespace-nowrap font-mono" style={{ color: pnlColor }}>
