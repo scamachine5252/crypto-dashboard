@@ -5,6 +5,7 @@ import { decrypt } from '@/lib/crypto/decrypt'
 import { BybitAdapter }   from '@/lib/adapters/bybit'
 import { BinanceAdapter } from '@/lib/adapters/binance'
 import { OkxAdapter }     from '@/lib/adapters/okx'
+import { MexcAdapter }    from '@/lib/adapters/mexc'
 import type { Position } from '@/lib/types'
 import type { RawPosition } from '@/lib/adapters/types'
 
@@ -54,6 +55,9 @@ export async function GET(): Promise<NextResponse> {
           rawPositions = await new OkxAdapter({ apiKey, apiSecret, passphrase }).fetchPositions()
           break
         }
+        case 'mexc':
+          rawPositions = await new MexcAdapter({ apiKey, apiSecret }).fetchPositions()
+          break
         default:
           rawPositions = []
       }

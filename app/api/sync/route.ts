@@ -5,6 +5,7 @@ import { decrypt } from '@/lib/crypto/decrypt'
 import { BybitAdapter }   from '@/lib/adapters/bybit'
 import { BinanceAdapter } from '@/lib/adapters/binance'
 import { OkxAdapter }     from '@/lib/adapters/okx'
+import { MexcAdapter }    from '@/lib/adapters/mexc'
 import type { ExchangeAdapter } from '@/lib/adapters/types'
 import type { DateRange } from '@/lib/types'
 
@@ -61,6 +62,9 @@ async function runSync(): Promise<NextResponse> {
           adapter = new OkxAdapter({ apiKey, apiSecret, passphrase })
           break
         }
+        case 'mexc':
+          adapter = new MexcAdapter({ apiKey, apiSecret })
+          break
         default:
           throw new Error(`Unknown exchange: ${row.exchange}`)
       }

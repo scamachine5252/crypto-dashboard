@@ -5,8 +5,9 @@ import { decrypt } from '@/lib/crypto/decrypt'
 import { BybitAdapter }   from '@/lib/adapters/bybit'
 import { BinanceAdapter } from '@/lib/adapters/binance'
 import { OkxAdapter }     from '@/lib/adapters/okx'
+import { MexcAdapter }    from '@/lib/adapters/mexc'
 
-const VALID_EXCHANGES = ['binance', 'bybit', 'okx'] as const
+const VALID_EXCHANGES = ['binance', 'bybit', 'okx', 'mexc'] as const
 type ValidExchange = typeof VALID_EXCHANGES[number]
 
 // ---------------------------------------------------------------------------
@@ -69,6 +70,10 @@ export async function POST(
       case 'okx': {
         const passphrase = row.passphrase ? decrypt(row.passphrase) : ''
         trades = await new OkxAdapter({ apiKey, apiSecret, passphrase }).getTrades('all', dateRange, since, limit)
+        break
+      }
+      case 'mexc': {
+        trades = await new MexcAdapter({ apiKey, apiSecret }).getTrades('all', dateRange, since, limit)
         break
       }
     }

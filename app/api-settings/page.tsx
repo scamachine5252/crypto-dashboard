@@ -43,6 +43,7 @@ const EXCHANGE_COLORS: Record<string, string> = {
   binance: '#F0B90B',
   bybit:   '#FF6B2C',
   okx:     '#4F8EF7',
+  mexc:    '#00C6C1',
 }
 
 const FUNDS = ['Cicada Foundation']
@@ -475,6 +476,7 @@ export default function ApiSettingsPage() {
             <option value="binance">Binance</option>
             <option value="bybit">Bybit</option>
             <option value="okx">OKX</option>
+            <option value="mexc">MEXC</option>
           </FieldSelect>
 
           {/* Account Name */}

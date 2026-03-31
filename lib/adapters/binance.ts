@@ -20,9 +20,32 @@ type RawFapiTrade = {
   time: number; positionSide: string; orderId: number; id: number
 }
 
+type RawPmPosition = {
+  symbol: string
+  positionAmt: string
+  entryPrice: string
+  markPrice: string
+  unRealizedProfit: string
+  liquidationPrice: string
+  leverage: string
+  notionalValue?: string
+  initialMargin?: string
+  positionSide: string
+  updateTime: number
+}
+
+// FapiEx extends the CCXT binance instance with typed direct REST calls.
+// PAPI methods are only used when portfolioMargin=true.
 type FapiEx = {
   fapiPrivateGetIncome:     (p: Record<string, unknown>) => Promise<Array<{ symbol: string; time: number }>>
   fapiPrivateGetUserTrades: (p: Record<string, unknown>) => Promise<RawFapiTrade[]>
+  // Portfolio Margin PAPI endpoints
+  papiGetUmIncome:          (p: Record<string, unknown>) => Promise<Array<{ symbol: string; time: number }>>
+  papiGetCmIncome:          (p: Record<string, unknown>) => Promise<Array<{ symbol: string; time: number }>>
+  papiGetUmUserTrades:      (p: Record<string, unknown>) => Promise<RawFapiTrade[]>
+  papiGetCmUserTrades:      (p: Record<string, unknown>) => Promise<RawFapiTrade[]>
+  papiGetUmPositionRisk:    (p: Record<string, unknown>) => Promise<RawPmPosition[]>
+  papiGetCmPositionRisk:    (p: Record<string, unknown>) => Promise<RawPmPosition[]>
 }
 
 export interface DiscoveredSymbol {
@@ -32,20 +55,25 @@ export interface DiscoveredSymbol {
 
 export class BinanceAdapter implements ExchangeAdapter {
   private exchange: ccxt.binance
+  private isPortfolioMargin: boolean
 
   constructor(credentials: BinanceCredentials) {
+    this.isPortfolioMargin = credentials.portfolioMargin ?? false
     this.exchange = new ccxt.binance({
       apiKey: credentials.apiKey,
       secret: credentials.apiSecret,
       enableRateLimit: true,
       options: {
         defaultType: 'future',
-        ...(credentials.portfolioMargin ? { portfolioMargin: true } : {}),
+        ...(this.isPortfolioMargin ? { portfolioMargin: true } : {}),
       },
     })
   }
 
   async fetchPositions(): Promise<RawPosition[]> {
+    if (this.isPortfolioMargin) {
+      return this.fetchPmPositions()
+    }
     try {
       const raw = await this.exchange.fetchPositions()
       return raw
@@ -77,6 +105,57 @@ export class BinanceAdapter implements ExchangeAdapter {
     }
   }
 
+  // Portfolio Margin: fetch both UM (USDT-M) and CM (Coin-M) positions via PAPI.
+  private async fetchPmPositions(): Promise<RawPosition[]> {
+    const fapi = this.exchange as unknown as FapiEx
+    const [umResult, cmResult] = await Promise.allSettled([
+      fapi.papiGetUmPositionRisk({}),
+      fapi.papiGetCmPositionRisk({}),
+    ])
+    const all: RawPmPosition[] = [
+      ...(umResult.status === 'fulfilled' ? umResult.value : []),
+      ...(cmResult.status === 'fulfilled' ? cmResult.value : []),
+    ]
+    return this.mapRawPmPositions(all)
+  }
+
+  // Map raw PAPI position objects (UM or CM) to RawPosition.
+  // PAPI field names differ from FAPI: positionAmt, unRealizedProfit, notionalValue, initialMargin.
+  private mapRawPmPositions(raw: RawPmPosition[]): RawPosition[] {
+    return raw
+      .filter((p) => Math.abs(Number(p.positionAmt)) > 0)
+      .map((p): RawPosition => {
+        const posAmt  = Number(p.positionAmt)
+        const side    = posAmt >= 0 ? 'long' : 'short'
+        const size    = Math.abs(posAmt)
+        const notional = Math.abs(Number(p.notionalValue ?? 0))
+        const margin   = Number(p.initialMargin ?? 0)
+        // Derive symbol: BTCUSDT → BTC/USDT, BTCUSD_PERP → BTC/USD
+        const rawSym = p.symbol
+        let displaySymbol: string
+        if (rawSym.includes('USDT')) {
+          const base = rawSym.replace('USDT', '').replace(/_.*$/, '')
+          displaySymbol = `${base}/USDT`
+        } else {
+          const base = rawSym.replace(/USD.*$/, '')
+          displaySymbol = `${base}/USD`
+        }
+        return {
+          symbol: displaySymbol,
+          side,
+          size,
+          entryPrice: Number(p.entryPrice ?? 0),
+          markPrice: Number(p.markPrice ?? 0),
+          notional,
+          unrealizedPnl: Number(p.unRealizedProfit ?? 0),
+          leverage: margin > 0 ? notional / margin : Number(p.leverage ?? 1),
+          margin,
+          liquidationPrice: Number(p.liquidationPrice ?? 0),
+          openTimestamp: 0,  // PAPI positionRisk has updateTime (last modified), not openTime
+        }
+      })
+  }
+
   async testConnection(): Promise<boolean> {
     try {
       await this.fetchBalance()
@@ -87,6 +166,10 @@ export class BinanceAdapter implements ExchangeAdapter {
   }
 
   async fetchBalance(): Promise<BalanceResult> {
+    if (this.isPortfolioMargin) {
+      return this.fetchPmBalance()
+    }
+
     const walletTypes = ['spot', 'future', 'delivery'] as const
 
     const results = await Promise.allSettled(
@@ -118,11 +201,28 @@ export class BinanceAdapter implements ExchangeAdapter {
     return { usdt, tokens }
   }
 
+  // Portfolio Margin: unified balance via PAPI.
+  // CCXT auto-routes fetchBalance() to GET /papi/v1/balance when portfolioMargin=true.
+  private async fetchPmBalance(): Promise<BalanceResult> {
+    const raw = await this.exchange.fetchBalance()
+    const total = (raw.total ?? {}) as unknown as Record<string, number>
+    let usdt = total['USDT'] ?? 0
+    const tokens: Record<string, number> = {}
+    for (const [symbol, amount] of Object.entries(total)) {
+      if (symbol !== 'USDT' && typeof amount === 'number' && amount > 0) {
+        tokens[symbol] = amount
+      }
+    }
+    if (!Number.isFinite(usdt)) usdt = 0
+    return { usdt, tokens }
+  }
+
   async getDailyPnL(_subAccountId: string, _dateRange: DateRange): Promise<DailyPnLEntry[]> {
     return []
   }
 
-  // Quick Sync (48h) — income discovery + userTrades with proper endTime
+  // Quick Sync (48h) — income discovery + userTrades with proper endTime.
+  // PM: uses PAPI income (um + cm) and PAPI userTrades.
   async getTrades(
     _subAccountId: string,
     _dateRange: DateRange,
@@ -138,13 +238,25 @@ export class BinanceAdapter implements ExchangeAdapter {
     // Discover symbols traded in this window
     let activeRawSymbols: string[] = []
     try {
-      const income = await fapi.fapiPrivateGetIncome({
-        incomeType: 'REALIZED_PNL',
-        startTime:  effectiveSince,
-        endTime:    effectiveEnd,
-        limit:      1000,
-      })
-      activeRawSymbols = [...new Set(income.map((i) => i.symbol))]
+      if (this.isPortfolioMargin) {
+        const [umResult, cmResult] = await Promise.allSettled([
+          fapi.papiGetUmIncome({ incomeType: 'REALIZED_PNL', startTime: effectiveSince, endTime: effectiveEnd, limit: 1000 }),
+          fapi.papiGetCmIncome({ incomeType: 'REALIZED_PNL', startTime: effectiveSince, endTime: effectiveEnd, limit: 1000 }),
+        ])
+        const rows = [
+          ...(umResult.status === 'fulfilled' ? umResult.value : []),
+          ...(cmResult.status === 'fulfilled' ? cmResult.value : []),
+        ]
+        activeRawSymbols = [...new Set(rows.map((i) => i.symbol))]
+      } else {
+        const income = await fapi.fapiPrivateGetIncome({
+          incomeType: 'REALIZED_PNL',
+          startTime:  effectiveSince,
+          endTime:    effectiveEnd,
+          limit:      1000,
+        })
+        activeRawSymbols = [...new Set(income.map((i) => i.symbol))]
+      }
     } catch {
       return trades
     }
@@ -152,12 +264,20 @@ export class BinanceAdapter implements ExchangeAdapter {
     // Fetch fills per discovered symbol
     for (const rawSymbol of activeRawSymbols) {
       try {
-        const rows = await fapi.fapiPrivateGetUserTrades({
-          symbol:    rawSymbol,
-          startTime: effectiveSince,
-          endTime:   effectiveEnd,
-          limit:     1000,
-        })
+        let rows: RawFapiTrade[]
+        if (this.isPortfolioMargin) {
+          const isCoinM = this.isCoinMSymbol(rawSymbol)
+          rows = isCoinM
+            ? await fapi.papiGetCmUserTrades({ symbol: rawSymbol, startTime: effectiveSince, endTime: effectiveEnd, limit: 1000 })
+            : await fapi.papiGetUmUserTrades({ symbol: rawSymbol, startTime: effectiveSince, endTime: effectiveEnd, limit: 1000 })
+        } else {
+          rows = await fapi.fapiPrivateGetUserTrades({
+            symbol:    rawSymbol,
+            startTime: effectiveSince,
+            endTime:   effectiveEnd,
+            limit:     1000,
+          })
+        }
         for (const r of rows) trades.push(this.mapRawFapiTrade(r, rawSymbol))
       } catch {
         // Skip symbol — not fatal
@@ -169,19 +289,32 @@ export class BinanceAdapter implements ExchangeAdapter {
   // Full History — discover all traded symbols for the full 180-day scan window.
   // Returns each symbol with the specific week indices (0–25) where it had income events.
   // The caller uses weekIndices to only query those 7-day windows, skipping empty ones.
-  // Example: BTCUSDT traded in weeks 0,3,15 → 3 userTrades calls instead of 26.
+  // PM: fetches income from both UM and CM PAPI endpoints.
   async discoverTradedSymbols(): Promise<DiscoveredSymbol[]> {
     const DAY    = 24 * 60 * 60 * 1000
     const WINDOW = 7 * DAY
     const scanStart = Date.now() - 180 * DAY
     const fapi = this.exchange as unknown as FapiEx
+
     try {
-      const rows = await fapi.fapiPrivateGetIncome({
-        incomeType: 'REALIZED_PNL',
-        startTime:  scanStart,
-        endTime:    Date.now(),
-        limit:      1000,
-      })
+      let rows: Array<{ symbol: string; time: number }>
+      if (this.isPortfolioMargin) {
+        const [umResult, cmResult] = await Promise.allSettled([
+          fapi.papiGetUmIncome({ incomeType: 'REALIZED_PNL', startTime: scanStart, endTime: Date.now(), limit: 1000 }),
+          fapi.papiGetCmIncome({ incomeType: 'REALIZED_PNL', startTime: scanStart, endTime: Date.now(), limit: 1000 }),
+        ])
+        rows = [
+          ...(umResult.status === 'fulfilled' ? umResult.value : []),
+          ...(cmResult.status === 'fulfilled' ? cmResult.value : []),
+        ]
+      } else {
+        rows = await fapi.fapiPrivateGetIncome({
+          incomeType: 'REALIZED_PNL',
+          startTime:  scanStart,
+          endTime:    Date.now(),
+          limit:      1000,
+        })
+      }
 
       // Group income events by symbol, compute which week indices each symbol is active in
       const symbolWeeks = new Map<string, Set<number>>()
@@ -205,6 +338,7 @@ export class BinanceAdapter implements ExchangeAdapter {
   // Full History — ONE raw symbol, querying only the week indices where income events exist.
   // weekIndices comes from discoverTradedSymbols() — typically 1–10 weeks per symbol,
   // not always 26. This makes the per-symbol call much faster for infrequently-traded pairs.
+  // PM: routes to PAPI UM or CM userTrades based on symbol format.
   async getFullTrades(rawSymbol: string, weekIndices: number[]): Promise<FullTradesResult> {
     const DAY    = 24 * 60 * 60 * 1000
     const WINDOW = 7 * DAY
@@ -212,12 +346,22 @@ export class BinanceAdapter implements ExchangeAdapter {
     const fapi = this.exchange as unknown as FapiEx
     const trades: Trade[] = []
     const failedSymbols: { symbol: string; error: string }[] = []
+    const isCoinM = this.isCoinMSymbol(rawSymbol)
+
+    const fetchWindowTrades = (params: Record<string, unknown>): Promise<RawFapiTrade[]> => {
+      if (this.isPortfolioMargin) {
+        return isCoinM
+          ? fapi.papiGetCmUserTrades(params)
+          : fapi.papiGetUmUserTrades(params)
+      }
+      return fapi.fapiPrivateGetUserTrades(params)
+    }
 
     for (const weekIndex of weekIndices) {
       const windowStart = scanStart + weekIndex * WINDOW
       const windowEnd   = Math.min(windowStart + WINDOW, Date.now())
       try {
-        const rows = await fapi.fapiPrivateGetUserTrades({
+        const rows = await fetchWindowTrades({
           symbol:    rawSymbol,
           startTime: windowStart,
           endTime:   windowEnd,
@@ -227,7 +371,7 @@ export class BinanceAdapter implements ExchangeAdapter {
       } catch (err) {
         const base = rawSymbol.endsWith('USDT') ? rawSymbol.slice(0, -4) : rawSymbol
         const errMsg = err instanceof Error ? err.message : String(err)
-failedSymbols.push({
+        failedSymbols.push({
           symbol: `${base}/USDT:USDT`,
           error:  errMsg,
         })
@@ -242,6 +386,7 @@ failedSymbols.push({
   // Binance FAPI positionRisk only has updateTime (last modification), no openTime field.
   // Algorithm: walk trades ASC, find LAST moment position transitioned from flat/opposite → current side.
   // Handles both one-way mode (positionSide='BOTH') and hedge mode (positionSide='LONG'/'SHORT').
+  // PM: routes to PAPI userTrades.
   async findPositionOpenTimes(
     symbols: Array<{ rawSymbol: string; side: 'long' | 'short' }>,
   ): Promise<Record<string, number>> {
@@ -251,7 +396,15 @@ failedSymbols.push({
     await Promise.allSettled(
       symbols.map(async ({ rawSymbol, side }) => {
         try {
-          const trades = await fapi.fapiPrivateGetUserTrades({ symbol: rawSymbol, limit: 1000 })
+          let trades: RawFapiTrade[]
+          if (this.isPortfolioMargin) {
+            const isCoinM = this.isCoinMSymbol(rawSymbol)
+            trades = isCoinM
+              ? await fapi.papiGetCmUserTrades({ symbol: rawSymbol, limit: 1000 })
+              : await fapi.papiGetUmUserTrades({ symbol: rawSymbol, limit: 1000 })
+          } else {
+            trades = await fapi.fapiPrivateGetUserTrades({ symbol: rawSymbol, limit: 1000 })
+          }
           if (!trades || trades.length === 0) return
 
           const sorted  = [...trades].sort((a, b) => a.time - b.time)
@@ -291,8 +444,13 @@ failedSymbols.push({
     return result
   }
 
+  // Coin-M (inverse) symbols end with USD followed by nothing or _PERP / _expiry.
+  // USDT-M symbols always end with USDT.
+  private isCoinMSymbol(rawSymbol: string): boolean {
+    return rawSymbol.includes('USD') && !rawSymbol.endsWith('USDT')
+  }
+
   private mapRawFapiTrade(r: RawFapiTrade, rawSymbol: string): Trade {
-    const base     = rawSymbol.endsWith('USDT') ? rawSymbol.slice(0, -4) : rawSymbol
     const qty      = Number(r.qty)
     const pnl      = Number(r.realizedPnl)
     const exitPrice  = Number(r.price)
@@ -305,9 +463,20 @@ failedSymbols.push({
     const derived    = qty > 0 ? (isShort ? exitPrice + pnl / qty : exitPrice - pnl / qty) : exitPrice
     const entryPrice = Number.isFinite(derived) && derived > 0 ? derived : exitPrice
     const ts = new Date(Number(r.time)).toISOString()
+
+    // Symbol normalization: BTCUSDT → BTC/USDT:USDT, BTCUSD_PERP → BTC/USD:BTC
+    let symbol: string
+    if (rawSymbol.endsWith('USDT')) {
+      const base = rawSymbol.slice(0, -4)
+      symbol = `${base}/USDT:USDT`
+    } else {
+      const base = rawSymbol.replace(/USD.*$/, '')
+      symbol = `${base}/USD:${base}`
+    }
+
     return {
       id:           String(r.id),
-      symbol:       `${base}/USDT:USDT`,
+      symbol,
       side:         isShort ? 'short' : 'long',
       entryPrice,
       exitPrice,

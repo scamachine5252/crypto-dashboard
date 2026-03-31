@@ -1,4 +1,4 @@
-export type ExchangeId = 'binance' | 'bybit' | 'okx'
+export type ExchangeId = 'binance' | 'bybit' | 'okx' | 'mexc'
 export type Timeframe = 'daily' | 'weekly' | 'monthly'
 export type TradeSide = 'long' | 'short'
 export type TradeType = 'spot' | 'futures'

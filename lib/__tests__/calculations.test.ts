@@ -748,16 +748,16 @@ describe('buildAccountSnapshots', () => {
   const fullYear = { start: '2025-01-01', end: '2025-12-31' }
   const jan = { start: '2025-01-01', end: '2025-01-31' }
 
-  it('returns 7 snapshots for the full year (one per sub-account)', () => {
+  it('returns 8 snapshots for the full year (one per sub-account)', () => {
     const snapshots = buildAccountSnapshots(fullYear)
-    expect(snapshots).toHaveLength(7)
+    expect(snapshots).toHaveLength(8)
   })
 
   it('each snapshot has a non-empty accountName and valid exchangeId', () => {
     const snapshots = buildAccountSnapshots(fullYear)
     for (const s of snapshots) {
       expect(s.accountName.length).toBeGreaterThan(0)
-      expect(['binance', 'bybit', 'okx']).toContain(s.exchangeId)
+      expect(['binance', 'bybit', 'okx', 'mexc']).toContain(s.exchangeId)
     }
   })
 

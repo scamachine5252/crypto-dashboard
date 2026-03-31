@@ -4,7 +4,7 @@ import { encrypt } from '@/lib/crypto/encrypt'
 import { decrypt } from '@/lib/crypto/decrypt'
 import { detectBinanceInstrument } from '@/lib/adapters/binance-detect'
 
-const VALID_EXCHANGES = ['binance', 'bybit', 'okx'] as const
+const VALID_EXCHANGES = ['binance', 'bybit', 'okx', 'mexc'] as const
 
 // ---------------------------------------------------------------------------
 // POST /api/accounts — create a new exchange account

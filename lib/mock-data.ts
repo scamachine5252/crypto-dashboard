@@ -71,6 +71,14 @@ export const EXCHANGES: ExchangeConfig[] = [
       { id: 'okx-eta', name: 'Eta Arb', exchangeId: 'okx' },
     ],
   },
+  {
+    id: 'mexc',
+    name: 'MEXC',
+    color: '#00C6C1',
+    subAccounts: [
+      { id: 'mexc-theta', name: 'Theta Perps', exchangeId: 'mexc' },
+    ],
+  },
 ]
 
 // ---------------------------------------------------------------------------
@@ -84,6 +92,7 @@ export const ACCOUNT_COLORS: Record<string, string> = {
   'bybit-epsilon': '#CC4F18',
   'okx-zeta':      '#4F8EF7',
   'okx-eta':       '#2B6AD0',
+  'mexc-theta':    '#00C6C1',
 }
 
 // ---------------------------------------------------------------------------
@@ -104,6 +113,7 @@ const SUB_CFG: Record<string, SubCfg> = {
   'bybit-epsilon': { meanDaily:  360, stdDaily:  2200, jumpProb: 0.01, jumpMult: 1.5 },
   'okx-zeta':      { meanDaily: 1000, stdDaily: 12000, jumpProb: 0.03, jumpMult: 2.5 },
   'okx-eta':       { meanDaily:  210, stdDaily:  1400, jumpProb: 0.01, jumpMult: 1.5 },
+  'mexc-theta':    { meanDaily:  750, stdDaily:  9500, jumpProb: 0.04, jumpMult: 2.0 },
 }
 
 // ---------------------------------------------------------------------------
@@ -259,6 +269,7 @@ export const INITIAL_USDT_BALANCE: Record<string, number> = {
   'bybit-epsilon':   850_000,
   'okx-zeta':        900_000,
   'okx-eta':         750_000,
+  'mexc-theta':      600_000,
 }
 
 export const ACCOUNT_PRIMARY_TOKEN: Record<string, string> = {
@@ -269,6 +280,7 @@ export const ACCOUNT_PRIMARY_TOKEN: Record<string, string> = {
   'bybit-epsilon': 'XRP',
   'okx-zeta':      'AVAX',
   'okx-eta':       'BTC',
+  'mexc-theta':    'ETH',
 }
 
 export const INITIAL_TOKEN_BALANCE: Record<string, number> = {
@@ -279,6 +291,7 @@ export const INITIAL_TOKEN_BALANCE: Record<string, number> = {
   'bybit-epsilon': 50000,
   'okx-zeta':       800,
   'okx-eta':          3,
+  'mexc-theta':      60,
 }
 
 // ---------------------------------------------------------------------------
