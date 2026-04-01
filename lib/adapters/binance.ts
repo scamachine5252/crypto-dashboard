@@ -299,14 +299,26 @@ export class BinanceAdapter implements ExchangeAdapter {
     try {
       let rows: Array<{ symbol: string; time: number }>
       if (this.isPortfolioMargin) {
-        const [umResult, cmResult] = await Promise.allSettled([
-          fapi.papiGetUmIncome({ incomeType: 'REALIZED_PNL', startTime: scanStart, endTime: Date.now(), limit: 1000 }),
-          fapi.papiGetCmIncome({ incomeType: 'REALIZED_PNL', startTime: scanStart, endTime: Date.now(), limit: 1000 }),
-        ])
-        rows = [
-          ...(umResult.status === 'fulfilled' ? umResult.value : []),
-          ...(cmResult.status === 'fulfilled' ? cmResult.value : []),
-        ]
+        // Daily windows (180 days × UM + CM) for complete symbol discovery.
+        // Processed in batches of 10 days (20 parallel requests) to respect rate limits.
+        // Weekly windows risk capping at limit=1000 on high-volume accounts.
+        const BATCH_SIZE = 10
+        const allRows: Array<{ symbol: string; time: number }> = []
+        for (let batchStart = 0; batchStart < 180; batchStart += BATCH_SIZE) {
+          const batchEnd = Math.min(batchStart + BATCH_SIZE, 180)
+          const batchPromises: Promise<Array<{ symbol: string; time: number }>>[] = []
+          for (let d = batchStart; d < batchEnd; d++) {
+            const dayStart = scanStart + d * DAY
+            const dayEnd   = Math.min(dayStart + DAY, Date.now())
+            batchPromises.push(
+              fapi.papiGetUmIncome({ startTime: dayStart, endTime: dayEnd, limit: 1000 }).catch(() => []),
+              fapi.papiGetCmIncome({ startTime: dayStart, endTime: dayEnd, limit: 1000 }).catch(() => []),
+            )
+          }
+          const batchResults = await Promise.all(batchPromises)
+          allRows.push(...batchResults.flat())
+        }
+        rows = allRows
       } else {
         rows = await fapi.fapiPrivateGetIncome({
           incomeType: 'REALIZED_PNL',

@@ -71,8 +71,9 @@ describe('BinanceAdapter.discoverTradedSymbols()', () => {
 
     const result = await adapter.discoverTradedSymbols()
 
-    expect(fns.papiGetUmIncome).toHaveBeenCalledTimes(1)
-    expect(fns.papiGetCmIncome).toHaveBeenCalledTimes(1)
+    // 180 daily windows × 2 (UM + CM) = 360 calls total
+    expect(fns.papiGetUmIncome).toHaveBeenCalledTimes(180)
+    expect(fns.papiGetCmIncome).toHaveBeenCalledTimes(180)
     expect(fns.fapiPrivateGetIncome).not.toHaveBeenCalled()
     expect(result.map((r) => r.rawSymbol)).toEqual(expect.arrayContaining(['BTCUSDT', 'BTCUSD_PERP']))
   })
