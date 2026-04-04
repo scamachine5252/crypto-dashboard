@@ -364,7 +364,7 @@ export default function OrdersTable({ trades, pageSize = 50, accountNameMap }: O
                         <span style={{ color: 'var(--text-muted)', opacity: 0.3 }}>—</span>
                       ) : (
                         <span style={{ color: pnlColor }}>
-                          {row.pnl >= 0 ? '+' : ''}{formatMoney(row.pnl)}
+                          {row.pnl >= 0 ? '+' : ''}{formatMoney(row.pnl, false, 2)}
                         </span>
                       )}
                     </td>

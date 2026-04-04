@@ -1,4 +1,4 @@
-export function formatMoney(value: number, compact = true): string {
+export function formatMoney(value: number, compact = true, decimals = 0): string {
   if (compact) {
     if (Math.abs(value) >= 1_000_000) {
       return `$${(value / 1_000_000).toFixed(2)}M`
@@ -10,7 +10,8 @@ export function formatMoney(value: number, compact = true): string {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
-    maximumFractionDigits: 0,
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
   }).format(value)
 }
 
