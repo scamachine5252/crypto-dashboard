@@ -84,9 +84,11 @@ function buildAdapter() {
     fetchBalance: jest.fn(),
   }
   const swapMock = {
-    fetchBalance:         jest.fn(),
+    fetchBalance:          jest.fn(),
     fetchPositionsHistory: jest.fn().mockResolvedValue([]),
     fetchPositions:        jest.fn().mockResolvedValue([]),
+    // Returns contractSize=1 by default; override per-test if needed
+    market: jest.fn().mockReturnValue({ contractSize: 1 }),
   }
 
   a.spot = spotMock
@@ -173,11 +175,23 @@ describe('MexcAdapter.getTrades()', () => {
   it('reads pnl from info.realised (not unified realizedPnl which is undefined)', async () => {
     const { adapter, swapMock } = buildAdapter()
     swapMock.fetchPositionsHistory.mockResolvedValue([
-      makeCcxtPositionHistory({ info: { realised: '250', closeAvgPrice: '51000', fee: '0', holdFee: '0' } }),
+      makeCcxtPositionHistory({ info: { realised: '250', closeAvgPrice: '51000', fee: '0', holdFee: '0', closeVol: '0.1' } }),
     ])
 
     const trades = await adapter.getTrades('acc', { start: '', end: '' })
     expect(trades[0].pnl).toBe(250)
+  })
+
+  it('multiplies closeVol by contractSize to get quantity in base currency', async () => {
+    const { adapter, swapMock } = buildAdapter()
+    // contractSize=0.0001 (e.g. BTC), closeVol=1000 → quantity=0.1 BTC
+    swapMock.market.mockReturnValue({ contractSize: 0.0001 })
+    swapMock.fetchPositionsHistory.mockResolvedValue([
+      makeCcxtPositionHistory({ info: { realised: '100', closeAvgPrice: '50000', fee: '0', holdFee: '0', closeVol: '1000' } }),
+    ])
+
+    const trades = await adapter.getTrades('acc', { start: '', end: '' })
+    expect(trades[0].quantity).toBeCloseTo(0.1)
   })
 
   it('maps position side correctly (long/short)', async () => {

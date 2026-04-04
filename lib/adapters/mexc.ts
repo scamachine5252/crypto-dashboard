@@ -23,6 +23,7 @@ type MexcRawInfo = Record<string, any>
 
 function mapMexcPositionHistory(
   p: ccxt.Position,
+  contractSize: number,
   since?: number,
   until?: number,
 ): Trade | null {
@@ -39,8 +40,10 @@ function mapMexcPositionHistory(
   const entryPrice = Number(p.entryPrice ?? info.openAvgPrice ?? 0)
   // closeAvgPrice = actual fill price when position was closed
   const exitPrice  = Number(info.closeAvgPrice ?? p.lastPrice ?? p.markPrice ?? entryPrice)
-  // For closed positions holdVol=0 (nothing held), so use closeVol (actual closed volume)
-  const quantity   = Math.abs(Number(info.closeVol ?? p.contracts ?? 0))
+  // closeVol = number of contracts closed; multiply by contractSize to get base-currency amount
+  // (holdVol=0 for closed positions, so we must use closeVol not p.contracts)
+  const closeVol   = Math.abs(Number(info.closeVol ?? 0))
+  const quantity   = closeVol * contractSize
   // realised = realized PnL; p.realizedPnl is always undefined from CCXT for MEXC
   const pnl        = Number(p.realizedPnl ?? info.realised ?? 0)
   const fee        = Number(info.fee ?? 0)
@@ -150,8 +153,12 @@ export class MexcAdapter implements ExchangeAdapter {
       pageNum++
     }
 
+    // markets are already loaded by fetchPositionsHistory internally
     return allPositions
-      .map((p) => mapMexcPositionHistory(p, since, until))
+      .map((p) => {
+        const contractSize = Number(this.swap.market(p.symbol ?? '')?.contractSize ?? 1)
+        return mapMexcPositionHistory(p, contractSize, since, until)
+      })
       .filter((t): t is Trade => t !== null)
   }
 
