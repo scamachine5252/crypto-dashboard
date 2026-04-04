@@ -14,21 +14,24 @@ function makeBalance(usdt: number, tokens: Record<string, number> = {}) {
   return { total: { USDT: usdt, ...tokens } }
 }
 
-function makeCcxtTrade(overrides: Partial<{
-  id: string; symbol: string; side: string; price: number; amount: number
-  cost: number; fee: { cost: number; currency: string }; timestamp: number
-  info: Record<string, unknown>
+function makeCcxtPositionHistory(overrides: Partial<{
+  id: string; symbol: string; side: string; contracts: number
+  entryPrice: number; markPrice: number; lastPrice: number
+  realizedPnl: number; leverage: number
+  datetime: string; lastUpdateTimestamp: number
 }> = {}) {
   return {
-    id: 't1',
-    symbol: 'BTC/USDT',
-    side: 'buy',
-    price: 50000,
-    amount: 0.01,
-    cost: 500,
-    fee: { cost: 0.5, currency: 'USDT' },
-    timestamp: Date.now(),
-    info: {},
+    id: 'pos1',
+    symbol: 'BTC/USDT:USDT',
+    side: 'long',
+    contracts: 0.1,
+    entryPrice: 50000,
+    markPrice: 51000,
+    lastPrice: 51000,
+    realizedPnl: 100,
+    leverage: 10,
+    datetime: '2025-01-01T00:00:00.000Z',
+    lastUpdateTimestamp: new Date('2025-01-01T01:00:00.000Z').getTime(),
     ...overrides,
   }
 }
@@ -62,13 +65,12 @@ function buildAdapter() {
   const a = adapter as any
 
   const spotMock = {
-    fetchBalance:  jest.fn(),
-    fetchMyTrades: jest.fn().mockResolvedValue([]),
+    fetchBalance: jest.fn(),
   }
   const swapMock = {
-    fetchBalance:   jest.fn(),
-    fetchMyTrades:  jest.fn().mockResolvedValue([]),
-    fetchPositions: jest.fn().mockResolvedValue([]),
+    fetchBalance:         jest.fn(),
+    fetchPositionsHistory: jest.fn().mockResolvedValue([]),
+    fetchPositions:        jest.fn().mockResolvedValue([]),
   }
 
   a.spot = spotMock
@@ -136,48 +138,96 @@ describe('MexcAdapter.fetchBalance()', () => {
 // ─── getTrades() ──────────────────────────────────────────────────────────────
 
 describe('MexcAdapter.getTrades()', () => {
-  it('merges spot and swap trades', async () => {
-    const { adapter, spotMock, swapMock } = buildAdapter()
-    spotMock.fetchMyTrades.mockResolvedValue([makeCcxtTrade({ id: 'sp1', symbol: 'ETH/USDT' })])
-    swapMock.fetchMyTrades.mockResolvedValue([makeCcxtTrade({ id: 'sw1', symbol: 'BTC/USDT:USDT' })])
-
-    const trades = await adapter.getTrades('acc', { start: '', end: '' })
-    expect(trades).toHaveLength(2)
-  })
-
-  it('maps spot trade to tradeType=spot via symbol without colon', async () => {
-    const { adapter, spotMock } = buildAdapter()
-    spotMock.fetchMyTrades.mockResolvedValue([makeCcxtTrade({ symbol: 'ETH/USDT' })])
-
-    const trades = await adapter.getTrades('acc', { start: '', end: '' })
-    expect(trades[0].tradeType).toBe('spot')
-  })
-
-  it('maps swap trade to tradeType=futures via symbol containing colon', async () => {
+  it('calls swap.fetchPositionsHistory (not fetchMyTrades)', async () => {
     const { adapter, swapMock } = buildAdapter()
-    swapMock.fetchMyTrades.mockResolvedValue([makeCcxtTrade({ symbol: 'BTC/USDT:USDT' })])
+    swapMock.fetchPositionsHistory.mockResolvedValue([])
+
+    await adapter.getTrades('acc', { start: '', end: '' })
+    expect(swapMock.fetchPositionsHistory).toHaveBeenCalled()
+  })
+
+  it('maps closed position to tradeType=futures', async () => {
+    const { adapter, swapMock } = buildAdapter()
+    swapMock.fetchPositionsHistory.mockResolvedValue([makeCcxtPositionHistory()])
 
     const trades = await adapter.getTrades('acc', { start: '', end: '' })
     expect(trades[0].tradeType).toBe('futures')
   })
 
-  it('returns empty array if both spot and swap fail', async () => {
-    const { adapter, spotMock, swapMock } = buildAdapter()
-    spotMock.fetchMyTrades.mockRejectedValue(new Error('spot err'))
-    swapMock.fetchMyTrades.mockRejectedValue(new Error('swap err'))
+  it('maps realizedPnl to trade.pnl', async () => {
+    const { adapter, swapMock } = buildAdapter()
+    swapMock.fetchPositionsHistory.mockResolvedValue([
+      makeCcxtPositionHistory({ realizedPnl: 250 }),
+    ])
+
+    const trades = await adapter.getTrades('acc', { start: '', end: '' })
+    expect(trades[0].pnl).toBe(250)
+  })
+
+  it('maps position side correctly (long/short)', async () => {
+    const { adapter, swapMock } = buildAdapter()
+    swapMock.fetchPositionsHistory.mockResolvedValue([
+      makeCcxtPositionHistory({ side: 'short' }),
+    ])
+
+    const trades = await adapter.getTrades('acc', { start: '', end: '' })
+    expect(trades[0].side).toBe('short')
+  })
+
+  it('uses lastUpdateTimestamp as closedAt', async () => {
+    const { adapter, swapMock } = buildAdapter()
+    const lastUpdateTimestamp = new Date('2025-06-01T12:00:00.000Z').getTime()
+    swapMock.fetchPositionsHistory.mockResolvedValue([
+      makeCcxtPositionHistory({ lastUpdateTimestamp }),
+    ])
+
+    const trades = await adapter.getTrades('acc', { start: '', end: '' })
+    expect(trades[0].closedAt).toBe('2025-06-01T12:00:00.000Z')
+  })
+
+  it('filters out positions outside until boundary (client-side)', async () => {
+    const { adapter, swapMock } = buildAdapter()
+    const until = new Date('2025-03-01T00:00:00.000Z').getTime()
+    swapMock.fetchPositionsHistory.mockResolvedValue([
+      makeCcxtPositionHistory({ lastUpdateTimestamp: until + 1000 }), // after until → filtered
+      makeCcxtPositionHistory({ id: 'pos2', lastUpdateTimestamp: until - 1000 }), // before until → kept
+    ])
+
+    const trades = await adapter.getTrades('acc', { start: '', end: '' }, undefined, undefined, until)
+    expect(trades).toHaveLength(1)
+    expect(trades[0].id).toBe('pos2')
+  })
+
+  it('filters out positions before since boundary (client-side)', async () => {
+    const { adapter, swapMock } = buildAdapter()
+    const since = new Date('2025-03-01T00:00:00.000Z').getTime()
+    swapMock.fetchPositionsHistory.mockResolvedValue([
+      makeCcxtPositionHistory({ lastUpdateTimestamp: since - 1000 }), // before since → filtered
+      makeCcxtPositionHistory({ id: 'pos2', lastUpdateTimestamp: since + 1000 }), // after since → kept
+    ])
+
+    const trades = await adapter.getTrades('acc', { start: '', end: '' }, since)
+    expect(trades).toHaveLength(1)
+    expect(trades[0].id).toBe('pos2')
+  })
+
+  it('returns empty array if fetchPositionsHistory throws', async () => {
+    const { adapter, swapMock } = buildAdapter()
+    swapMock.fetchPositionsHistory.mockRejectedValue(new Error('network'))
 
     const trades = await adapter.getTrades('acc', { start: '', end: '' })
     expect(trades).toHaveLength(0)
   })
 
-  it('passes since parameter to both spot and swap fetchMyTrades', async () => {
-    const { adapter, spotMock, swapMock } = buildAdapter()
+  it('passes since to fetchPositionsHistory', async () => {
+    const { adapter, swapMock } = buildAdapter()
     const since = Date.now() - 86400000
+    swapMock.fetchPositionsHistory.mockResolvedValue([])
 
     await adapter.getTrades('acc', { start: '', end: '' }, since)
-
-    expect(spotMock.fetchMyTrades).toHaveBeenCalledWith(undefined, since, expect.any(Number), expect.any(Object))
-    expect(swapMock.fetchMyTrades).toHaveBeenCalledWith(undefined, since, expect.any(Number), expect.any(Object))
+    expect(swapMock.fetchPositionsHistory).toHaveBeenCalledWith(
+      undefined, since, expect.any(Number), expect.any(Object),
+    )
   })
 })
 
@@ -199,8 +249,8 @@ describe('MexcAdapter.fetchPositions()', () => {
   it('filters zero-size positions', async () => {
     const { adapter, swapMock } = buildAdapter()
     swapMock.fetchPositions.mockResolvedValue([
-      makeCcxtPosition({ contracts: 0 }),      // zero — filtered
-      makeCcxtPosition({ contracts: 1.5 }),    // non-zero — keep
+      makeCcxtPosition({ contracts: 0 }),
+      makeCcxtPosition({ contracts: 1.5 }),
     ])
 
     const positions = await adapter.fetchPositions()

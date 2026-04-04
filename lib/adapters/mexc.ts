@@ -1,12 +1,56 @@
 import 'server-only'
 import * as ccxt from 'ccxt'
 import type { ExchangeAdapter, BalanceResult, RawPosition } from './types'
-import { mapCcxtTrade } from './ccxt-utils'
-import type { DailyPnLEntry, Trade, DateRange } from '../types'
+import type { DailyPnLEntry, Trade, DateRange, ExchangeId } from '../types'
 
 interface MexcCredentials {
   apiKey: string
   apiSecret: string
+}
+
+// Maps a closed MEXC position (fetchPositionsHistory) to our internal Trade format.
+// One closed position = one futures trade — correct granularity for PnL tracking.
+// Client-side since/until filter guards against CCXT not forwarding time params to MEXC API.
+function mapMexcPositionHistory(
+  p: ccxt.Position,
+  since?: number,
+  until?: number,
+): Trade | null {
+  const closedAt = p.lastUpdateTimestamp
+    ? new Date(p.lastUpdateTimestamp).toISOString()
+    : (p.datetime ?? new Date().toISOString())
+  const openedAt = p.datetime ?? closedAt
+  const closedTs = new Date(closedAt).getTime()
+
+  if (since && closedTs < since) return null
+  if (until && closedTs > until) return null
+
+  const entryPrice = Number(p.entryPrice ?? 0)
+  const exitPrice  = Number(p.lastPrice ?? p.markPrice ?? p.entryPrice ?? 0)
+  const quantity   = Math.abs(Number(p.contracts ?? 0))
+  const pnl        = Number(p.realizedPnl ?? 0)
+  const notional   = entryPrice * quantity
+
+  return {
+    id:           String(p.id ?? Math.random()),
+    subAccountId: 'mexc',
+    exchangeId:   'mexc' as ExchangeId,
+    symbol:       p.symbol ?? 'UNKNOWN',
+    side:         p.side === 'short' ? 'short' : 'long',
+    tradeType:    'futures',
+    entryPrice,
+    exitPrice,
+    quantity,
+    pnl,
+    pnlPercent:   notional > 0 ? (pnl / notional) * 100 : 0,
+    fee:          0,
+    durationMin:  Math.round((new Date(closedAt).getTime() - new Date(openedAt).getTime()) / 60000),
+    leverage:     Number(p.leverage ?? 1),
+    fundingCost:  0,
+    isOvernight:  new Date(openedAt).getUTCDate() !== new Date(closedAt).getUTCDate(),
+    openedAt,
+    closedAt,
+  }
 }
 
 export class MexcAdapter implements ExchangeAdapter {
@@ -66,20 +110,20 @@ export class MexcAdapter implements ExchangeAdapter {
     limit?: number,
     until?: number,
   ): Promise<Trade[]> {
-    const untilParam = until ? { until } : {}
-    const [spotResult, swapResult] = await Promise.allSettled([
-      this.spot.fetchMyTrades(undefined, since, limit ?? 100, { paginate: true, ...untilParam }),
-      this.swap.fetchMyTrades(undefined, since, limit ?? 100, { paginate: true, ...untilParam }),
-    ])
+    // MEXC swap: fetchPositionsHistory does not require a symbol argument.
+    // One closed position = one futures trade with realized PnL.
+    // Spot: skipped — fetchMyTrades requires symbol (separate future task).
+    // 30-day chunks stay within MEXC's 90-day query window limit.
+    const params: Record<string, unknown> = {}
+    if (until) params['end_time'] = until
 
-    const trades: Trade[] = []
-    if (spotResult.status === 'fulfilled') {
-      trades.push(...spotResult.value.map((t) => mapCcxtTrade(t, 'mexc')))
-    }
-    if (swapResult.status === 'fulfilled') {
-      trades.push(...swapResult.value.map((t) => mapCcxtTrade(t, 'mexc')))
-    }
-    return trades
+    const positions = await this.swap
+      .fetchPositionsHistory(undefined, since, limit ?? 1000, params)
+      .catch(() => [] as ccxt.Position[])
+
+    return positions
+      .map((p) => mapMexcPositionHistory(p, since, until))
+      .filter((t): t is Trade => t !== null)
   }
 
   async fetchPositions(): Promise<RawPosition[]> {
