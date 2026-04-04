@@ -14,25 +14,41 @@ function makeBalance(usdt: number, tokens: Record<string, number> = {}) {
   return { total: { USDT: usdt, ...tokens } }
 }
 
+// Mirrors what CCXT actually returns for MEXC fetchPositionsHistory:
+// - realizedPnl / lastPrice / fee are NOT set by CCXT — they live in info (raw response)
+// - datetime = iso(updateTime) = close time
+// - lastUpdateTimestamp is always undefined from CCXT for MEXC
 function makeCcxtPositionHistory(overrides: Partial<{
   id: string; symbol: string; side: string; contracts: number
-  entryPrice: number; markPrice: number; lastPrice: number
-  realizedPnl: number; leverage: number
-  datetime: string; lastUpdateTimestamp: number
+  entryPrice: number; markPrice: number
+  leverage: number; datetime: string
+  info: Record<string, unknown>
 }> = {}) {
+  const { info: infoOverride, ...rest } = overrides
   return {
-    id: 'pos1',
+    id: undefined,           // CCXT leaves id undefined for MEXC
     symbol: 'BTC/USDT:USDT',
     side: 'long',
     contracts: 0.1,
     entryPrice: 50000,
     markPrice: 51000,
-    lastPrice: 51000,
-    realizedPnl: 100,
+    realizedPnl: undefined,  // CCXT does NOT map this for MEXC
+    lastPrice: undefined,    // CCXT does NOT map this for MEXC
     leverage: 10,
-    datetime: '2025-01-01T00:00:00.000Z',
-    lastUpdateTimestamp: new Date('2025-01-01T01:00:00.000Z').getTime(),
-    ...overrides,
+    datetime: '2025-01-01T01:00:00.000Z',  // = close time (iso of updateTime)
+    lastUpdateTimestamp: undefined,          // always undefined from CCXT for MEXC
+    info: {
+      positionId: 'pos1',
+      realised: '100',
+      closeAvgPrice: '51000',
+      openAvgPrice: '50000',
+      fee: '5',
+      holdFee: '0',
+      leverage: '10',
+      closeVol: '0.1',
+      ...infoOverride,
+    },
+    ...rest,
   }
 }
 
@@ -154,10 +170,10 @@ describe('MexcAdapter.getTrades()', () => {
     expect(trades[0].tradeType).toBe('futures')
   })
 
-  it('maps realizedPnl to trade.pnl', async () => {
+  it('reads pnl from info.realised (not unified realizedPnl which is undefined)', async () => {
     const { adapter, swapMock } = buildAdapter()
     swapMock.fetchPositionsHistory.mockResolvedValue([
-      makeCcxtPositionHistory({ realizedPnl: 250 }),
+      makeCcxtPositionHistory({ info: { realised: '250', closeAvgPrice: '51000', fee: '0', holdFee: '0' } }),
     ])
 
     const trades = await adapter.getTrades('acc', { start: '', end: '' })
@@ -174,11 +190,10 @@ describe('MexcAdapter.getTrades()', () => {
     expect(trades[0].side).toBe('short')
   })
 
-  it('uses lastUpdateTimestamp as closedAt', async () => {
+  it('uses datetime as closedAt (CCXT maps updateTime → datetime for MEXC)', async () => {
     const { adapter, swapMock } = buildAdapter()
-    const lastUpdateTimestamp = new Date('2025-06-01T12:00:00.000Z').getTime()
     swapMock.fetchPositionsHistory.mockResolvedValue([
-      makeCcxtPositionHistory({ lastUpdateTimestamp }),
+      makeCcxtPositionHistory({ datetime: '2025-06-01T12:00:00.000Z' }),
     ])
 
     const trades = await adapter.getTrades('acc', { start: '', end: '' })
@@ -189,8 +204,8 @@ describe('MexcAdapter.getTrades()', () => {
     const { adapter, swapMock } = buildAdapter()
     const until = new Date('2025-03-01T00:00:00.000Z').getTime()
     swapMock.fetchPositionsHistory.mockResolvedValue([
-      makeCcxtPositionHistory({ lastUpdateTimestamp: until + 1000 }), // after until → filtered
-      makeCcxtPositionHistory({ id: 'pos2', lastUpdateTimestamp: until - 1000 }), // before until → kept
+      makeCcxtPositionHistory({ datetime: new Date(until + 1000).toISOString() }), // after until → filtered
+      makeCcxtPositionHistory({ datetime: new Date(until - 1000).toISOString(), info: { positionId: 'pos2', realised: '0', closeAvgPrice: '0', fee: '0', holdFee: '0' } }), // before until → kept
     ])
 
     const trades = await adapter.getTrades('acc', { start: '', end: '' }, undefined, undefined, until)
@@ -202,8 +217,8 @@ describe('MexcAdapter.getTrades()', () => {
     const { adapter, swapMock } = buildAdapter()
     const since = new Date('2025-03-01T00:00:00.000Z').getTime()
     swapMock.fetchPositionsHistory.mockResolvedValue([
-      makeCcxtPositionHistory({ lastUpdateTimestamp: since - 1000 }), // before since → filtered
-      makeCcxtPositionHistory({ id: 'pos2', lastUpdateTimestamp: since + 1000 }), // after since → kept
+      makeCcxtPositionHistory({ datetime: new Date(since - 1000).toISOString() }), // before since → filtered
+      makeCcxtPositionHistory({ datetime: new Date(since + 1000).toISOString(), info: { positionId: 'pos2', realised: '0', closeAvgPrice: '0', fee: '0', holdFee: '0' } }), // after since → kept
     ])
 
     const trades = await adapter.getTrades('acc', { start: '', end: '' }, since)

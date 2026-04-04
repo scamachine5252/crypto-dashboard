@@ -11,28 +11,43 @@ interface MexcCredentials {
 // Maps a closed MEXC position (fetchPositionsHistory) to our internal Trade format.
 // One closed position = one futures trade — correct granularity for PnL tracking.
 // Client-side since/until filter guards against CCXT not forwarding time params to MEXC API.
+//
+// IMPORTANT: CCXT's parsePosition for MEXC leaves several unified fields undefined:
+//   realizedPnl  → raw field is `realised`
+//   lastPrice    → raw field is `closeAvgPrice`
+//   fee          → raw field is `fee`
+//   holdFee      → raw field is `holdFee` (funding cost)
+// All of these must be read from p.info (raw MEXC API response).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type MexcRawInfo = Record<string, any>
+
 function mapMexcPositionHistory(
   p: ccxt.Position,
   since?: number,
   until?: number,
 ): Trade | null {
-  const closedAt = p.lastUpdateTimestamp
-    ? new Date(p.lastUpdateTimestamp).toISOString()
-    : (p.datetime ?? new Date().toISOString())
-  const openedAt = p.datetime ?? closedAt
+  const info = (p.info ?? {}) as MexcRawInfo
+
+  // p.datetime = iso(updateTime) = close time (CCXT maps updateTime → timestamp/datetime)
+  const closedAt = p.datetime ?? new Date().toISOString()
+  const openedAt = closedAt  // CCXT does not expose createTime in unified format
   const closedTs = new Date(closedAt).getTime()
 
   if (since && closedTs < since) return null
   if (until && closedTs > until) return null
 
-  const entryPrice = Number(p.entryPrice ?? 0)
-  const exitPrice  = Number(p.lastPrice ?? p.markPrice ?? p.entryPrice ?? 0)
-  const quantity   = Math.abs(Number(p.contracts ?? 0))
-  const pnl        = Number(p.realizedPnl ?? 0)
+  const entryPrice = Number(p.entryPrice ?? info.openAvgPrice ?? 0)
+  // closeAvgPrice = actual fill price when position was closed
+  const exitPrice  = Number(info.closeAvgPrice ?? p.lastPrice ?? p.markPrice ?? entryPrice)
+  const quantity   = Math.abs(Number(p.contracts ?? info.closeVol ?? 0))
+  // realised = realized PnL; p.realizedPnl is always undefined from CCXT for MEXC
+  const pnl        = Number(p.realizedPnl ?? info.realised ?? 0)
+  const fee        = Number(info.fee ?? 0)
+  const fundingCost = Number(info.holdFee ?? 0)
   const notional   = entryPrice * quantity
 
   return {
-    id:           String(p.id ?? Math.random()),
+    id:           String(p.id ?? info.positionId ?? Math.random()),
     subAccountId: 'mexc',
     exchangeId:   'mexc' as ExchangeId,
     symbol:       p.symbol ?? 'UNKNOWN',
@@ -43,11 +58,11 @@ function mapMexcPositionHistory(
     quantity,
     pnl,
     pnlPercent:   notional > 0 ? (pnl / notional) * 100 : 0,
-    fee:          0,
-    durationMin:  Math.round((new Date(closedAt).getTime() - new Date(openedAt).getTime()) / 60000),
-    leverage:     Number(p.leverage ?? 1),
-    fundingCost:  0,
-    isOvernight:  new Date(openedAt).getUTCDate() !== new Date(closedAt).getUTCDate(),
+    fee,
+    durationMin:  0,  // createTime not available in unified CCXT format for MEXC
+    leverage:     Number(p.leverage ?? info.leverage ?? 1),
+    fundingCost,
+    isOvernight:  false,
     openedAt,
     closedAt,
   }
