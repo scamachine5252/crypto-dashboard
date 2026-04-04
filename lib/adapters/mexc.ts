@@ -39,7 +39,8 @@ function mapMexcPositionHistory(
   const entryPrice = Number(p.entryPrice ?? info.openAvgPrice ?? 0)
   // closeAvgPrice = actual fill price when position was closed
   const exitPrice  = Number(info.closeAvgPrice ?? p.lastPrice ?? p.markPrice ?? entryPrice)
-  const quantity   = Math.abs(Number(p.contracts ?? info.closeVol ?? 0))
+  // For closed positions holdVol=0 (nothing held), so use closeVol (actual closed volume)
+  const quantity   = Math.abs(Number(info.closeVol ?? p.contracts ?? 0))
   // realised = realized PnL; p.realizedPnl is always undefined from CCXT for MEXC
   const pnl        = Number(p.realizedPnl ?? info.realised ?? 0)
   const fee        = Number(info.fee ?? 0)
