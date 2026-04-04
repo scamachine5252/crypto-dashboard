@@ -29,9 +29,13 @@ function mapMexcPositionHistory(
 ): Trade | null {
   const info = (p.info ?? {}) as MexcRawInfo
 
-  // p.datetime = iso(updateTime) = close time (CCXT maps updateTime → timestamp/datetime)
-  const closedAt = p.datetime ?? new Date().toISOString()
-  const openedAt = closedAt  // CCXT does not expose createTime in unified format
+  // info.updateTime = close timestamp (ms), info.createTime = open timestamp (ms)
+  const closedAt = info.updateTime
+    ? new Date(Number(info.updateTime)).toISOString()
+    : (p.datetime ?? new Date().toISOString())
+  const openedAt = info.createTime
+    ? new Date(Number(info.createTime)).toISOString()
+    : closedAt
   const closedTs = new Date(closedAt).getTime()
 
   if (since && closedTs < since) return null
@@ -63,10 +67,10 @@ function mapMexcPositionHistory(
     pnl,
     pnlPercent:   notional > 0 ? (pnl / notional) * 100 : 0,
     fee,
-    durationMin:  0,  // createTime not available in unified CCXT format for MEXC
+    durationMin:  Math.round((new Date(closedAt).getTime() - new Date(openedAt).getTime()) / 60000),
     leverage:     Number(p.leverage ?? info.leverage ?? 1),
     fundingCost,
-    isOvernight:  false,
+    isOvernight:  new Date(openedAt).getUTCDate() !== new Date(closedAt).getUTCDate(),
     openedAt,
     closedAt,
   }

@@ -224,7 +224,7 @@ describe('POST /api/sync/mexc/full', () => {
     expect(until - since).toBe(90 * 24 * 60 * 60 * 1000)
   })
 
-  it('deduplicates trades with same account_id/symbol/openedAt before upsert', async () => {
+  it('deduplicates trades with same account_id/symbol/openedAt/closedAt before upsert', async () => {
     mockSelectEqSingle.mockResolvedValue({
       data: { id: 'uuid-1', api_key: 'enc-key', api_secret: 'enc-sec' },
       error: null,

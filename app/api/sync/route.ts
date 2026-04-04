@@ -116,14 +116,14 @@ async function runSync(): Promise<NextResponse> {
         // the same key twice in one command
         const seen = new Set<string>()
         const tradesToInsert = allTrades.filter((t) => {
-          const key = `${t.account_id}|${t.symbol}|${t.opened_at}`
+          const key = `${t.account_id}|${t.symbol}|${t.opened_at}|${t.closed_at}`
           if (seen.has(key)) return false
           seen.add(key)
           return true
         })
         const { error: tradesError } = await supabaseAdmin
           .from('trades')
-          .upsert(tradesToInsert, { onConflict: 'account_id,symbol,opened_at' })
+          .upsert(tradesToInsert, { onConflict: 'account_id,symbol,opened_at,closed_at' })
         if (tradesError) {
           diag.tradesUpsertError = tradesError
           console.error('Trades upsert error:', JSON.stringify(tradesError))
