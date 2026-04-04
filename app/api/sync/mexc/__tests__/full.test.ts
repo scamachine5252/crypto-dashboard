@@ -221,7 +221,7 @@ describe('POST /api/sync/mexc/full', () => {
     expect(typeof since).toBe('number')
     expect(typeof until).toBe('number')
     expect(limit).toBe(1000)
-    expect(until - since).toBe(30 * 24 * 60 * 60 * 1000)
+    expect(until - since).toBe(90 * 24 * 60 * 60 * 1000)
   })
 
   it('deduplicates trades with same account_id/symbol/openedAt before upsert', async () => {

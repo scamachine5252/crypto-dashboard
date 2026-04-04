@@ -219,15 +219,40 @@ describe('MexcAdapter.getTrades()', () => {
     expect(trades).toHaveLength(0)
   })
 
-  it('passes since to fetchPositionsHistory', async () => {
+  it('does not pass since to fetchPositionsHistory (client-side filtering instead)', async () => {
     const { adapter, swapMock } = buildAdapter()
     const since = Date.now() - 86400000
     swapMock.fetchPositionsHistory.mockResolvedValue([])
 
     await adapter.getTrades('acc', { start: '', end: '' }, since)
     expect(swapMock.fetchPositionsHistory).toHaveBeenCalledWith(
-      undefined, since, expect.any(Number), expect.any(Object),
+      undefined, undefined, expect.any(Number), expect.any(Object),
     )
+  })
+
+  it('paginates via page_num until an empty page is returned', async () => {
+    const { adapter, swapMock } = buildAdapter()
+    const pos = makeCcxtPositionHistory()
+    // Page 1: full page (100), page 2: empty → stops
+    swapMock.fetchPositionsHistory
+      .mockResolvedValueOnce(Array(100).fill(pos))
+      .mockResolvedValueOnce([])
+
+    const trades = await adapter.getTrades('acc', { start: '', end: '' })
+    expect(swapMock.fetchPositionsHistory).toHaveBeenCalledTimes(2)
+    expect(swapMock.fetchPositionsHistory).toHaveBeenNthCalledWith(1, undefined, undefined, 100, { page_num: 1 })
+    expect(swapMock.fetchPositionsHistory).toHaveBeenNthCalledWith(2, undefined, undefined, 100, { page_num: 2 })
+    expect(trades).toHaveLength(100)
+  })
+
+  it('stops pagination when page is smaller than PAGE_SIZE', async () => {
+    const { adapter, swapMock } = buildAdapter()
+    const pos = makeCcxtPositionHistory()
+    swapMock.fetchPositionsHistory.mockResolvedValueOnce([pos, pos, pos]) // 3 < 100
+
+    const trades = await adapter.getTrades('acc', { start: '', end: '' })
+    expect(swapMock.fetchPositionsHistory).toHaveBeenCalledTimes(1)
+    expect(trades).toHaveLength(3)
   })
 })
 

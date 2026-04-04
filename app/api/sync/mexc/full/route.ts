@@ -5,8 +5,8 @@ import { decrypt } from '@/lib/crypto/decrypt'
 import { MexcAdapter } from '@/lib/adapters/mexc'
 import type { Trade, DateRange } from '@/lib/types'
 
-const CHUNK_DAYS   = 30
-const TOTAL_DAYS   = 180
+const CHUNK_DAYS   = 90
+const TOTAL_DAYS   = 90
 const TOTAL_CHUNKS = TOTAL_DAYS / CHUNK_DAYS
 
 export async function POST(req: NextRequest): Promise<NextResponse> {

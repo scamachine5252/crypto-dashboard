@@ -10,9 +10,9 @@ describe('GET /api/sync/mexc/chunks', () => {
 
     expect(res.status).toBe(200)
     const json = await res.json()
-    expect(json.totalChunks).toBe(6)
-    expect(json.chunkDays).toBe(30)
-    expect(json.totalDays).toBe(180)
+    expect(json.totalChunks).toBe(1)
+    expect(json.chunkDays).toBe(90)
+    expect(json.totalDays).toBe(90)
   })
 
   it('totalChunks * chunkDays === totalDays', async () => {

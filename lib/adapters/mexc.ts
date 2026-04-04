@@ -107,21 +107,34 @@ export class MexcAdapter implements ExchangeAdapter {
     _subAccountId: string,
     _dateRange: DateRange,
     since?: number,
-    limit?: number,
+    _limit?: number,
     until?: number,
   ): Promise<Trade[]> {
     // MEXC swap: fetchPositionsHistory does not require a symbol argument.
     // One closed position = one futures trade with realized PnL.
+    // Do NOT pass 'since' to CCXT — MEXC errors with code 6003 ("up to 90 days only")
+    // because CCXT internally sets end_time=now, making the range since→now exceed 90 days.
+    // Fetch all pages (MEXC max ~90 days) and filter client-side by chunk window.
     // Spot: skipped — fetchMyTrades requires symbol (separate future task).
-    // 30-day chunks stay within MEXC's 90-day query window limit.
-    const params: Record<string, unknown> = {}
-    if (until) params['end_time'] = until
+    const PAGE_SIZE = 100
+    const allPositions: ccxt.Position[] = []
+    let pageNum = 1
 
-    const positions = await this.swap
-      .fetchPositionsHistory(undefined, since, limit ?? 1000, params)
-      .catch(() => [] as ccxt.Position[])
+    while (true) {
+      const page = await this.swap
+        .fetchPositionsHistory(undefined, undefined, PAGE_SIZE, { page_num: pageNum })
+        .catch((err: Error) => {
+          console.error('[MEXC getTrades] fetchPositionsHistory page', pageNum, 'failed:', err?.message ?? err)
+          return [] as ccxt.Position[]
+        })
 
-    return positions
+      if (page.length === 0) break
+      allPositions.push(...page)
+      if (page.length < PAGE_SIZE) break
+      pageNum++
+    }
+
+    return allPositions
       .map((p) => mapMexcPositionHistory(p, since, until))
       .filter((t): t is Trade => t !== null)
   }
