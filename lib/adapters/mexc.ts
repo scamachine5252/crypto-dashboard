@@ -49,23 +49,13 @@ function mapMexcPositionHistory(
   const closeVol   = Math.abs(Number(info.closeVol ?? 0))
   const quantity   = closeVol * contractSize
   // realised = realized PnL; p.realizedPnl is always undefined from CCXT for MEXC
-  const pnl        = Number(p.realizedPnl ?? info.realised ?? 0)
-  const fee        = Number(info.fee ?? 0)
+  // closeProfitLoss = gross trade PnL (price movement only, before fee)
+  // realised        = net PnL (closeProfitLoss + fee, where fee is negative)
+  // fee             = trading commission already included in realised — shown separately
+  const pnl        = Number(info.closeProfitLoss ?? info.realised ?? p.realizedPnl ?? 0)
+  const fee        = Math.abs(Number(info.fee ?? 0))
   const fundingCost = Number(info.holdFee ?? 0)
   const notional   = entryPrice * quantity
-
-  // TEMP DIAG — remove after fee investigation
-  if (fee !== 0) {
-    console.log('[MEXC fee diag]', {
-      symbol: p.symbol,
-      'info.fee': info.fee,
-      'info.holdFee': info.holdFee,
-      'info.realised': info.realised,
-      'info.closeProfitLoss': info.closeProfitLoss,
-      fee,
-      pnl,
-    })
-  }
 
   return {
     id:           String(p.id ?? info.positionId ?? Math.random()),
