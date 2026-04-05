@@ -54,6 +54,19 @@ function mapMexcPositionHistory(
   const fundingCost = Number(info.holdFee ?? 0)
   const notional   = entryPrice * quantity
 
+  // TEMP DIAG — remove after fee investigation
+  if (fee !== 0) {
+    console.log('[MEXC fee diag]', {
+      symbol: p.symbol,
+      'info.fee': info.fee,
+      'info.holdFee': info.holdFee,
+      'info.realised': info.realised,
+      'info.closeProfitLoss': info.closeProfitLoss,
+      fee,
+      pnl,
+    })
+  }
+
   return {
     id:           String(p.id ?? info.positionId ?? Math.random()),
     subAccountId: 'mexc',
