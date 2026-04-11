@@ -657,7 +657,7 @@ export default function ApiSettingsPage() {
                     const statusLabel =
                       account.status === 'connected' ? 'Connected'
                       : account.status === 'error'   ? 'Error'
-                      : 'Not configured'
+                      : '—'
 
                     return (
                       <tr
@@ -705,7 +705,7 @@ export default function ApiSettingsPage() {
                                 borderRadius: 2,
                               }}
                             >
-                              {account.instrument}
+                              {account.instrument === 'portfolio_margin' ? 'PM' : account.instrument}
                             </span>
                           ) : (
                             <span style={{ color: 'var(--border-medium)' }}>—</span>
