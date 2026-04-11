@@ -14,12 +14,24 @@ interface AccountRow {
   account_name: string
   instrument: string
   account_id_memo?: string
-  last_full_sync_at?: string | null        // populated after a full Binance history scan
-  full_sync_failed_count?: number | null   // symbols that failed during last full scan
+  last_full_sync_at?: string | null           // updated by Full History scan
+  last_incremental_sync_at?: string | null    // updated by Cron / Sync Now
+  full_sync_failed_count?: number | null      // symbols that failed during last full scan
   status: 'connected' | 'error' | 'not_configured'
   passphrase?: never       // never returned by API
   api_key?: never          // never returned by API
   api_secret?: never       // never returned by API
+}
+
+function formatSyncDate(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  const dd  = String(d.getDate()).padStart(2, '0')
+  const mm  = String(d.getMonth() + 1).padStart(2, '0')
+  const yy  = String(d.getFullYear()).slice(2)
+  const hh  = String(d.getHours()).padStart(2, '0')
+  const min = String(d.getMinutes()).padStart(2, '0')
+  return `${dd}.${mm}.${yy} ${hh}:${min}`
 }
 
 // Maps raw error messages / network failures to short user-facing labels
@@ -620,7 +632,7 @@ export default function ApiSettingsPage() {
               <table className="w-full text-xs">
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                    {['Account Name', 'Fund', 'Exchange', 'Instrument', 'Status', 'Last Synced', 'Actions'].map((col) => (
+                    {['Account Name', 'Fund', 'Exchange', 'Instrument', 'Status', 'Last Sync', 'Last Full History', 'Actions'].map((col) => (
                       <th
                         key={col}
                         className="px-5 py-2.5 text-left font-medium whitespace-nowrap"
@@ -708,8 +720,13 @@ export default function ApiSettingsPage() {
                           </span>
                         </td>
 
-                        {/* Last Synced */}
-                        <td style={{ padding: '8px 12px', fontSize: 11, color: 'var(--text-secondary)' }}>
+                        {/* Last Sync (incremental / Cron) */}
+                        <td style={{ padding: '8px 20px', fontSize: 11, color: 'var(--text-secondary)', fontFamily: 'var(--font-geist-mono)', whiteSpace: 'nowrap' }}>
+                          {formatSyncDate(account.last_incremental_sync_at)}
+                        </td>
+
+                        {/* Last Full History */}
+                        <td style={{ padding: '8px 20px', fontSize: 11, color: 'var(--text-secondary)' }}>
                           {(() => {
                             const state = scanState[account.id]
                             if (state && !state.completed && !state.isError) {
@@ -745,8 +762,8 @@ export default function ApiSettingsPage() {
                               const failedCount = account.full_sync_failed_count ?? 0
                               return (
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                                  <span style={{ color: 'var(--text-muted)' }}>
-                                    {new Date(account.last_full_sync_at).toLocaleDateString()}
+                                  <span style={{ fontFamily: 'var(--font-geist-mono)', whiteSpace: 'nowrap' }}>
+                                    {formatSyncDate(account.last_full_sync_at)}
                                   </span>
                                   {failedCount > 0 && (
                                     <span style={{ color: 'var(--accent-gold)', fontSize: 10 }}>
@@ -756,7 +773,7 @@ export default function ApiSettingsPage() {
                                 </div>
                               )
                             }
-                            return <span style={{ color: 'var(--text-muted)', opacity: 0.5 }}>Never</span>
+                            return <span style={{ color: 'var(--text-muted)', opacity: 0.5 }}>—</span>
                           })()}
                         </td>
 

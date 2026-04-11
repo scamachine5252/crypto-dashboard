@@ -132,6 +132,11 @@ async function runSync(): Promise<NextResponse> {
         }
       }
 
+      await supabaseAdmin
+        .from('accounts')
+        .update({ last_incremental_sync_at: new Date().toISOString() })
+        .eq('id', row.id)
+
       diag.status = 'ok'
       synced++
       syncedAccounts.push(row.account_name)

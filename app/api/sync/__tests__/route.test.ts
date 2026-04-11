@@ -78,10 +78,11 @@ describe('POST /api/sync', () => {
     mockAccountsSelect = jest.fn().mockResolvedValue({ data: [account1, account2], error: null })
     mockBalancesInsert = jest.fn().mockResolvedValue({ error: null })
     mockTradesUpsert   = jest.fn().mockResolvedValue({ error: null })
+    const mockAccountsUpdate = jest.fn().mockReturnValue({ eq: jest.fn().mockResolvedValue({ error: null }) })
 
     const { supabaseAdmin } = require('@/lib/supabase/server')
     ;(supabaseAdmin.from as jest.Mock).mockImplementation((table: string) => {
-      if (table === 'accounts') return { select: mockAccountsSelect }
+      if (table === 'accounts') return { select: mockAccountsSelect, update: mockAccountsUpdate }
       if (table === 'balances') return { insert: mockBalancesInsert }
       if (table === 'trades')   return { upsert: mockTradesUpsert }
       return {}
