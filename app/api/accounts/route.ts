@@ -18,6 +18,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
 
   const { fund, exchange, account_name, api_key, api_secret, passphrase, account_id_memo } = body as Record<string, string | undefined>
+  const initial_aum = (body as Record<string, unknown>).initial_aum as number | null | undefined
 
   // Required field validation
   if (!fund || !exchange || !account_name || !api_key || !api_secret) {
@@ -53,6 +54,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
   if (account_id_memo) {
     insertPayload.account_id_memo = account_id_memo
+  }
+  if (initial_aum != null && initial_aum > 0) {
+    insertPayload.initial_aum = initial_aum
   }
 
   const { data, error } = await supabaseAdmin

@@ -14,6 +14,7 @@ interface AccountRow {
   account_name: string
   instrument: string
   account_id_memo?: string
+  initial_aum?: number | null
   last_full_sync_at?: string | null           // updated by Full History scan
   last_incremental_sync_at?: string | null    // updated by Cron / Sync Now
   full_sync_failed_count?: number | null      // symbols that failed during last full scan
@@ -68,6 +69,7 @@ const EMPTY_FORM = {
   apiSecret:     '',
   passphrase:    '',
   accountIdMemo: '',
+  initialAum:    '',
 }
 
 // Shared input style
@@ -351,6 +353,7 @@ export default function ApiSettingsPage() {
       api_secret:    form.apiSecret,
       ...(form.passphrase    ? { passphrase:       form.passphrase }          : {}),
       ...(form.accountIdMemo ? { account_id_memo:  form.accountIdMemo.trim() } : {}),
+      ...(form.initialAum && Number(form.initialAum) > 0 ? { initial_aum: Number(form.initialAum) } : {}),
     }
 
     try {
@@ -387,6 +390,7 @@ export default function ApiSettingsPage() {
       apiSecret:     '',
       passphrase:    '',
       accountIdMemo: account.account_id_memo ?? '',
+      initialAum:    account.initial_aum != null ? String(account.initial_aum) : '',
     })
     setEditingId(account.id)
   }, [])
@@ -535,6 +539,16 @@ export default function ApiSettingsPage() {
             value={form.accountIdMemo}
             onChange={(v) => patch('accountIdMemo', v)}
             placeholder="Optional"
+            optional
+          />
+
+          {/* Initial AUM */}
+          <FieldInput
+            label="Initial AUM (USDT)"
+            type="number"
+            value={form.initialAum}
+            onChange={(v) => patch('initialAum', v)}
+            placeholder="e.g. 500000"
             optional
           />
 

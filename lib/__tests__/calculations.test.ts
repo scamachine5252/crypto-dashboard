@@ -75,12 +75,18 @@ describe('calculateMetrics', () => {
     expect(result.profitFactor).toBe(0)
   })
 
-  it('calculates positive Sharpe for consistently profitable days (above risk-free)', () => {
-    // Need daily PnL > INITIAL_CAPITAL * (0.05/252) ≈ 1350 to beat risk-free
-    const daily = makeDaily(252, 5000)
+  it('calculates positive Sharpe for consistently profitable days', () => {
+    // Alternating 6000/4000 gives mean=5000, std=1000, Sharpe = (mean/std)*sqrt(252) > 0.
+    // Constant PnL would give std=0 and an undefined (0) Sharpe, so variance is required.
+    let cum = 0
+    const daily: DailyPnLEntry[] = Array.from({ length: 252 }, (_, i) => {
+      const pnl = i % 2 === 0 ? 6000 : 4000
+      cum += pnl
+      return { date: new Date(Date.UTC(2025, 0, 1 + i)).toISOString().slice(0, 10), pnl, cumulativePnl: cum, exchangeId: 'binance' as const, subAccountId: 'sub-a' }
+    })
     const result = calculateMetrics(daily, [])
     expect(result.sharpeRatio).toBeGreaterThan(0)
-    expect(result.totalPnl).toBe(1260000)
+    expect(result.totalPnl).toBe(1260000)  // 126×6000 + 126×4000
   })
 
   it('calculates negative-leaning metrics for losing days', () => {

@@ -1,12 +1,14 @@
 import type { DailyPnLEntry, Metrics, Trade, ChartDataPoint, Timeframe, Period, DateRange, HistoryFilterState, MetricTimeSeries, FuturesMetrics, ComparisonRow, AccountSnapshot, ExtendedMetrics, AccountMetricsRow } from './types'
 import { EXCHANGES, INITIAL_USDT_BALANCE, INITIAL_TOKEN_BALANCE, ACCOUNT_PRIMARY_TOKEN, getAllDailyPnL, getAllTrades, getAllTransactions } from './mock-data'
 
-const INITIAL_CAPITAL = 6_800_000
-
 // ---------------------------------------------------------------------------
 // Metrics
 // ---------------------------------------------------------------------------
-export function calculateMetrics(daily: DailyPnLEntry[], trades: Trade[]): Metrics {
+// initialCapital: starting portfolio equity in USDT.
+//   - When > 0: used for Max DD %, CAGR, and Annual Yield.
+//   - When 0 (unknown): Max DD % computed relative to period peak; CAGR and
+//     Annual Yield return 0 (caller should treat as "N/A").
+export function calculateMetrics(daily: DailyPnLEntry[], trades: Trade[], initialCapital = 0): Metrics {
   if (daily.length === 0) {
     return {
       sharpeRatio: 0, sortinoRatio: 0, maxDrawdown: 0, maxDrawdownPct: 0,
@@ -24,8 +26,10 @@ export function calculateMetrics(daily: DailyPnLEntry[], trades: Trade[]): Metri
   const sortedDates = [...byDate.keys()].sort()
   const dailyPnls = sortedDates.map((d) => byDate.get(d)!)
 
-  // Daily returns (% of initial capital)
-  const returns = dailyPnls.map((p) => p / INITIAL_CAPITAL)
+  // Sharpe / Sortino: computed on raw daily PnL; IC cancels in mean/std ratio.
+  // IC = 1 when unknown — scale is irrelevant for a unitless ratio.
+  const ic = initialCapital > 0 ? initialCapital : 1
+  const returns = dailyPnls.map((p) => p / ic)
   const n = returns.length
   const mean = returns.reduce((a, b) => a + b, 0) / n
   const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / n
@@ -34,33 +38,47 @@ export function calculateMetrics(daily: DailyPnLEntry[], trades: Trade[]): Metri
   // Sharpe (no risk-free rate — irrelevant for crypto futures)
   const sharpeRatio = std > 0 ? (mean / std) * Math.sqrt(252) : 0
 
-  // Sortino
+  // Sortino: downside deviation uses n (all periods) per CFA definition
   const downReturns = returns.filter((r) => r < 0)
-  const downsideVar =
-    downReturns.length > 0
-      ? downReturns.reduce((s, r) => s + r ** 2, 0) / n
-      : 0
+  const downsideVar = downReturns.length > 0
+    ? downReturns.reduce((s, r) => s + r ** 2, 0) / n
+    : 0
   const downsideStd = Math.sqrt(downsideVar)
   const sortinoRatio = downsideStd > 0 ? (mean / downsideStd) * Math.sqrt(252) : 0
 
   // Max drawdown
-  let peak = INITIAL_CAPITAL
-  let equity = INITIAL_CAPITAL
+  // When IC is known: start equity at IC so DD% is relative to real equity.
+  // When IC is unknown: start at 0 so DD% is relative to period peak PnL.
+  let peak = initialCapital > 0 ? initialCapital : 0
+  let equity = initialCapital > 0 ? initialCapital : 0
   let maxDrawdown = 0
   let maxDrawdownPct = 0
   for (const d of sortedDates) {
     equity += byDate.get(d)!
     if (equity > peak) peak = equity
     const dd = peak - equity
-    const ddPct = (dd / peak) * 100
+    const ddPct = peak > 0 ? (dd / peak) * 100 : 0
     if (dd > maxDrawdown) { maxDrawdown = dd; maxDrawdownPct = ddPct }
   }
 
   // Total PnL & CAGR
   const totalPnl = dailyPnls.reduce((a, b) => a + b, 0)
-  const years = sortedDates.length / 365
-  const cagr = years > 0 ? (Math.pow((INITIAL_CAPITAL + totalPnl) / INITIAL_CAPITAL, 1 / years) - 1) * 100 : 0
-  const annualYield = years > 0 ? (totalPnl / INITIAL_CAPITAL / years) * 100 : 0
+
+  // years: calendar span from first to last trading date (not count of trade days).
+  // Avoids overstating CAGR/annualYield when trading is intermittent.
+  const firstDate = sortedDates[0]
+  const lastDate  = sortedDates[sortedDates.length - 1]
+  const years = sortedDates.length >= 2
+    ? (new Date(lastDate + 'T00:00:00Z').getTime() - new Date(firstDate + 'T00:00:00Z').getTime()) / (365 * 24 * 3600 * 1000)
+    : 1 / 365  // single-day fallback
+
+  // CAGR and Annual Yield require a known IC; return 0 when unknown (treat as N/A).
+  const cagr = (initialCapital > 0 && years > 0)
+    ? (Math.pow((initialCapital + totalPnl) / initialCapital, 1 / years) - 1) * 100
+    : 0
+  const annualYield = (initialCapital > 0 && years > 0)
+    ? (totalPnl / initialCapital / years) * 100
+    : 0
 
   // Trade metrics
   const wins = trades.filter((t) => t.pnl > 0)
@@ -727,7 +745,7 @@ export function buildPerAccountMetrics(
           t.closedAt.slice(0, 10) <= dateRange.end,
       )
 
-      const base = calculateMetrics(daily, trades)
+      const base = calculateMetrics(daily, trades, INITIAL_USDT_BALANCE[sa.id] ?? 0)
       const fut  = calculateFuturesMetrics(trades)
 
       const totalNotional = trades.reduce((s, t) => s + t.quantity * t.entryPrice, 0)

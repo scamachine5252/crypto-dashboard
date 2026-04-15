@@ -17,12 +17,13 @@ type DbAccount = {
   api_key: string
   api_secret: string
   passphrase: string | null
+  instrument: string | null
 }
 
 export async function GET(): Promise<NextResponse> {
   const { data: accounts, error: accErr } = await supabaseAdmin
     .from('accounts')
-    .select('id, account_name, exchange, fund, api_key, api_secret, passphrase')
+    .select('id, account_name, exchange, fund, api_key, api_secret, passphrase, instrument')
 
   if (accErr) return NextResponse.json({ error: accErr.message }, { status: 500 })
   if (!accounts || accounts.length === 0) {
@@ -47,9 +48,11 @@ export async function GET(): Promise<NextResponse> {
         case 'bybit':
           rawPositions = await new BybitAdapter({ apiKey, apiSecret }).fetchPositions()
           break
-        case 'binance':
-          rawPositions = await new BinanceAdapter({ apiKey, apiSecret }).fetchPositions()
+        case 'binance': {
+          const isPortfolioMargin = acc.instrument === 'portfolio_margin'
+          rawPositions = await new BinanceAdapter({ apiKey, apiSecret, ...(isPortfolioMargin ? { portfolioMargin: true } : {}) }).fetchPositions()
           break
+        }
         case 'okx': {
           const passphrase = acc.passphrase ? decrypt(acc.passphrase) : ''
           rawPositions = await new OkxAdapter({ apiKey, apiSecret, passphrase }).fetchPositions()

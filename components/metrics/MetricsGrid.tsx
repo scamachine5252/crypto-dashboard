@@ -3,11 +3,17 @@ import MetricCard from './MetricCard'
 import { formatMoney, formatPercent, formatRatio } from '@/lib/utils'
 import {
   TrendingUp, TrendingDown, BarChart2, Target, Percent,
-  Award, Zap, Scale, DollarSign, Receipt, Activity,
+  Award, Zap, Scale, DollarSign, Activity,
 } from 'lucide-react'
 
+// Allow cagr/annualYield to be null (IC unknown) so the grid can show "—"
+type GridMetrics = Omit<Metrics, 'cagr' | 'annualYield'> & {
+  cagr: number | null
+  annualYield: number | null
+}
+
 interface MetricsGridProps {
-  metrics: Metrics
+  metrics: GridMetrics
   totalNotional?: number
 }
 
@@ -51,17 +57,17 @@ export default function MetricsGrid({ metrics, totalNotional = 0 }: MetricsGridP
     },
     {
       label: 'CAGR',
-      value: `${metrics.cagr.toFixed(1)}%`,
-      trend: metrics.cagr > 0 ? 'positive' : 'negative',
+      value: metrics.cagr == null ? '—' : `${metrics.cagr.toFixed(1)}%`,
+      trend: (metrics.cagr ?? 0) > 0 ? 'positive' : 'negative',
       icon: <TrendingUp className="w-3.5 h-3.5" />,
-      description: 'Compound annual growth rate',
+      description: metrics.cagr == null ? 'Set Initial AUM to compute' : 'Compound annual growth rate',
     },
     {
       label: 'Annual Yield',
-      value: formatPercent(metrics.annualYield),
-      trend: metrics.annualYield > 0 ? 'positive' : 'negative',
+      value: metrics.annualYield == null ? '—' : formatPercent(metrics.annualYield),
+      trend: (metrics.annualYield ?? 0) > 0 ? 'positive' : 'negative',
       icon: <Percent className="w-3.5 h-3.5" />,
-      description: 'Simple annualized return',
+      description: metrics.annualYield == null ? 'Set Initial AUM to compute' : 'Simple annualized return',
     },
     {
       label: 'Risk / Reward',

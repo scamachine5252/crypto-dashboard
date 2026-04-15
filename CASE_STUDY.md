@@ -303,6 +303,22 @@ These mistakes all follow the same pattern: a new enum value or feature was adde
 
 ---
 
+### D26 · Binance PM open positions never fetched — `instrument` not read in positions route
+
+**What happened.** `/api/positions/route.ts` constructed `BinanceAdapter` without reading the `instrument` column from DB:
+```typescript
+rawPositions = await new BinanceAdapter({ apiKey, apiSecret }).fetchPositions()
+```
+`isPortfolioMargin` defaulted to `false` → standard FAPI endpoint was called → returned 0 positions for a PM account. Open Positions section showed "No positions" despite active SOL trades visible in History.
+
+**Root cause.** The sync route (`app/api/sync/route.ts`) correctly reads `instrument` and passes `portfolioMargin: true`. The positions route was written independently without copying this pattern. No cross-route checklist existed.
+
+**Fix.** Added `instrument` to the SELECT query and replicated the same `isPortfolioMargin` logic from sync route.
+
+**Prevention rule.** Any new API route that constructs an exchange adapter must read `instrument` from DB and handle `portfolio_margin` explicitly. Before shipping: `grep -r "new BinanceAdapter" app/api` and verify every call site passes `portfolioMargin` when appropriate.
+
+---
+
 ### F · TypeScript errors not caught before claiming "done"
 
 **What happened.** Multiple times: a type was updated but an object literal that constructed that type was not updated, causing a compile error discovered only later.
@@ -330,6 +346,7 @@ Use this before every PR or "done" declaration:
 - [ ] API validation array updated
 - [ ] **DB migration written and run**
 - [ ] All sync routes grep-checked for the old enum pattern
+- [ ] Every route that constructs an exchange adapter reads `instrument` from DB and passes `portfolioMargin` for Binance PM
 
 ### API Routes
 - [ ] Worst-case execution time estimated — must be < 5s on Vercel

@@ -214,8 +214,8 @@ export interface DashboardMetrics {
   sortinoRatio: number
   maxDrawdown: number
   maxDrawdownPct: number
-  cagr: number
-  annualYield: number
+  cagr: number | null        // null when initial capital is unknown
+  annualYield: number | null // null when initial capital is unknown
   riskRewardRatio: number
   totalVolume: number
 }

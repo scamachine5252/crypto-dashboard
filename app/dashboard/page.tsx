@@ -115,20 +115,21 @@ export default function DashboardPage() {
   }, [])
 
   const metrics = useMemo(() => ({
-    sharpeRatio:   realMetrics?.sharpeRatio   ?? 0,
-    sortinoRatio:  realMetrics?.sortinoRatio  ?? 0,
-    maxDrawdown:   realMetrics?.maxDrawdown   ?? 0,
+    sharpeRatio:   realMetrics?.sharpeRatio    ?? 0,
+    sortinoRatio:  realMetrics?.sortinoRatio   ?? 0,
+    maxDrawdown:   realMetrics?.maxDrawdown    ?? 0,
     maxDrawdownPct: realMetrics?.maxDrawdownPct ?? 0,
-    winRate:       realMetrics?.winRate       ?? 0,
-    profitFactor:  realMetrics?.profitFactor  ?? 0,
-    cagr:          realMetrics?.cagr          ?? 0,
-    annualYield:   realMetrics?.annualYield   ?? 0,
+    winRate:       realMetrics?.winRate        ?? 0,
+    profitFactor:  realMetrics?.profitFactor   ?? 0,
+    // null = IC unknown — MetricsGrid will show "—"
+    cagr:          realMetrics?.cagr          ?? null,
+    annualYield:   realMetrics?.annualYield   ?? null,
     riskReward:    realMetrics?.riskRewardRatio ?? 0,
-    averageWin:    realMetrics?.avgWin        ?? 0,
-    averageLoss:   realMetrics?.avgLoss       ?? 0,
-    totalFees:     realMetrics?.totalFees     ?? 0,
-    totalPnl:      realMetrics?.totalPnl      ?? 0,
-    totalTrades:   realMetrics?.totalTrades   ?? 0,
+    averageWin:    realMetrics?.avgWin         ?? 0,
+    averageLoss:   realMetrics?.avgLoss        ?? 0,
+    totalFees:     realMetrics?.totalFees      ?? 0,
+    totalPnl:      realMetrics?.totalPnl       ?? 0,
+    totalTrades:   realMetrics?.totalTrades    ?? 0,
   }), [realMetrics])
 
   const chartData = useMemo(() => {

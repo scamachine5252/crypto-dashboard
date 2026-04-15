@@ -15,9 +15,23 @@ function formatDay(dateStr: string): string {
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const since = Number(req.nextUrl.searchParams.get('since') ?? '0')
 
-  const { data: accounts, error: accError } = await supabaseAdmin
+  // Fetch accounts; initial_aum column added in migration 014.
+  // If the column is absent (pre-migration) we retry without it and treat IC as unknown.
+  // eslint-disable-next-line prefer-const
+  let { data: accounts, error: accError } = await supabaseAdmin
     .from('accounts')
-    .select('id, fund, exchange, account_name')
+    .select('id, fund, exchange, account_name, initial_aum')
+
+  if (accError?.message.includes('initial_aum')) {
+    const retry = await supabaseAdmin
+      .from('accounts')
+      .select('id, fund, exchange, account_name')
+    accError = retry.error
+    accounts = retry.data as typeof accounts
+    if (accounts) {
+      (accounts as Array<Record<string, unknown>>).forEach((a) => { a.initial_aum = null })
+    }
+  }
 
   if (accError) return NextResponse.json({ error: accError.message }, { status: 500 })
   if (!accounts || accounts.length === 0) {
@@ -121,12 +135,23 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     : 0
   const sharpeRatio = stdD > 0 ? (meanD / stdD) * Math.sqrt(252) : 0
 
+  // Sortino: downside deviation uses N (total periods) as denominator, not just
+  // the count of negative days — standard CFA/MAR definition.
   const negVals = dailyValues.filter((v) => v < 0)
-  const downsideDev = negVals.length > 0
-    ? Math.sqrt(negVals.reduce((s, v) => s + v * v, 0) / negVals.length)
+  const downsideDev = N > 0
+    ? Math.sqrt(negVals.reduce((s, v) => s + v * v, 0) / N)
     : 0
   const sortinoRatio = downsideDev > 0 ? (meanD / downsideDev) * Math.sqrt(252) : 0
 
+  const totalCurrentBalance = Object.values(latestBalance).reduce((s, v) => s + v, 0)
+
+  // Sum of initial_aum across all accounts; used as equity base for DD% and IC.
+  const totalInitialAum = (accounts as Array<{ initial_aum?: number | null }>)
+    .reduce((s, a) => s + (Number(a.initial_aum ?? 0)), 0)
+
+  // Max drawdown: start equity at 0 (relative to period start).
+  // maxDrawdownPct divides by the best available equity base so it stays
+  // meaningful even when the portfolio never posts positive PnL in the period.
   let peak = 0, cum = 0, maxDrawdown = 0, maxDrawdownPct = 0
   for (const v of dailyValues) {
     cum += v
@@ -134,15 +159,38 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const dd = peak - cum
     if (dd > maxDrawdown) {
       maxDrawdown = dd
-      maxDrawdownPct = peak > 0 ? (dd / peak) * 100 : 0
+      // Prefer totalInitialAum → totalCurrentBalance → period peak cumulative PnL.
+      const equityBase = totalInitialAum > 0
+        ? totalInitialAum + peak
+        : totalCurrentBalance > 0
+          ? totalCurrentBalance
+          : peak
+      maxDrawdownPct = equityBase > 0 ? (dd / equityBase) * 100 : 0
     }
   }
 
-  const totalCurrentBalance = Object.values(latestBalance).reduce((s, v) => s + v, 0)
-  const initialCapital = Math.max(totalCurrentBalance - totalPnl, 1)
-  const years = N / 252
-  const cagr = years > 0 ? (Math.pow(Math.max((initialCapital + totalPnl) / initialCapital, 0.0001), 1 / years) - 1) * 100 : 0
-  const annualYield = years > 0 ? ((totalPnl / initialCapital) / years) * 100 : 0
+  // Initial capital: prefer sum of per-account initial_aum (user-supplied);
+  // fall back to estimating from current balance minus period PnL.
+  const initialCapital = totalInitialAum > 0
+    ? totalInitialAum
+    : Math.max(totalCurrentBalance - totalPnl, 0)
+
+  // years: use calendar span (first → last trade date) not count of trading days.
+  // This avoids overstating CAGR/annualYield when trading is intermittent.
+  const firstDay = sortedDays[0]
+  const lastDay  = sortedDays[sortedDays.length - 1]
+  const years = sortedDays.length >= 2
+    ? (new Date(lastDay + 'T00:00:00Z').getTime() - new Date(firstDay + 'T00:00:00Z').getTime()) / (365 * 24 * 3600 * 1000)
+    : N / 252  // single-day fallback
+
+  // CAGR and Annual Yield require a known initial capital.
+  // Return null when IC is 0 (unknown) so the UI can show "—" instead of 0.
+  const cagr: number | null = (initialCapital > 0 && years > 0)
+    ? (Math.pow(Math.max((initialCapital + totalPnl) / initialCapital, 0.0001), 1 / years) - 1) * 100
+    : null
+  const annualYield: number | null = (initialCapital > 0 && years > 0)
+    ? (totalPnl / initialCapital / years) * 100
+    : null
 
   const totalVolume = tradeRows.reduce((s, t) => s + Number(t.quantity ?? 0) * Number(t.entry_price ?? 0), 0)
 

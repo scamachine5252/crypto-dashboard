@@ -41,12 +41,15 @@ function mapMexcPositionHistory(
   if (since && closedTs < since) return null
   if (until && closedTs > until) return null
 
+  // Skip still-open positions — closeVol=0 means position has not been closed yet.
+  // fetchPositionsHistory returns both open and closed positions; we only want closed ones.
+  const closeVol = Math.abs(Number(info.closeVol ?? 0))
+  if (closeVol === 0) return null
+
   const entryPrice = Number(p.entryPrice ?? info.openAvgPrice ?? 0)
   // closeAvgPrice = actual fill price when position was closed
   const exitPrice  = Number(info.closeAvgPrice ?? p.lastPrice ?? p.markPrice ?? entryPrice)
-  // closeVol = number of contracts closed; multiply by contractSize to get base-currency amount
-  // (holdVol=0 for closed positions, so we must use closeVol not p.contracts)
-  const closeVol   = Math.abs(Number(info.closeVol ?? 0))
+  // closeVol already computed above for the guard; multiply by contractSize for base-currency amount
   const quantity   = closeVol * contractSize
   // realised = realized PnL; p.realizedPnl is always undefined from CCXT for MEXC
   // closeProfitLoss = gross trade PnL (price movement only, before fee)
@@ -172,8 +175,7 @@ export class MexcAdapter implements ExchangeAdapter {
   async fetchPositions(): Promise<RawPosition[]> {
     try {
       const raw = await this.swap.fetchPositions()
-      return raw
-        .filter((p) => p.contracts && Math.abs(Number(p.contracts)) > 0)
+      return raw.filter((p) => p.contracts && Math.abs(Number(p.contracts)) > 0)
         .map((p): RawPosition => {
           const symbol = p.symbol ?? ''
           return {
