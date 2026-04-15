@@ -6,7 +6,10 @@
  * Run:  npx ts-node --project tsconfig.json scripts/compare-sharpe.ts
  */
 
+import * as dotenv from 'dotenv'
 import { createClient } from '@supabase/supabase-js'
+
+dotenv.config({ path: '.env.local' })
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
