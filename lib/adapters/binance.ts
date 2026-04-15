@@ -125,11 +125,15 @@ export class BinanceAdapter implements ExchangeAdapter {
     return raw
       .filter((p) => Math.abs(Number(p.positionAmt)) > 0)
       .map((p): RawPosition => {
-        const posAmt  = Number(p.positionAmt)
-        const side    = posAmt >= 0 ? 'long' : 'short'
-        const size    = Math.abs(posAmt)
-        const notional = Math.abs(Number(p.notionalValue ?? 0))
-        const margin   = Number(p.initialMargin ?? 0)
+        const posAmt   = Number(p.positionAmt)
+        const side     = posAmt >= 0 ? 'long' : 'short'
+        const size     = Math.abs(posAmt)
+        const mPrice   = Number(p.markPrice ?? 0)
+        // notionalValue can be "0" for cross-margin PM accounts; fall back to positionAmt × markPrice
+        const notional = Math.abs(Number(p.notionalValue ?? 0)) || Math.abs(posAmt * mPrice)
+        // initialMargin is NOT in /papi/v1/um/positionRisk — derive from leverage instead
+        const leverage = Math.max(Number(p.leverage ?? 1), 1)
+        const margin   = notional > 0 ? notional / leverage : 0
         // Derive symbol: BTCUSDT → BTC/USDT, BTCUSD_PERP → BTC/USD
         const rawSym = p.symbol
         let displaySymbol: string
@@ -148,7 +152,7 @@ export class BinanceAdapter implements ExchangeAdapter {
           markPrice: Number(p.markPrice ?? 0),
           notional,
           unrealizedPnl: Number(p.unRealizedProfit ?? 0),
-          leverage: margin > 0 ? notional / margin : Number(p.leverage ?? 1),
+          leverage,
           margin,
           liquidationPrice: Number(p.liquidationPrice ?? 0),
           openTimestamp: 0,  // PAPI positionRisk has updateTime (last modified), not openTime

@@ -345,6 +345,38 @@ export default function ApiSettingsPage() {
     if (!form.exchangeId || !form.accountName.trim()) return
     const resolvedFund = form.fund === '__new__' ? newFundDraft.trim() || 'Cicada Foundation' : form.fund
 
+    // ── EDIT (PATCH) ──────────────────────────────────────────────────────────
+    if (editingId) {
+      const patch: Record<string, unknown> = {
+        fund:         resolvedFund,
+        account_name: form.accountName.trim(),
+      }
+      if (form.apiKey.trim())        patch.api_key       = form.apiKey.trim()
+      if (form.apiSecret.trim())     patch.api_secret    = form.apiSecret.trim()
+      if (form.passphrase.trim())    patch.passphrase    = form.passphrase.trim()
+      if (form.accountIdMemo.trim()) patch.account_id_memo = form.accountIdMemo.trim()
+      patch.initial_aum = form.initialAum && Number(form.initialAum) > 0 ? Number(form.initialAum) : null
+
+      try {
+        const res = await fetch(`/api/accounts/${editingId}`, {
+          method:  'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify(patch),
+        })
+        if (!res.ok) {
+          const json = await res.json() as { error?: string }
+          setError(friendlyError(new Error(json.error ?? 'Failed to update account')))
+          return
+        }
+        resetForm()
+        await fetchAccounts()
+      } catch (err) {
+        setError(friendlyError(err))
+      }
+      return
+    }
+
+    // ── CREATE (POST) ─────────────────────────────────────────────────────────
     const payload = {
       fund:          resolvedFund,
       exchange:      form.exchangeId.toLowerCase(),
@@ -376,7 +408,7 @@ export default function ApiSettingsPage() {
     } catch (err) {
       setError(friendlyError(err))
     }
-  }, [form, newFundDraft, resetForm, fetchAccounts, handleFullScan])
+  }, [editingId, form, newFundDraft, resetForm, fetchAccounts, handleFullScan])
 
   // ---------------------------------------------------------------------------
   // Edit — populate form (no API call needed, data is already loaded)
