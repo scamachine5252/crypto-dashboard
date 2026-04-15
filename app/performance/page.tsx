@@ -34,6 +34,7 @@ interface AccountInfo {
   accountName: string
   exchange: string
   fund: string
+  initialCapital: number | null
 }
 
 interface ColDef {
@@ -42,6 +43,7 @@ interface ColDef {
   format: (v: number) => string
   lowerBetter?: boolean
   sum?: boolean
+  requiresIC?: boolean
 }
 
 const SPOT_L2_TABS: { id: SpotL2; label: string }[] = [
@@ -61,12 +63,12 @@ const FUTURES_L2_TABS: { id: FuturesL2; label: string }[] = [
 const SPOT_COLS: Record<SpotL2, ColDef[]> = {
   overview: [
     { key: 'totalPnl',       label: 'Total PnL',      format: (v) => formatMoney(v),        sum: true },
-    { key: 'annualYield',    label: 'Annual Yield',    format: (v) => `${v.toFixed(1)}%` },
+    { key: 'annualYield',    label: 'Annual Yield',    format: (v) => `${v.toFixed(1)}%`,  requiresIC: true },
     { key: 'sharpeRatio',    label: 'Sharpe',          format: (v) => v.toFixed(2) },
     { key: 'winRate',        label: 'Win Rate',        format: (v) => `${v.toFixed(1)}%` },
     { key: 'profitFactor',   label: 'Profit Factor',   format: (v) => v.toFixed(2) },
     { key: 'riskReward',     label: 'R/R',             format: (v) => v.toFixed(2) },
-    { key: 'maxDrawdownPct', label: 'Max DD %',        format: (v) => `${v.toFixed(1)}%`,   lowerBetter: true },
+    { key: 'maxDrawdownPct', label: 'Max DD %',        format: (v) => `${v.toFixed(1)}%`,   lowerBetter: true, requiresIC: true },
     { key: 'recoveryFactor', label: 'Recovery Factor', format: (v) => v.toFixed(2) },
     { key: 'totalFees',      label: 'Total Fees',      format: (v) => formatMoney(v),        lowerBetter: true, sum: true },
     { key: 'feesAsPctOfPnl', label: 'Fees % PnL',     format: (v) => `${v.toFixed(1)}%`,   lowerBetter: true },
@@ -74,8 +76,8 @@ const SPOT_COLS: Record<SpotL2, ColDef[]> = {
   ],
   returns: [
     { key: 'totalPnl',     label: 'Total PnL',    format: (v) => formatMoney(v),        sum: true },
-    { key: 'annualYield',  label: 'Annual Yield',  format: (v) => `${v.toFixed(1)}%` },
-    { key: 'cagr',         label: 'CAGR',          format: (v) => `${v.toFixed(1)}%` },
+    { key: 'annualYield',  label: 'Annual Yield',  format: (v) => `${v.toFixed(1)}%`,  requiresIC: true },
+    { key: 'cagr',         label: 'CAGR',          format: (v) => `${v.toFixed(1)}%`,  requiresIC: true },
     { key: 'sharpeRatio',  label: 'Sharpe',        format: (v) => v.toFixed(2) },
     { key: 'sortinoRatio', label: 'Sortino',       format: (v) => v.toFixed(2) },
     { key: 'winRate',      label: 'Win Rate',      format: (v) => `${v.toFixed(1)}%` },
@@ -106,14 +108,14 @@ const FUTURES_COLS: Record<FuturesL2, ColDef[]> = {
     { key: 'riskReward',     label: 'R/R',             format: (v) => v.toFixed(2) },
     { key: 'longShortRatio', label: 'Long/Short',      format: (v) => `${v.toFixed(1)}%` },
     { key: 'sharpeRatio',    label: 'Sharpe',          format: (v) => v.toFixed(2) },
-    { key: 'maxDrawdownPct', label: 'Max DD %',        format: (v) => `${v.toFixed(1)}%`,   lowerBetter: true },
+    { key: 'maxDrawdownPct', label: 'Max DD %',        format: (v) => `${v.toFixed(1)}%`,   lowerBetter: true, requiresIC: true },
     { key: 'totalFees',      label: 'Total Fees',      format: (v) => formatMoney(v),        lowerBetter: true, sum: true },
     { key: 'totalNotional',  label: 'Volume',          format: (v) => formatMoney(v),        sum: true },
   ],
   returns: [
     { key: 'totalPnl',       label: 'Total PnL',      format: (v) => formatMoney(v),        sum: true },
-    { key: 'annualYield',    label: 'Annual Yield',    format: (v) => `${v.toFixed(1)}%` },
-    { key: 'cagr',           label: 'CAGR',            format: (v) => `${v.toFixed(1)}%` },
+    { key: 'annualYield',    label: 'Annual Yield',    format: (v) => `${v.toFixed(1)}%`,  requiresIC: true },
+    { key: 'cagr',           label: 'CAGR',            format: (v) => `${v.toFixed(1)}%`,  requiresIC: true },
     { key: 'sharpeRatio',    label: 'Sharpe',          format: (v) => v.toFixed(2) },
     { key: 'sortinoRatio',   label: 'Sortino',         format: (v) => v.toFixed(2) },
     { key: 'winRate',        label: 'Win Rate',        format: (v) => `${v.toFixed(1)}%` },
@@ -125,7 +127,7 @@ const FUTURES_COLS: Record<FuturesL2, ColDef[]> = {
   ],
   'risk-exposure': [
     { key: 'maxDrawdown',    label: 'Max DD $',        format: (v) => formatMoney(v),      lowerBetter: true, sum: true },
-    { key: 'maxDrawdownPct', label: 'Max DD %',        format: (v) => `${v.toFixed(1)}%`, lowerBetter: true },
+    { key: 'maxDrawdownPct', label: 'Max DD %',        format: (v) => `${v.toFixed(1)}%`, lowerBetter: true, requiresIC: true },
     { key: 'riskReward',     label: 'R/R',             format: (v) => v.toFixed(2) },
     { key: 'recoveryFactor', label: 'Recovery Factor', format: (v) => v.toFixed(2) },
     { key: 'longShortRatio', label: 'Long/Short',      format: (v) => `${v.toFixed(1)}%` },
@@ -243,7 +245,7 @@ export default function PerformancePage() {
     fetch(`/api/performance?since=${since}&until=${until}`)
       .then((r) => r.json())
       .then((data: {
-        accounts?: { id: string; account_name: string; exchange: string; fund: string }[]
+        accounts?: { id: string; account_name: string; exchange: string; fund: string; initialCapital?: number | null }[]
         trades?: Trade[]
       }) => {
         const accs: AccountInfo[] = (data.accounts ?? []).map((a) => ({
@@ -251,6 +253,7 @@ export default function PerformancePage() {
           accountName: a.account_name,
           exchange: a.exchange,
           fund: a.fund,
+          initialCapital: a.initialCapital ?? null,
         }))
         setAccounts(accs)
         setTrades(data.trades ?? [])
@@ -269,7 +272,7 @@ export default function PerformancePage() {
         const ps = data.positions ?? []
         setPositions(ps)
         const accs: AccountInfo[] = (data.accounts ?? []).map((a) => ({
-          id: a.id, accountName: a.accountName, exchange: a.exchange, fund: a.fund,
+          id: a.id, accountName: a.accountName, exchange: a.exchange, fund: a.fund, initialCapital: null,
         }))
         setPosAccounts(accs)
         setPosActiveIds(new Set(accs.map((a) => a.id)))
@@ -404,7 +407,8 @@ export default function PerformancePage() {
           cum += dayMap[date]
           return { date, pnl: dayMap[date], cumulativePnl: cum, exchangeId: a.exchange as ExchangeId, subAccountId: a.id }
         })
-        const base = calculateMetrics(accDaily, accTrades)
+        const ic   = a.initialCapital ?? 0
+        const base = calculateMetrics(accDaily, accTrades, ic)
         const fut  = calculateFuturesMetrics(accTrades)
         const totalNotional = accTrades.reduce((s, t) => s + t.quantity * t.entryPrice, 0)
         const extended: ExtendedMetrics = {
@@ -435,6 +439,7 @@ export default function PerformancePage() {
             liquidationsCount: 0,
             rolloverCosts:     0,
             openInterest:      0,
+            initialCapital:    a.initialCapital,  // null = IC unknown
           },
         }
       })
@@ -738,25 +743,27 @@ export default function PerformancePage() {
                         </span>
                       </td>
                       {cols.map((col, ci) => {
+                        const icUnknown = col.requiresIC && row.extras.initialCapital == null
                         const val     = getValue(row, col.key, l1)
                         const { best, worst } = colExtremes[ci]
-                        const isBest  = rows.length > 1 && val === best  && val !== 0
-                        const isWorst = rows.length > 1 && val === worst && best !== worst && val !== 0
+                        const isBest  = !icUnknown && rows.length > 1 && val === best  && val !== 0
+                        const isWorst = !icUnknown && rows.length > 1 && val === worst && best !== worst && val !== 0
                         return (
                           <td
                             key={col.key}
                             className="px-4 py-2.5 text-right tabular-nums whitespace-nowrap"
                             style={{
                               fontFamily: 'var(--font-geist-mono)',
-                              color:      isBest  ? 'var(--accent-profit)'
-                                        : isWorst ? 'var(--accent-loss)'
+                              color:      icUnknown ? 'var(--text-muted)'
+                                        : isBest   ? 'var(--accent-profit)'
+                                        : isWorst  ? 'var(--accent-loss)'
                                         : 'var(--text-secondary)',
                               background: isBest  ? 'rgba(0,255,136,0.06)'
                                         : isWorst ? 'rgba(255,59,59,0.06)'
                                         : 'transparent',
                             }}
                           >
-                            {col.format(val)}
+                            {icUnknown ? '—' : col.format(val)}
                           </td>
                         )
                       })}

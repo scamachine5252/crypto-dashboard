@@ -45,16 +45,17 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     .select('account_id, usdt_balance, recorded_at')
     .in('account_id', accountIds)
     .is('token_symbol', null)
-    .order('recorded_at', { ascending: false })
+    .order('recorded_at', { ascending: true })
 
   if (balError) return NextResponse.json({ error: balError.message }, { status: 500 })
 
-  // Latest balance per account
+  type BalRow = { account_id: string; usdt_balance: number; recorded_at: string }
+  const bals = (balances ?? []) as BalRow[]
+
+  // Latest balance per account (last entry since sorted ascending)
   const latestBalance: Record<string, number> = {}
-  for (const row of ((balances ?? []) as Array<{ account_id: string; usdt_balance: number; recorded_at: string }>)) {
-    if (!(row.account_id in latestBalance)) {
-      latestBalance[row.account_id] = Number(row.usdt_balance)
-    }
+  for (const row of bals) {
+    latestBalance[row.account_id] = Number(row.usdt_balance)
   }
 
   const sinceDate = new Date(since).toISOString()
@@ -145,13 +146,38 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const totalCurrentBalance = Object.values(latestBalance).reduce((s, v) => s + v, 0)
 
-  // Sum of initial_aum across all accounts; used as equity base for DD% and IC.
-  const totalInitialAum = (accounts as Array<{ initial_aum?: number | null }>)
-    .reduce((s, a) => s + (Number(a.initial_aum ?? 0)), 0)
+  // ---------------------------------------------------------------------------
+  // Initial capital per account — same 3-priority logic as /api/performance
+  // Priority 1: last balance snapshot at or before period start
+  // Priority 2: first balance snapshot within period
+  // Priority 3: manually entered initial_aum
+  // Falls back to null (IC unknown → IC-dependent metrics show "—")
+  // ---------------------------------------------------------------------------
+  const icMap: Record<string, number | null> = {}
+  for (const acc of (accounts as Array<{ id: string; initial_aum?: number | null }>)) {
+    const accBals = bals.filter((b) => b.account_id === acc.id)
+
+    const beforePeriod = accBals.filter((b) => b.recorded_at <= sinceDate)
+    if (beforePeriod.length > 0) {
+      icMap[acc.id] = Number(beforePeriod[beforePeriod.length - 1].usdt_balance)
+      continue
+    }
+    const inPeriod = accBals.filter((b) => b.recorded_at > sinceDate)
+    if (inPeriod.length > 0) {
+      icMap[acc.id] = Number(inPeriod[0].usdt_balance)
+      continue
+    }
+    const aum = Number(acc.initial_aum ?? 0)
+    icMap[acc.id] = aum > 0 ? aum : null
+  }
+
+  const icValues = Object.values(icMap).filter((v) => v !== null) as number[]
+  const totalInitialCapital: number | null = icValues.length > 0 ? icValues.reduce((a, b) => a + b, 0) : null
+  const initialCapital = totalInitialCapital ?? 0
 
   // Max drawdown: start equity at 0 (relative to period start).
-  // maxDrawdownPct divides by the best available equity base so it stays
-  // meaningful even when the portfolio never posts positive PnL in the period.
+  // maxDrawdownPct divides by IC + peak when IC is known; falls back to
+  // totalCurrentBalance → period peak (absolute last resort).
   let peak = 0, cum = 0, maxDrawdown = 0, maxDrawdownPct = 0
   for (const v of dailyValues) {
     cum += v
@@ -159,21 +185,14 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const dd = peak - cum
     if (dd > maxDrawdown) {
       maxDrawdown = dd
-      // Prefer totalInitialAum → totalCurrentBalance → period peak cumulative PnL.
-      const equityBase = totalInitialAum > 0
-        ? totalInitialAum + peak
+      const equityBase = totalInitialCapital !== null
+        ? totalInitialCapital + peak
         : totalCurrentBalance > 0
           ? totalCurrentBalance
           : peak
       maxDrawdownPct = equityBase > 0 ? (dd / equityBase) * 100 : 0
     }
   }
-
-  // Initial capital: prefer sum of per-account initial_aum (user-supplied);
-  // fall back to estimating from current balance minus period PnL.
-  const initialCapital = totalInitialAum > 0
-    ? totalInitialAum
-    : Math.max(totalCurrentBalance - totalPnl, 0)
 
   // years: use calendar span (first → last trade date) not count of trading days.
   // This avoids overstating CAGR/annualYield when trading is intermittent.

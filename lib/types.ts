@@ -98,7 +98,7 @@ export interface AccountMetricsRow {
   accountName: string
   metrics: ExtendedMetrics
   futuresMetrics: FuturesMetrics
-  extras: Record<string, number>  // derived values: avgFundingPerTrade, avgHoldingMin, etc.
+  extras: Record<string, number | null>  // derived values: avgFundingPerTrade, avgHoldingMin, initialCapital, etc.
 }
 
 export interface FilterState {
