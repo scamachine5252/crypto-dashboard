@@ -205,19 +205,51 @@ export class BinanceAdapter implements ExchangeAdapter {
     return { usdt, tokens }
   }
 
-  // Portfolio Margin: unified balance via PAPI.
-  // CCXT auto-routes fetchBalance() to GET /papi/v1/balance when portfolioMargin=true.
+  // Portfolio Margin: total equity per asset via PAPI /papi/v1/balance.
+  // CCXT normalises raw.total from umWalletBalance only — this misses funds held in
+  // crossMarginAsset (accounts trading cross-margin PM positions, e.g. Continum).
+  // We parse raw.info directly:
+  //   equity = totalWalletBalance + umUnrealizedPNL + cmUnrealizedPNL
+  // Universal across all PM configurations (UM-only, cross-margin, mixed).
   private async fetchPmBalance(): Promise<BalanceResult> {
     const raw = await this.exchange.fetchBalance()
+    type PapiEntry = {
+      asset: string
+      totalWalletBalance: string
+      umUnrealizedPNL?: string
+      cmUnrealizedPNL?: string
+    }
+    const info = (raw.info ?? []) as unknown as PapiEntry[]
+
+    if (Array.isArray(info) && info.length > 0) {
+      let usdt = 0
+      const tokens: Record<string, number> = {}
+      for (const entry of info) {
+        const asset   = String(entry.asset ?? '')
+        const wallet  = parseFloat(String(entry.totalWalletBalance ?? '0')) || 0
+        const umPnl   = parseFloat(String(entry.umUnrealizedPNL    ?? '0')) || 0
+        const cmPnl   = parseFloat(String(entry.cmUnrealizedPNL    ?? '0')) || 0
+        const equity  = wallet + umPnl + cmPnl
+        if (!Number.isFinite(equity) || equity <= 0) continue
+        if (asset === 'USDT') {
+          usdt = equity
+        } else if (asset) {
+          tokens[asset] = equity
+        }
+      }
+      return { usdt, tokens }
+    }
+
+    // Fallback: CCXT normalised total (UM-only accounts if raw.info unavailable)
     const total = (raw.total ?? {}) as unknown as Record<string, number>
     let usdt = total['USDT'] ?? 0
+    if (!Number.isFinite(usdt)) usdt = 0
     const tokens: Record<string, number> = {}
     for (const [symbol, amount] of Object.entries(total)) {
       if (symbol !== 'USDT' && typeof amount === 'number' && amount > 0) {
         tokens[symbol] = amount
       }
     }
-    if (!Number.isFinite(usdt)) usdt = 0
     return { usdt, tokens }
   }
 

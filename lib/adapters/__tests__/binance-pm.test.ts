@@ -215,3 +215,135 @@ describe('BinanceAdapter.getTrades() quick sync', () => {
     expect(trades).toHaveLength(1)
   })
 })
+
+// ─── fetchBalance() — PM equity ───────────────────────────────────────────────
+
+function mockFetchBalance(
+  ex: Record<string, unknown>,
+  info: Array<{
+    asset: string
+    totalWalletBalance: string
+    umUnrealizedPNL?: string
+    cmUnrealizedPNL?: string
+    [k: string]: unknown
+  }>,
+) {
+  ex.fetchBalance = jest.fn().mockResolvedValue({ total: {}, free: {}, info })
+}
+
+describe('BinanceAdapter.fetchBalance() PM equity', () => {
+  it('cross-margin account (Continum): reads totalWalletBalance when umWalletBalance=0', async () => {
+    // Continum: all 50k USDT in crossMarginAsset, umWalletBalance=0
+    // Current bug: CCXT raw.total['USDT']=0 → fetchPmBalance returns 0
+    const { adapter } = buildAdapter(true)
+    const ex = (adapter as any).exchange as Record<string, unknown>
+    mockFetchBalance(ex, [
+      {
+        asset: 'USDT',
+        totalWalletBalance: '50000.0',
+        crossMarginAsset: '50000.0',
+        crossMarginFree: '50000.0',
+        umWalletBalance: '0.0',
+        umUnrealizedPNL: '0.0',
+        cmUnrealizedPNL: '0.0',
+      },
+    ])
+
+    const result = await adapter.fetchBalance()
+
+    expect(result.usdt).toBeCloseTo(50000, 2)
+    expect(result.tokens).toEqual({})
+  })
+
+  it('UM-only account (DFI): totalWalletBalance + umUnrealizedPNL', async () => {
+    // DFI: umWalletBalance=2506, umUnrealizedPNL=843 → equity=3349
+    const { adapter } = buildAdapter(true)
+    const ex = (adapter as any).exchange as Record<string, unknown>
+    mockFetchBalance(ex, [
+      {
+        asset: 'USDT',
+        totalWalletBalance: '2506.30037185',
+        umWalletBalance: '2506.30037185',
+        umUnrealizedPNL: '843.41233207',
+        cmUnrealizedPNL: '0.0',
+      },
+    ])
+
+    const result = await adapter.fetchBalance()
+
+    expect(result.usdt).toBeCloseTo(3349.71, 1)
+  })
+
+  it('mixed account (Filimonov): totalWalletBalance includes both UM and cross portions', async () => {
+    // Filimonov: umWalletBalance=21937, crossMarginAsset=6494, totalWalletBalance=28432
+    // Current bug: CCXT only returns umWalletBalance+unrealized=22036, missing cross portion
+    const { adapter } = buildAdapter(true)
+    const ex = (adapter as any).exchange as Record<string, unknown>
+    mockFetchBalance(ex, [
+      {
+        asset: 'USDT',
+        totalWalletBalance: '28432.58087007',
+        crossMarginAsset: '6494.85143073',
+        umWalletBalance: '21937.72943934',
+        umUnrealizedPNL: '98.46490639',
+        cmUnrealizedPNL: '0.0',
+      },
+    ])
+
+    const result = await adapter.fetchBalance()
+
+    // equity = 28432.58 + 98.46 = 28531.04
+    expect(result.usdt).toBeCloseTo(28531.04, 1)
+  })
+
+  it('non-USDT collateral assets (BTC) appear in tokens', async () => {
+    const { adapter } = buildAdapter(true)
+    const ex = (adapter as any).exchange as Record<string, unknown>
+    mockFetchBalance(ex, [
+      {
+        asset: 'BTC',
+        totalWalletBalance: '1.49510178',
+        umUnrealizedPNL: '0.0',
+        cmUnrealizedPNL: '0.0',
+      },
+      {
+        asset: 'USDT',
+        totalWalletBalance: '1000.0',
+        umUnrealizedPNL: '0.0',
+        cmUnrealizedPNL: '0.0',
+      },
+    ])
+
+    const result = await adapter.fetchBalance()
+
+    expect(result.usdt).toBeCloseTo(1000, 2)
+    expect(result.tokens['BTC']).toBeCloseTo(1.495, 3)
+  })
+
+  it('zero-equity assets are excluded', async () => {
+    const { adapter } = buildAdapter(true)
+    const ex = (adapter as any).exchange as Record<string, unknown>
+    mockFetchBalance(ex, [
+      { asset: 'USDT', totalWalletBalance: '5000.0', umUnrealizedPNL: '0.0', cmUnrealizedPNL: '0.0' },
+      { asset: 'BNB',  totalWalletBalance: '0.0',    umUnrealizedPNL: '0.0', cmUnrealizedPNL: '0.0' },
+    ])
+
+    const result = await adapter.fetchBalance()
+
+    expect(result.tokens['BNB']).toBeUndefined()
+  })
+
+  it('falls back to raw.total when info array is empty', async () => {
+    const { adapter } = buildAdapter(true)
+    const ex = (adapter as any).exchange as Record<string, unknown>
+    ex.fetchBalance = jest.fn().mockResolvedValue({
+      total: { USDT: 9999 },
+      free:  { USDT: 9999 },
+      info:  [],
+    })
+
+    const result = await adapter.fetchBalance()
+
+    expect(result.usdt).toBe(9999)
+  })
+})

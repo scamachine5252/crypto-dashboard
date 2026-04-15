@@ -153,6 +153,7 @@ function getValue(row: AccountMetricsRow, key: string, l1: L1Tab): number {
 
 function cellHighlight(key: string, val: number): { color: string; bg: string } {
   const none = { color: 'var(--text-secondary)', bg: 'transparent' }
+  if (val === 0) return none
   if (key === 'totalPnl' && val < 0)
     return { color: 'var(--accent-loss)', bg: 'rgba(255,59,59,0.06)' }
   if (key === 'winRate') {
