@@ -50,7 +50,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const seen = new Set<string>()
     const rows = trades
       .filter((t: Trade) => {
-        const key = `${accountId}|${t.symbol}|${t.openedAt}`
+        const key = `${accountId}|${t.symbol}|${t.openedAt}|${t.closedAt}`
         if (seen.has(key)) return false
         seen.add(key)
         return true
@@ -73,7 +73,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
     const { error: upsertError } = await supabaseAdmin
       .from('trades')
-      .upsert(rows, { onConflict: 'account_id,symbol,opened_at' })
+      .upsert(rows, { onConflict: 'account_id,symbol,opened_at,closed_at' })
 
     if (upsertError) {
       console.error('Trades upsert error:', JSON.stringify(upsertError))
