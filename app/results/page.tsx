@@ -89,6 +89,12 @@ export default function ResultsPage() {
     setCustomRange(range)
   }
 
+  const dateRange = useMemo<DateRange>(() => {
+    if (period === 'manual' && customRange) return customRange
+    const today = new Date().toISOString().slice(0, 10)
+    return resolveDateRange(period, today)
+  }, [period, customRange])
+
   const toggleId = (id: string) => {
     setCheckedIds((prev) => {
       const next = new Set(prev)
@@ -188,7 +194,7 @@ export default function ResultsPage() {
         style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-subtle)' }}
       >
         <span className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>Period</span>
-        <PeriodSelector value={period} customRange={customRange} onChange={handlePeriodChange} />
+        <PeriodSelector value={period} customRange={customRange} defaultRange={dateRange} onChange={handlePeriodChange} />
       </div>
 
       <main className="flex-1 pb-6">

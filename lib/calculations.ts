@@ -24,21 +24,40 @@ export function calculateMetrics(daily: DailyPnLEntry[], trades: Trade[], initia
     byDate.set(e.date, (byDate.get(e.date) ?? 0) + e.pnl)
   }
   const sortedDates = [...byDate.keys()].sort()
-  const dailyPnls = sortedDates.map((d) => byDate.get(d)!)
 
-  // Sharpe / Sortino: computed on raw daily PnL; IC cancels in mean/std ratio.
-  // IC = 1 when unknown — scale is irrelevant for a unitless ratio.
+  // Fill every calendar day between first and last trade with 0 for non-trading days.
+  // This prevents Sharpe/Sortino from being inflated for low-frequency accounts where
+  // idle days (PnL = 0) would otherwise be excluded from the sample.
+  const calendarPnls: number[] = []
+  if (sortedDates.length >= 2) {
+    const cursor = new Date(sortedDates[0] + 'T00:00:00Z')
+    const endMs  = new Date(sortedDates[sortedDates.length - 1] + 'T00:00:00Z').getTime()
+    while (cursor.getTime() <= endMs) {
+      const key = cursor.toISOString().slice(0, 10)
+      calendarPnls.push(byDate.get(key) ?? 0)
+      cursor.setUTCDate(cursor.getUTCDate() + 1)
+    }
+  } else {
+    // Single trading day — no calendar filling needed
+    calendarPnls.push(...sortedDates.map((d) => byDate.get(d)!))
+  }
+
+  // Sharpe / Sortino: computed on calendar-filled daily PnL.
+  // IC cancels in mean/std ratio — scale is irrelevant for a unitless ratio.
+  // Uses sample variance ÷(n-1) per industry standard.
   const ic = initialCapital > 0 ? initialCapital : 1
-  const returns = dailyPnls.map((p) => p / ic)
+  const returns = calendarPnls.map((p) => p / ic)
   const n = returns.length
   const mean = returns.reduce((a, b) => a + b, 0) / n
-  const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / n
+  // Sample variance ÷(n-1): unbiased estimator, material for sparse accounts
+  const variance = n > 1 ? returns.reduce((s, r) => s + (r - mean) ** 2, 0) / (n - 1) : 0
   const std = Math.sqrt(variance)
 
   // Sharpe (no risk-free rate — irrelevant for crypto futures)
   const sharpeRatio = std > 0 ? (mean / std) * Math.sqrt(252) : 0
 
-  // Sortino: downside deviation uses n (all periods) per CFA definition
+  // Sortino: downside deviation denominator = n (all calendar periods), not just loss days.
+  // This is the standard CFA/Sortino definition.
   const downReturns = returns.filter((r) => r < 0)
   const downsideVar = downReturns.length > 0
     ? downReturns.reduce((s, r) => s + r ** 2, 0) / n
@@ -62,7 +81,7 @@ export function calculateMetrics(daily: DailyPnLEntry[], trades: Trade[], initia
   }
 
   // Total PnL & CAGR
-  const totalPnl = dailyPnls.reduce((a, b) => a + b, 0)
+  const totalPnl = calendarPnls.reduce((a: number, b: number) => a + b, 0)
 
   // years: calendar span from first to last trading date (not count of trade days).
   // Avoids overstating CAGR/annualYield when trading is intermittent.

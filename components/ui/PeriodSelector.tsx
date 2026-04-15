@@ -6,6 +6,8 @@ import type { Period, DateRange } from '@/lib/types'
 interface PeriodSelectorProps {
   value: Period
   customRange?: DateRange
+  /** Resolved date range for the current period — used to seed Manual inputs on first click */
+  defaultRange?: DateRange
   onChange: (period: Period, customRange?: DateRange) => void
 }
 
@@ -17,15 +19,20 @@ const PERIODS: { value: Period; label: string }[] = [
   { value: 'manual', label: 'Manual' },
 ]
 
-export default function PeriodSelector({ value, customRange, onChange }: PeriodSelectorProps) {
+export default function PeriodSelector({ value, customRange, defaultRange, onChange }: PeriodSelectorProps) {
   const today = new Date().toISOString().slice(0, 10)
   const oneYearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
-  const [manualStart, setManualStart] = useState(customRange?.start ?? oneYearAgo)
-  const [manualEnd,   setManualEnd]   = useState(customRange?.end   ?? today)
+  const [manualStart, setManualStart] = useState(customRange?.start ?? defaultRange?.start ?? oneYearAgo)
+  const [manualEnd,   setManualEnd]   = useState(customRange?.end   ?? defaultRange?.end   ?? today)
 
   const handlePeriodClick = (period: Period) => {
     if (period === 'manual') {
-      onChange('manual', { start: manualStart, end: manualEnd })
+      // Seed from previous custom range or from the current period's resolved range
+      const start = customRange?.start ?? defaultRange?.start ?? manualStart
+      const end   = customRange?.end   ?? defaultRange?.end   ?? manualEnd
+      setManualStart(start)
+      setManualEnd(end)
+      onChange('manual', { start, end })
     } else {
       onChange(period)
     }

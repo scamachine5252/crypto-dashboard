@@ -65,7 +65,7 @@ const SPOT_COLS: Record<SpotL2, ColDef[]> = {
     { key: 'totalPnl',       label: 'Total PnL',      format: (v) => formatMoney(v),        sum: true },
     { key: 'annualYield',    label: 'Annual Yield',    format: (v) => `${v.toFixed(1)}%`,  requiresIC: true },
     { key: 'sharpeRatio',    label: 'Sharpe',          format: (v) => v.toFixed(2) },
-    { key: 'winRate',        label: 'Win Rate',        format: (v) => `${v.toFixed(1)}%` },
+    { key: 'winRate',        label: 'Win Rate',        format: (v) => `${v.toFixed(0)}%` },
     { key: 'profitFactor',   label: 'Profit Factor',   format: (v) => v.toFixed(2) },
     { key: 'riskReward',     label: 'R/R',             format: (v) => v.toFixed(2) },
     { key: 'maxDrawdownPct', label: 'Max DD %',        format: (v) => `${v.toFixed(1)}%`,   lowerBetter: true, requiresIC: true },
@@ -80,7 +80,7 @@ const SPOT_COLS: Record<SpotL2, ColDef[]> = {
     { key: 'cagr',         label: 'CAGR',          format: (v) => `${v.toFixed(1)}%`,  requiresIC: true },
     { key: 'sharpeRatio',  label: 'Sharpe',        format: (v) => v.toFixed(2) },
     { key: 'sortinoRatio', label: 'Sortino',       format: (v) => v.toFixed(2) },
-    { key: 'winRate',      label: 'Win Rate',      format: (v) => `${v.toFixed(1)}%` },
+    { key: 'winRate',      label: 'Win Rate',      format: (v) => `${v.toFixed(0)}%` },
     { key: 'profitFactor', label: 'Profit Factor', format: (v) => v.toFixed(2) },
     { key: 'riskReward',   label: 'R/R',           format: (v) => v.toFixed(2) },
     { key: 'averageWin',   label: 'Avg Win',       format: (v) => formatMoney(v) },
@@ -102,9 +102,9 @@ const SPOT_COLS: Record<SpotL2, ColDef[]> = {
 const FUTURES_COLS: Record<FuturesL2, ColDef[]> = {
   overview: [
     { key: 'totalPnl',       label: 'Total PnL',      format: (v) => formatMoney(v),        sum: true },
-    { key: 'avgTradePnl',    label: 'Avg Trade PnL',  format: (v) => formatMoney(v) },
+    { key: 'avgTradePnl',    label: 'Avg Trade PnL',  format: (v) => formatMoney(v, true, 2) },
     { key: 'totalTrades',    label: 'Trades',          format: (v) => v.toFixed(0),          sum: true },
-    { key: 'winRate',        label: 'Win Rate',        format: (v) => `${v.toFixed(1)}%` },
+    { key: 'winRate',        label: 'Win Rate',        format: (v) => `${v.toFixed(0)}%` },
     { key: 'riskReward',     label: 'R/R',             format: (v) => v.toFixed(2) },
     { key: 'longShortRatio', label: 'Long/Short',      format: (v) => `${v.toFixed(1)}%` },
     { key: 'sharpeRatio',    label: 'Sharpe',          format: (v) => v.toFixed(2) },
@@ -118,7 +118,7 @@ const FUTURES_COLS: Record<FuturesL2, ColDef[]> = {
     { key: 'cagr',           label: 'CAGR',            format: (v) => `${v.toFixed(1)}%`,  requiresIC: true },
     { key: 'sharpeRatio',    label: 'Sharpe',          format: (v) => v.toFixed(2) },
     { key: 'sortinoRatio',   label: 'Sortino',         format: (v) => v.toFixed(2) },
-    { key: 'winRate',        label: 'Win Rate',        format: (v) => `${v.toFixed(1)}%` },
+    { key: 'winRate',        label: 'Win Rate',        format: (v) => `${v.toFixed(0)}%` },
     { key: 'profitFactor',   label: 'Profit Factor',   format: (v) => v.toFixed(2) },
     { key: 'riskReward',     label: 'R/R',             format: (v) => v.toFixed(2) },
     { key: 'averageWin',     label: 'Avg Win',         format: (v) => formatMoney(v) },
@@ -151,12 +151,19 @@ function getValue(row: AccountMetricsRow, key: string, l1: L1Tab): number {
   return (row.metrics as unknown as Record<string, number>)[key] ?? 0
 }
 
-function extremes(rows: AccountMetricsRow[], key: string, l1: L1Tab, lowerBetter = false) {
-  if (rows.length < 2) return { best: NaN, worst: NaN }
-  const vals = rows.map((r) => getValue(r, key, l1))
-  return lowerBetter
-    ? { best: Math.min(...vals), worst: Math.max(...vals) }
-    : { best: Math.max(...vals), worst: Math.min(...vals) }
+function cellHighlight(key: string, val: number): { color: string; bg: string } {
+  const none = { color: 'var(--text-secondary)', bg: 'transparent' }
+  if (key === 'totalPnl' && val < 0)
+    return { color: 'var(--accent-loss)', bg: 'rgba(255,59,59,0.06)' }
+  if (key === 'winRate') {
+    if (val > 65) return { color: 'var(--accent-profit)', bg: 'rgba(0,255,136,0.06)' }
+    if (val < 35) return { color: 'var(--accent-loss)',   bg: 'rgba(255,59,59,0.06)' }
+  }
+  if (key === 'sharpeRatio') {
+    if (val > 2) return { color: 'var(--accent-profit)', bg: 'rgba(0,255,136,0.06)' }
+    if (val < 1) return { color: 'var(--accent-loss)',   bg: 'rgba(255,59,59,0.06)' }
+  }
+  return none
 }
 
 function formatHoldingTime(openTimestamp: number): string {
@@ -454,11 +461,6 @@ export default function PerformancePage() {
   const l2Tabs    = l1 === 'spot' ? SPOT_L2_TABS : FUTURES_L2_TABS
   const currentL2 = l1 === 'spot' ? spotL2 : futuresL2
 
-  const colExtremes = useMemo(
-    () => cols.map((col) => extremes(rows, col.key, l1, col.lowerBetter)),
-    [cols, rows, l1],
-  )
-
   const totalsRow = useMemo(() => {
     const activeRows = rows.filter((r) => r.metrics.totalTrades > 0)
     if (activeRows.length === 0) return null
@@ -550,7 +552,7 @@ export default function PerformancePage() {
         className="px-4 py-2 flex items-center gap-3 flex-wrap"
         style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-subtle)' }}
       >
-        <PeriodSelector value={period} customRange={customRange} onChange={handlePeriodChange} />
+        <PeriodSelector value={period} customRange={customRange} defaultRange={dateRange} onChange={handlePeriodChange} />
 
         <div style={{ width: 1, height: 16, background: 'var(--border-subtle)' }} />
 
@@ -742,26 +744,15 @@ export default function PerformancePage() {
                           <span className="text-[9px] uppercase font-bold" style={{ color: exColor }}>{row.exchangeId}</span>
                         </span>
                       </td>
-                      {cols.map((col, ci) => {
+                      {cols.map((col) => {
                         const icUnknown = col.requiresIC && row.extras.initialCapital == null
-                        const val     = getValue(row, col.key, l1)
-                        const { best, worst } = colExtremes[ci]
-                        const isBest  = !icUnknown && rows.length > 1 && val === best  && val !== 0
-                        const isWorst = !icUnknown && rows.length > 1 && val === worst && best !== worst && val !== 0
+                        const val = getValue(row, col.key, l1)
+                        const { color, bg } = icUnknown ? { color: 'var(--text-muted)', bg: 'transparent' } : cellHighlight(col.key, val)
                         return (
                           <td
                             key={col.key}
                             className="px-4 py-2.5 text-right tabular-nums whitespace-nowrap"
-                            style={{
-                              fontFamily: 'var(--font-geist-mono)',
-                              color:      icUnknown ? 'var(--text-muted)'
-                                        : isBest   ? 'var(--accent-profit)'
-                                        : isWorst  ? 'var(--accent-loss)'
-                                        : 'var(--text-secondary)',
-                              background: isBest  ? 'rgba(0,255,136,0.06)'
-                                        : isWorst ? 'rgba(255,59,59,0.06)'
-                                        : 'transparent',
-                            }}
+                            style={{ fontFamily: 'var(--font-geist-mono)', color, background: bg }}
                           >
                             {icUnknown ? '—' : col.format(val)}
                           </td>
