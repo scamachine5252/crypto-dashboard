@@ -46,6 +46,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       .gte('closed_at', sinceDate)
       .lte('closed_at', untilDate)
       .not('closed_at', 'is', null)
+      .neq('pnl', 0)
       .order('closed_at', { ascending: false })
       .range(from, from + PAGE - 1)
     if (pageErr) return NextResponse.json({ error: pageErr.message }, { status: 500 })
@@ -55,8 +56,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     from += PAGE
   }
 
-  // Return all rows: opening fills (pnl=0) and closing fills (pnl≠0).
-  // Bybit position records (openedAt ≠ closedAt) are expanded to Open + Close rows in the UI.
+  // Only closing fills (pnl≠0) — opening fills are filtered at DB level above.
   const trades: Trade[] = allRows.map((t) => {
     const pnl       = Number(t.pnl ?? 0)
     const entryPrice = Number(t.entry_price ?? 0)

@@ -82,6 +82,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       .gte('closed_at', sinceDate)
       .lte('closed_at', untilDate)
       .not('closed_at', 'is', null)
+      .neq('pnl', 0)
       .order('closed_at', { ascending: true })
       .range(from, from + PAGE - 1)
     if (pageErr) return NextResponse.json({ error: pageErr.message }, { status: 500 })
@@ -98,8 +99,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     fee: string | null; opened_at: string | null; closed_at: string
   }
 
-  // Filter to closing fills only — opening fills (pnl=0) skew all metrics
-  const closingRows = allRows.filter((t: RawRow) => Number(t.pnl ?? 0) !== 0)
+  // Opening fills (pnl=0) filtered at DB level — allRows contains closing fills only
+  const closingRows = allRows
 
   const trades: Trade[] = closingRows.map((t: RawRow) => {
     const pnl        = Number(t.pnl ?? 0)
