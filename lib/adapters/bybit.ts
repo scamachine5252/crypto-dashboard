@@ -123,8 +123,45 @@ export class BybitAdapter implements ExchangeAdapter {
         // side = direction of the CLOSING order:
         // "Sell" = selling to close a long position → trade direction is 'long'
         // "Buy"  = buying to close a short position → trade direction is 'short'
-        const side: TradeSide = pos.side === 'Sell' ? 'long' : 'short'
-        const symbol = bybitIdToSymbol(pos.symbol ?? 'UNKNOWN', category)
+        const isLong      = pos.side === 'Sell'
+        const side: TradeSide = isLong ? 'long' : 'short'
+        const symbol      = bybitIdToSymbol(pos.symbol ?? 'UNKNOWN', category)
+
+        const avgEntry     = Number(pos.avgEntryPrice ?? 0)
+        const avgExit      = Number(pos.avgExitPrice  ?? 0)
+        const closedSize   = Number(pos.closedSize ?? pos.qty ?? 0)
+        const rawClosedPnl = Number(pos.closedPnl ?? 0)
+
+        // gross = price-movement PnL in USDT, before fees and funding.
+        // Linear (USDT-settled): straightforward price diff × size.
+        // Inverse (base-settled, e.g. BTCUSD → settlement in BTC):
+        //   each contract = $1 USD; gross_usdt = contracts × (exit−entry) / entry
+        //   closedPnl from Bybit is in base currency → convert to USDT via exitPrice.
+        let grossUsdt: number
+        let closedPnlUsdt: number
+
+        if (category === 'linear') {
+          grossUsdt     = isLong
+            ? (avgExit - avgEntry) * closedSize
+            : (avgEntry - avgExit) * closedSize
+          closedPnlUsdt = rawClosedPnl
+        } else {
+          // Guard: avgEntry=0 means malformed data — skip fee/pnl calculation entirely
+          if (avgEntry === 0) {
+            grossUsdt     = 0
+            closedPnlUsdt = 0
+          } else {
+            grossUsdt     = isLong
+              ? closedSize * (avgExit - avgEntry) / avgEntry
+              : closedSize * (avgEntry - avgExit) / avgEntry
+            closedPnlUsdt = rawClosedPnl * avgExit
+          }
+        }
+
+        // fee = net friction cost (grossUsdt − actual credited PnL).
+        // Positive  → trading commission > funding income (normal case).
+        // Negative  → funding income > trading commission (funding-farming trade).
+        const fee = grossUsdt - closedPnlUsdt
 
         trades.push({
           id:           pos.orderId ?? String(Math.random()),
@@ -133,12 +170,12 @@ export class BybitAdapter implements ExchangeAdapter {
           symbol,
           side,
           tradeType:    'futures' as TradeType,
-          entryPrice:   Number(pos.avgEntryPrice ?? 0),
-          exitPrice:    Number(pos.avgExitPrice ?? 0),
-          quantity:     Number(pos.closedSize ?? pos.qty ?? 0),
-          pnl:          Number(pos.closedPnl ?? 0),
+          entryPrice:   avgEntry,
+          exitPrice:    avgExit,
+          quantity:     closedSize,
+          pnl:          closedPnlUsdt,
           pnlPercent:   0,
-          fee:          0,
+          fee,
           durationMin:  0,
           leverage:     Number(pos.leverage ?? 1),
           fundingCost:  0,
