@@ -46,12 +46,12 @@ export function reconstructPositions(
     fundingBySymbol[f.symbol] = (fundingBySymbol[f.symbol] ?? 0) + Number(f.execFee)
   }
 
-  // Per-symbol total closed size (denominator for proportional funding)
+  // Per-symbol total closed qty (denominator for proportional funding).
+  // Uses execPnl != 0 as closing signal — closedSize is "" for unified accounts.
   const totalClosedBySymbol: Record<string, number> = {}
   for (const f of tradeFills) {
-    const closed = Number(f.closedSize)
-    if (closed > 0) {
-      totalClosedBySymbol[f.symbol] = (totalClosedBySymbol[f.symbol] ?? 0) + closed
+    if (Number(f.execPnl) !== 0) {
+      totalClosedBySymbol[f.symbol] = (totalClosedBySymbol[f.symbol] ?? 0) + Number(f.execQty)
     }
   }
 
@@ -67,15 +67,16 @@ export function reconstructPositions(
   const result: Trade[] = []
 
   for (const exec of tradeFills) {
-    const qty       = Number(exec.execQty)
-    const price     = Number(exec.execPrice)
-    const closedQty = Number(exec.closedSize)
-    const openedQty = qty - closedQty
+    const qty   = Number(exec.execQty)
+    const price = Number(exec.execPrice)
+
+    // closedSize is always "" for Bybit unified accounts via REST — use execPnl as signal.
+    const isClosingFill = Number(exec.execPnl) !== 0
 
     let state = stateMap.get(exec.symbol) ?? { size: 0, avgEntry: 0, openTime: '', openSide: 'long' as TradeSide }
 
-    // ── Closing component ──────────────────────────────────────────────────
-    if (closedQty > 0) {
+    if (isClosingFill) {
+      // ── Closing fill ─────────────────────────────────────────────────────
       // PnL: linear is already USDT; inverse is in base currency → convert
       const rawPnl = Number(exec.execPnl)
       const pnl = category === 'inverse' ? rawPnl * price : rawPnl
@@ -83,7 +84,7 @@ export function reconstructPositions(
       // Proportional funding for this close
       const totalFunding   = fundingBySymbol[exec.symbol]  ?? 0
       const totalClosed    = totalClosedBySymbol[exec.symbol] ?? 1
-      const proportional   = closedQty / totalClosed
+      const proportional   = qty / totalClosed
       const fundingForFill = totalFunding * proportional
 
       result.push({
@@ -95,7 +96,7 @@ export function reconstructPositions(
         tradeType:    'futures' as TradeType,
         entryPrice:   state.avgEntry,
         exitPrice:    price,
-        quantity:     closedQty,
+        quantity:     qty,
         pnl,
         pnlPercent:   0,
         fee:          Number(exec.execFee) + fundingForFill,
@@ -107,16 +108,14 @@ export function reconstructPositions(
         closedAt:     new Date(Number(exec.execTime)).toISOString(),
       })
 
-      state = { ...state, size: state.size - closedQty }
+      state = { ...state, size: state.size - qty }
 
       // If position fully closed (or flipped negative — guard), reset
       if (state.size <= 0) {
         state = { size: 0, avgEntry: 0, openTime: '', openSide: 'long' }
       }
-    }
-
-    // ── Opening component ──────────────────────────────────────────────────
-    if (openedQty > 0) {
+    } else {
+      // ── Opening fill ─────────────────────────────────────────────────────
       if (state.size === 0) {
         // New position cycle starts here
         state.openTime = new Date(Number(exec.execTime)).toISOString()
@@ -124,9 +123,9 @@ export function reconstructPositions(
         state.avgEntry = price
       } else {
         // Scale-in: update weighted average entry
-        state.avgEntry = (state.avgEntry * state.size + price * openedQty) / (state.size + openedQty)
+        state.avgEntry = (state.avgEntry * state.size + price * qty) / (state.size + qty)
       }
-      state = { ...state, size: state.size + openedQty }
+      state = { ...state, size: state.size + qty }
     }
 
     stateMap.set(exec.symbol, state)

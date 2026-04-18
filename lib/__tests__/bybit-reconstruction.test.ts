@@ -157,16 +157,18 @@ describe('reconstructPositions', () => {
     expect(result[1].fee).toBeCloseTo(0.1 + (-5 * 0.5), 5)
   })
 
-  it('position flip (close + open opposite direction in same fill): emits 1 closed trade', () => {
-    // Buy 10 → open long; then Sell 20 (closedSize=10, opens new short of 10)
+  it('position flip (execPnl != 0 → closing fill uses full execQty)', () => {
+    // Buy 10 → open long; then a fill with execPnl=100 → treated as closing fill.
+    // Variant A can't split "close 10 + open 10 short" in one fill,
+    // so quantity = execQty = 20 and position resets.
     const execs = [
       makeExec({ side: 'Buy',  execQty: '10', closedSize: '0',  execTime: '1000', execPrice: '100' }),
       makeExec({ side: 'Sell', execQty: '20', closedSize: '10', execTime: '2000', execPrice: '110', execPnl: '100' }),
     ]
     const result = reconstructPositions(execs, 'linear')
-    expect(result).toHaveLength(1)                          // only the closed long emitted
+    expect(result).toHaveLength(1)
     expect(result[0].side).toBe('long')
-    expect(result[0].quantity).toBe(10)
+    expect(result[0].quantity).toBe(20)   // full execQty (closedSize ignored)
   })
 
   it('side: Buy-to-open → trade.side = long', () => {
