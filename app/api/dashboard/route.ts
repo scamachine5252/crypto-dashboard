@@ -14,6 +14,7 @@ function formatDay(dateStr: string): string {
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const since = Number(req.nextUrl.searchParams.get('since') ?? '0')
+  const until = Number(req.nextUrl.searchParams.get('until') ?? Date.now())
 
   // Fetch accounts; initial_aum column added in migration 014.
   // If the column is absent (pre-migration) we retry without it and treat IC as unknown.
@@ -59,6 +60,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   const sinceDate = new Date(since).toISOString()
+  const untilDate = new Date(until).toISOString()
 
   type TradeRow = { account_id: string; pnl: number | null; fee: number | null; closed_at: string; quantity: number | null; entry_price: number | null }
   const PAGE = 1000
@@ -70,6 +72,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       .select('account_id, pnl, fee, closed_at, side, trade_type, quantity, entry_price')
       .in('account_id', accountIds)
       .gte('closed_at', sinceDate)
+      .lte('closed_at', untilDate)
       .not('closed_at', 'is', null)
       .range(from, from + PAGE - 1)
     if (pageErr) return NextResponse.json({ error: pageErr.message }, { status: 500 })
@@ -88,15 +91,20 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   const pnlByAccount: Record<string, number> = {}
+  const tradeCountByAccount: Record<string, number> = {}
   for (const t of tradeRows) {
     pnlByAccount[t.account_id] = (pnlByAccount[t.account_id] ?? 0) + Number(t.pnl ?? 0)
+    if (Number(t.pnl ?? 0) !== 0) {
+      tradeCountByAccount[t.account_id] = (tradeCountByAccount[t.account_id] ?? 0) + 1
+    }
   }
 
   const funds: FundSummary[] = Object.entries(fundAccounts).map(([fund, ids]) => {
     const aum = ids.reduce((s, id) => s + (latestBalance[id] ?? 0), 0)
     const totalPnl = ids.reduce((s, id) => s + (pnlByAccount[id] ?? 0), 0)
     const pnlPct = aum > 0 ? (totalPnl / aum) * 100 : 0
-    return { fund, aum, totalPnl, pnlPct }
+    const tradeCount = ids.reduce((s, id) => s + (tradeCountByAccount[id] ?? 0), 0)
+    return { fund, aum, totalPnl, pnlPct, tradeCount }
   })
 
   // Chart data

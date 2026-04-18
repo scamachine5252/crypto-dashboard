@@ -14,6 +14,7 @@ import {
 } from 'recharts'
 import type { ChartDataPoint, Timeframe, Period, DateRange } from '@/lib/types'
 import { formatMoney } from '@/lib/utils'
+import { resolveDateRange } from '@/lib/calculations'
 import PeriodSelector from '@/components/ui/PeriodSelector'
 
 interface PnLChartProps {
@@ -36,7 +37,7 @@ function CustomTooltip({ active, payload, label }: TooltipProps) {
   if (!active || !payload?.length) return null
   const d = payload[0].payload
   const isPos = d.pnl >= 0
-  const isCumPos = d.cumulativePnl >= 0
+  const isCumPos = d.cumulativePnl > 0
   return (
     <div
       style={{
@@ -56,7 +57,7 @@ function CustomTooltip({ active, payload, label }: TooltipProps) {
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16 }}>
         <span style={{ color: 'var(--text-muted)', fontSize: 10 }}>Cumulative</span>
-        <span style={{ color: isCumPos ? 'var(--text-primary)' : 'var(--accent-loss)', fontSize: 12, fontWeight: 700, fontFamily: 'var(--font-geist-mono)', fontVariantNumeric: 'tabular-nums' }}>
+        <span style={{ color: isCumPos ? 'var(--accent-profit)' : d.cumulativePnl < 0 ? 'var(--accent-loss)' : 'var(--text-primary)', fontSize: 12, fontWeight: 700, fontFamily: 'var(--font-geist-mono)', fontVariantNumeric: 'tabular-nums' }}>
           {isCumPos ? '+' : ''}{formatMoney(d.cumulativePnl)}
         </span>
       </div>
@@ -71,6 +72,8 @@ const TIMEFRAMES: { label: string; value: Timeframe }[] = [
 ]
 
 export default function PnLChart({ data, timeframe, onTimeframeChange, totalPnl, period, customRange, onPeriodChange }: PnLChartProps) {
+  const today = new Date().toISOString().slice(0, 10)
+  const defaultRange = period !== 'manual' ? resolveDateRange(period, today) : customRange
   const isPositive = totalPnl >= 0
   const GREEN = 'var(--accent-profit)'
   const RED   = 'var(--accent-loss)'
@@ -108,7 +111,7 @@ export default function PnLChart({ data, timeframe, onTimeframeChange, totalPnl,
 
         <div className="flex items-center gap-3">
           {/* Period selector */}
-          <PeriodSelector value={period} customRange={customRange} onChange={onPeriodChange} />
+          <PeriodSelector value={period} customRange={customRange} defaultRange={defaultRange} onChange={onPeriodChange} />
 
           {/* Divider */}
           <div className="h-4 w-px" style={{ background: 'var(--border-subtle)' }} />

@@ -200,6 +200,7 @@ export interface FundSummary {
   aum: number
   totalPnl: number
   pnlPct: number
+  tradeCount?: number
 }
 
 export interface DashboardMetrics {

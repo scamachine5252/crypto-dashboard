@@ -61,10 +61,12 @@ export default function DashboardPage() {
     const today = new Date().toISOString().slice(0, 10)
     const resolved = resolveDateRange(filter.period, today)
     const startStr = filter.period === 'manual' ? (customRange?.start ?? '') : (resolved.start ?? '')
+    const endStr   = filter.period === 'manual' ? (customRange?.end   ?? today) : (resolved.end ?? today)
     const since = startStr ? new Date(startStr).getTime() : 0
+    const until = new Date(endStr + 'T23:59:59Z').getTime()
 
     setDataLoading(true)
-    fetch(`/api/dashboard?since=${since}`)
+    fetch(`/api/dashboard?since=${since}&until=${until}`)
       .then((r) => r.json())
       .then((data: { funds: FundSummary[]; metrics: DashboardMetrics; rawDailyPnl?: Array<{ date: string; pnl: number }> }) => {
         setFunds(data.funds ?? [])
