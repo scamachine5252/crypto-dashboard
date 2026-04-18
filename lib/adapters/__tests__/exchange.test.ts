@@ -4,7 +4,7 @@
 const mockFetchBalance               = jest.fn()
 const mockFetchTrades                = jest.fn()
 const mockLoadMarkets                = jest.fn()
-const mockPrivateGetV5ClosedPnl      = jest.fn()
+const mockPrivateGetV5ExecutionList  = jest.fn()
 const mockFapiGetUserTrades          = jest.fn()
 const mockFapiGetIncome              = jest.fn()
 
@@ -12,7 +12,7 @@ const mockExchangeInstance = {
   fetchBalance:                    mockFetchBalance,
   fetchMyTrades:                   mockFetchTrades,
   loadMarkets:                     mockLoadMarkets,
-  privateGetV5PositionClosedPnl:   mockPrivateGetV5ClosedPnl,
+  privateGetV5ExecutionList:       mockPrivateGetV5ExecutionList,
   fapiPrivateGetUserTrades:        mockFapiGetUserTrades,
   fapiPrivateGetIncome:            mockFapiGetIncome,
 }
@@ -84,9 +84,9 @@ describe('BybitAdapter', () => {
     mockFetchBalance.mockReset()
     mockFetchTrades.mockReset()
     mockLoadMarkets.mockReset()
-    mockPrivateGetV5ClosedPnl.mockReset()
-    // Default: return empty closed-pnl list so tests that don't care about futures pass
-    mockPrivateGetV5ClosedPnl.mockResolvedValue({ result: { list: [], nextPageCursor: '' } })
+    mockPrivateGetV5ExecutionList.mockReset()
+    // Default: return empty execution list so tests that don't care about futures pass
+    mockPrivateGetV5ExecutionList.mockResolvedValue({ result: { list: [], nextPageCursor: '' } })
   })
 
   it('testConnection returns true on successful ping', async () => {
@@ -143,39 +143,37 @@ describe('BybitAdapter', () => {
     await expect(adapter.fetchBalance()).rejects.toThrow()
   })
 
-  it('calls fetchMyTrades for spot only, privateGetV5PositionClosedPnl for linear and inverse', async () => {
+  it('calls fetchMyTrades for spot only, privateGetV5ExecutionList for linear and inverse', async () => {
     mockFetchTrades.mockResolvedValue([])
 
     const { BybitAdapter } = await import('../bybit')
     const adapter = new BybitAdapter({ apiKey: 'key', apiSecret: 'secret' })
     await adapter.getTrades('all', { start: '2025-01-01', end: '2025-12-31' })
 
-    // fetchMyTrades called once for spot only (not for futures — uses closed-pnl endpoint)
+    // fetchMyTrades called once for spot only
     expect(mockFetchTrades).toHaveBeenCalledTimes(1)
     expect((mockFetchTrades.mock.calls[0][3] as Record<string, string>)?.category).toBe('spot')
 
-    // closed-pnl endpoint called twice: linear + inverse
-    expect(mockPrivateGetV5ClosedPnl).toHaveBeenCalledTimes(2)
-    const categories = mockPrivateGetV5ClosedPnl.mock.calls.map(
+    // execution list endpoint called twice: linear + inverse
+    expect(mockPrivateGetV5ExecutionList).toHaveBeenCalledTimes(2)
+    const categories = mockPrivateGetV5ExecutionList.mock.calls.map(
       (c) => (c[0] as Record<string, string>)?.category,
     )
     expect(categories).toContain('linear')
     expect(categories).toContain('inverse')
   })
 
-  it('extracts real closedPnl from privateGetV5PositionClosedPnl response', async () => {
+  it('extracts pnl and prices from execution list response', async () => {
     mockFetchTrades.mockResolvedValue([])
-    mockPrivateGetV5ClosedPnl.mockImplementation((params: Record<string, string>) => {
+    mockPrivateGetV5ExecutionList.mockImplementation((params: Record<string, string>) => {
       if (params.category === 'linear') {
         return Promise.resolve({
           result: {
             list: [
-              {
-                symbol: 'BTCUSDT', side: 'Sell', orderId: 'order-1',
-                avgEntryPrice: '50000', avgExitPrice: '51000',
-                closedSize: '0.1', closedPnl: '100.5',
-                leverage: '10', createdTime: '1700000000000', updatedTime: '1700000001000',
-              },
+              // opening fill
+              { symbol: 'BTCUSDT', side: 'Buy',  execType: 'Trade', execTime: '1700000000000', execPrice: '50000', execQty: '0.1', execPnl: '0',     execFee: '0.1', closedSize: '0',  orderId: 'o-open' },
+              // closing fill
+              { symbol: 'BTCUSDT', side: 'Sell', execType: 'Trade', execTime: '1700000001000', execPrice: '51000', execQty: '0.1', execPnl: '100.5', execFee: '0.1', closedSize: '0.1', orderId: 'o-close' },
             ],
             nextPageCursor: '',
           },
@@ -190,21 +188,25 @@ describe('BybitAdapter', () => {
 
     const futureTrade = trades.find((t) => t.symbol === 'BTC/USDT:USDT')
     expect(futureTrade).toBeDefined()
-    expect(futureTrade?.pnl).toBe(100.5)
+    expect(futureTrade?.pnl).toBeCloseTo(100.5)
     expect(futureTrade?.entryPrice).toBe(50000)
     expect(futureTrade?.exitPrice).toBe(51000)
     expect(futureTrade?.tradeType).toBe('futures')
   })
 
-  it('maps Sell-side close to long direction, Buy-side close to short direction', async () => {
+  it('maps Buy-to-open to long, Sell-to-open to short', async () => {
     mockFetchTrades.mockResolvedValue([])
-    mockPrivateGetV5ClosedPnl.mockImplementation((params: Record<string, string>) => {
+    mockPrivateGetV5ExecutionList.mockImplementation((params: Record<string, string>) => {
       if (params.category === 'linear') {
         return Promise.resolve({
           result: {
             list: [
-              { symbol: 'BTCUSDT', side: 'Sell', orderId: 'o1', avgEntryPrice: '50000', avgExitPrice: '51000', closedSize: '0.1', closedPnl: '100', leverage: '10', createdTime: '1700000000000', updatedTime: '1700000001000' },
-              { symbol: 'ETHUSDT', side: 'Buy',  orderId: 'o2', avgEntryPrice: '3000',  avgExitPrice: '2900',  closedSize: '1',   closedPnl: '100', leverage: '5',  createdTime: '1700000002000', updatedTime: '1700000003000' },
+              // Long position (Buy to open, Sell to close)
+              { symbol: 'BTCUSDT', side: 'Buy',  execType: 'Trade', execTime: '1700000000000', execPrice: '50000', execQty: '0.1', execPnl: '0',   execFee: '0', closedSize: '0',   orderId: 'o1a' },
+              { symbol: 'BTCUSDT', side: 'Sell', execType: 'Trade', execTime: '1700000001000', execPrice: '51000', execQty: '0.1', execPnl: '100', execFee: '0', closedSize: '0.1', orderId: 'o1b' },
+              // Short position (Sell to open, Buy to close)
+              { symbol: 'ETHUSDT', side: 'Sell', execType: 'Trade', execTime: '1700000002000', execPrice: '3000', execQty: '1', execPnl: '0',   execFee: '0', closedSize: '0', orderId: 'o2a' },
+              { symbol: 'ETHUSDT', side: 'Buy',  execType: 'Trade', execTime: '1700000003000', execPrice: '2900', execQty: '1', execPnl: '100', execFee: '0', closedSize: '1', orderId: 'o2b' },
             ],
             nextPageCursor: '',
           },
@@ -219,27 +221,27 @@ describe('BybitAdapter', () => {
 
     const btc = trades.find((t) => t.symbol === 'BTC/USDT:USDT')
     const eth = trades.find((t) => t.symbol === 'ETH/USDT:USDT')
-    expect(btc?.side).toBe('long')   // Sell to close = was long
-    expect(eth?.side).toBe('short')  // Buy to close  = was short
+    expect(btc?.side).toBe('long')
+    expect(eth?.side).toBe('short')
   })
 
-  it('paginates closed-pnl until nextPageCursor is empty', async () => {
+  it('paginates execution list until nextPageCursor is empty', async () => {
     mockFetchTrades.mockResolvedValue([])
     let page = 0
-    mockPrivateGetV5ClosedPnl.mockImplementation((params: Record<string, string>) => {
+    mockPrivateGetV5ExecutionList.mockImplementation((params: Record<string, string>) => {
       if (params.category !== 'linear') return Promise.resolve({ result: { list: [], nextPageCursor: '' } })
       page++
       if (page === 1) {
         return Promise.resolve({
           result: {
-            list: [{ symbol: 'BTCUSDT', side: 'Sell', orderId: 'o1', avgEntryPrice: '50000', avgExitPrice: '51000', closedSize: '0.1', closedPnl: '50', leverage: '10', createdTime: '1700000000000', updatedTime: '1700000001000' }],
+            list: [{ symbol: 'BTCUSDT', side: 'Buy', execType: 'Trade', execTime: '1700000000000', execPrice: '50000', execQty: '0.1', execPnl: '0', execFee: '0', closedSize: '0', orderId: 'p1a' }],
             nextPageCursor: 'page2cursor',
           },
         })
       }
       return Promise.resolve({
         result: {
-          list: [{ symbol: 'BTCUSDT', side: 'Buy', orderId: 'o2', avgEntryPrice: '50000', avgExitPrice: '49000', closedSize: '0.1', closedPnl: '-50', leverage: '10', createdTime: '1700000010000', updatedTime: '1700000011000' }],
+          list: [{ symbol: 'BTCUSDT', side: 'Sell', execType: 'Trade', execTime: '1700000010000', execPrice: '51000', execQty: '0.1', execPnl: '100', execFee: '0', closedSize: '0.1', orderId: 'p2a' }],
           nextPageCursor: '',
         },
       })
@@ -250,12 +252,12 @@ describe('BybitAdapter', () => {
     const trades = await adapter.getTrades('all', {} as DateRange)
 
     const futures = trades.filter((t) => t.tradeType === 'futures')
-    expect(futures.length).toBe(2)  // fetched 2 pages
+    expect(futures.length).toBe(1)  // 1 completed round-trip from 2 pages
   })
 
-  it('handles privateGetV5PositionClosedPnl failure gracefully (returns spot trades only)', async () => {
+  it('handles privateGetV5ExecutionList failure gracefully (returns spot trades only)', async () => {
     mockFetchTrades.mockResolvedValue([{ ...sampleCcxtTrade, id: 'spot-1' }])
-    mockPrivateGetV5ClosedPnl.mockRejectedValue(new Error('API error'))
+    mockPrivateGetV5ExecutionList.mockRejectedValue(new Error('API error'))
 
     const { BybitAdapter } = await import('../bybit')
     const adapter = new BybitAdapter({ apiKey: 'key', apiSecret: 'secret' })
@@ -265,14 +267,14 @@ describe('BybitAdapter', () => {
     expect(trades[0].symbol).toBe('BTC/USDT')
   })
 
-  it('passes until to privateGetV5PositionClosedPnl as endTime', async () => {
+  it('passes until to privateGetV5ExecutionList as endTime', async () => {
     mockFetchTrades.mockResolvedValue([])
     const until = 1700000000000
     const { BybitAdapter } = await import('../bybit')
     const adapter = new BybitAdapter({ apiKey: 'key', apiSecret: 'secret' })
     await adapter.getTrades('all', {} as DateRange, 0, 100, until)
 
-    const anyCall = mockPrivateGetV5ClosedPnl.mock.calls.find(
+    const anyCall = mockPrivateGetV5ExecutionList.mock.calls.find(
       (c) => (c[0] as Record<string, unknown>)?.endTime === until,
     )
     expect(anyCall).toBeDefined()

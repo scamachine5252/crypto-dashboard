@@ -16,6 +16,8 @@ import {
   buildPerAccountMetrics,
 } from '../calculations'
 import { mapCcxtTrade } from '../adapters/ccxt-utils'
+import { reconstructPositions } from '../adapters/bybit'
+import type { RawExecution } from '../adapters/bybit'
 import { formatPercent, formatMoney } from '../utils'
 import type { DailyPnLEntry, Trade } from '../types'
 
@@ -559,5 +561,45 @@ describe('detectBinanceInstrument', () => {
     const mockCcxt = makeMockCcxt({ spot: false, futures: false, pm: false })
     const result = await detectBinanceInstrument('key', 'secret', mockCcxt)
     expect(result).toBe('unified')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Bybit execution reconstruction — opened_at ≠ closed_at
+// Regression for: closed-pnl endpoint mapped createdTime → openedAt which was
+// the close time, making openedAt ≈ closedAt (3ms apart). Fixed by switching
+// to execution/list where execTime of the first opening fill = real openedAt.
+// ---------------------------------------------------------------------------
+describe('Bybit reconstructPositions — opened_at ≠ closed_at', () => {
+  function makeExec(o: Partial<RawExecution> & { execTime: string; execPrice: string }): RawExecution {
+    return {
+      execTime: o.execTime, symbol: o.symbol ?? 'BTCUSDT', side: o.side ?? 'Buy',
+      execType: o.execType ?? 'Trade', execPrice: o.execPrice,
+      execQty: o.execQty ?? '0', execPnl: o.execPnl ?? '0',
+      execFee: o.execFee ?? '0', closedSize: o.closedSize ?? '0', orderId: o.orderId ?? 'o1',
+    }
+  }
+
+  it('regression: openedAt is strictly before closedAt', () => {
+    const execs = [
+      makeExec({ side: 'Buy',  execQty: '10', closedSize: '0',  execTime: '1000000', execPrice: '100' }),
+      makeExec({ side: 'Sell', execQty: '10', closedSize: '10', execTime: '9000000', execPrice: '110', execPnl: '100' }),
+    ]
+    const result = reconstructPositions(execs, 'linear')
+    expect(result).toHaveLength(1)
+    expect(result[0].openedAt).not.toBe(result[0].closedAt)
+    expect(new Date(result[0].openedAt).getTime()).toBeLessThan(new Date(result[0].closedAt).getTime())
+  })
+
+  it('regression: openedAt matches the first opening fill, not the close', () => {
+    const openTime  = '1000000'
+    const closeTime = '5000000'
+    const execs = [
+      makeExec({ side: 'Buy',  execQty: '5', closedSize: '0', execTime: openTime,  execPrice: '200' }),
+      makeExec({ side: 'Sell', execQty: '5', closedSize: '5', execTime: closeTime, execPrice: '220', execPnl: '100' }),
+    ]
+    const result = reconstructPositions(execs, 'linear')
+    expect(result[0].openedAt).toBe(new Date(Number(openTime)).toISOString())
+    expect(result[0].closedAt).toBe(new Date(Number(closeTime)).toISOString())
   })
 })

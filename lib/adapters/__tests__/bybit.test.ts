@@ -1,12 +1,11 @@
 /**
- * BybitAdapter — fetchBybitClosedPnl fee + pnl calculation tests
+ * BybitAdapter — execution-list based trade fetching tests.
  *
  * Covers:
- *  - Linear long/short: fee = (price movement) − closedPnl
- *  - Linear funding farming: fee is negative when funding income > commission
- *  - Inverse long/short: gross uses USD-contract formula, pnl converted to USDT
- *  - Inverse avgEntry=0 guard: fee defaults to 0
- *  - getTrades calls both linear and inverse endpoints
+ *  - getTrades calls privateGetV5ExecutionList for both linear and inverse
+ *  - Pagination: follows nextPageCursor until empty
+ *  - Spot trades still use fetchMyTrades
+ *  - reconstructPositions is tested separately in lib/__tests__/bybit-reconstruction.test.ts
  */
 
 import { BybitAdapter } from '../bybit'
@@ -19,7 +18,7 @@ function buildAdapter() {
   const ex = (adapter as any).exchange as Record<string, unknown>
 
   const fns = {
-    privateGetV5PositionClosedPnl: jest.fn(),
+    privateGetV5ExecutionList: jest.fn(),
     fetchMyTrades:  jest.fn().mockResolvedValue([]),
     fetchBalance:   jest.fn().mockResolvedValue({ total: {} }),
     fetchPositions: jest.fn().mockResolvedValue([]),
@@ -28,163 +27,196 @@ function buildAdapter() {
   return { adapter, fns }
 }
 
-/** Route mock responses by category so linear and inverse can be tested independently. */
-function mockByCategory(
-  fns: ReturnType<typeof buildAdapter>['fns'],
-  linear: Array<Record<string, string>>,
-  inverse: Array<Record<string, string>> = [],
-) {
-  fns.privateGetV5PositionClosedPnl.mockImplementation(
-    (params: Record<string, unknown>) =>
-      Promise.resolve({
-        result: {
-          list: params.category === 'linear' ? linear : inverse,
-          nextPageCursor: '',
-        },
-      })
-  )
+function emptyExecResponse(category?: string) {
+  return (_params: Record<string, unknown>) =>
+    Promise.resolve({ result: { list: [], nextPageCursor: '' } })
 }
 
-function makeLinearPos(overrides: Partial<Record<string, string>> = {}): Record<string, string> {
+function singleExecResponse(rows: Array<Record<string, string>>) {
+  return (_params: Record<string, unknown>) =>
+    Promise.resolve({ result: { list: rows, nextPageCursor: '' } })
+}
+
+function makeOpeningExec(overrides: Partial<Record<string, string>> = {}): Record<string, string> {
   return {
-    symbol:        'BTCUSDT',
-    side:          'Sell',      // 'Sell' = closing a long position
-    orderId:       'ord1',
-    avgEntryPrice: '50000',
-    avgExitPrice:  '51000',
-    closedSize:    '0.1',
-    closedPnl:     '95',        // gross=100, fee=5
-    leverage:      '10',
-    createdTime:   '1735689600000',
-    updatedTime:   '1735693200000',
+    execTime:   '1000000',
+    symbol:     'BTCUSDT',
+    side:       'Buy',
+    execType:   'Trade',
+    execPrice:  '50000',
+    execQty:    '0.1',
+    execPnl:    '0',
+    execFee:    '0.1',
+    closedSize: '0',
+    orderId:    'ord-open',
     ...overrides,
   }
 }
 
-function makeInversePos(overrides: Partial<Record<string, string>> = {}): Record<string, string> {
+function makeClosingExec(overrides: Partial<Record<string, string>> = {}): Record<string, string> {
   return {
-    symbol:        'BTCUSD',
-    side:          'Sell',      // closing a long
-    orderId:       'ord2',
-    avgEntryPrice: '1000',
-    avgExitPrice:  '1100',
-    closedSize:    '1000',      // contracts (each = $1 USD)
-    // closedPnl in BTC: 0.09 BTC * 1100 USD/BTC = 99 USDT
-    // gross_usdt = 1000 * (1100-1000)/1000 = 100 USDT → fee = 1 USDT
-    closedPnl:     '0.09',
-    leverage:      '10',
-    createdTime:   '1735689600000',
-    updatedTime:   '1735693200000',
+    execTime:   '2000000',
+    symbol:     'BTCUSDT',
+    side:       'Sell',
+    execType:   'Trade',
+    execPrice:  '51000',
+    execQty:    '0.1',
+    execPnl:    '95',
+    execFee:    '0.1',
+    closedSize: '0.1',
+    orderId:    'ord-close',
     ...overrides,
   }
 }
-
-// ─── Linear contracts ─────────────────────────────────────────────────────────
-
-describe('BybitAdapter linear fee calculation', () => {
-  it('fee = gross − closedPnl for long (pos.side=Sell)', async () => {
-    const { adapter, fns } = buildAdapter()
-    // gross = (51000 - 50000) * 0.1 = 100 USDT; closedPnl = 95 → fee = 5
-    mockByCategory(fns, [makeLinearPos()])
-
-    const trades = await adapter.getTrades('acc', { start: '', end: '' })
-    const t = trades.find((t) => t.tradeType === 'futures')!
-    expect(t.fee).toBeCloseTo(5, 2)
-    expect(t.pnl).toBeCloseTo(95, 2)
-    expect(t.side).toBe('long')
-  })
-
-  it('fee = gross − closedPnl for short (pos.side=Buy)', async () => {
-    const { adapter, fns } = buildAdapter()
-    // closing short: entry=51000, exit=50000 → gross = (51000-50000)*0.1 = 100; fee = 5
-    mockByCategory(fns, [makeLinearPos({ side: 'Buy', avgEntryPrice: '51000', avgExitPrice: '50000' })])
-
-    const trades = await adapter.getTrades('acc', { start: '', end: '' })
-    const t = trades.find((t) => t.tradeType === 'futures')!
-    expect(t.fee).toBeCloseTo(5, 2)
-    expect(t.side).toBe('short')
-  })
-
-  it('fee is negative when funding income > trading commission (funding farming)', async () => {
-    const { adapter, fns } = buildAdapter()
-    // gross = (51000-50000)*0.1 = 100; closedPnl = 105 (received $10 funding, paid $5 commission)
-    // fee = 100 - 105 = -5 → net income from cost structure
-    mockByCategory(fns, [makeLinearPos({ closedPnl: '105' })])
-
-    const trades = await adapter.getTrades('acc', { start: '', end: '' })
-    const t = trades.find((t) => t.tradeType === 'futures')!
-    expect(t.fee).toBeCloseTo(-5, 2)
-  })
-
-  it('fee = 0 when position has no price movement and closedPnl = 0', async () => {
-    const { adapter, fns } = buildAdapter()
-    mockByCategory(fns, [makeLinearPos({ avgEntryPrice: '50000', avgExitPrice: '50000', closedPnl: '0' })])
-
-    const trades = await adapter.getTrades('acc', { start: '', end: '' })
-    const t = trades.find((t) => t.tradeType === 'futures')!
-    expect(t.fee).toBe(0)
-  })
-})
-
-// ─── Inverse contracts ────────────────────────────────────────────────────────
-
-describe('BybitAdapter inverse fee and pnl calculation', () => {
-  it('pnl is closedPnl_base × exitPrice (converted to USDT)', async () => {
-    const { adapter, fns } = buildAdapter()
-    // closedPnl=0.09 BTC, exitPrice=1100 → pnl = 0.09 * 1100 = 99 USDT
-    mockByCategory(fns, [], [makeInversePos()])
-
-    const trades = await adapter.getTrades('acc', { start: '', end: '' })
-    const t = trades.find((t) => t.tradeType === 'futures')!
-    expect(t.pnl).toBeCloseTo(99, 1)
-  })
-
-  it('fee uses USD-contract gross formula for long (contracts × (exit−entry) / entry)', async () => {
-    const { adapter, fns } = buildAdapter()
-    // gross_usdt = 1000 * (1100-1000)/1000 = 100; closedPnl_usdt = 0.09*1100 = 99; fee = 1
-    mockByCategory(fns, [], [makeInversePos()])
-
-    const trades = await adapter.getTrades('acc', { start: '', end: '' })
-    const t = trades.find((t) => t.tradeType === 'futures')!
-    expect(t.fee).toBeCloseTo(1, 1)
-  })
-
-  it('fee uses USD-contract gross formula for short (contracts × (entry−exit) / entry)', async () => {
-    const { adapter, fns } = buildAdapter()
-    // short: entry=1100, exit=1000, size=1000, closedPnl=0.09 BTC
-    // gross_usdt = 1000 * (1100-1000)/1100 ≈ 90.91
-    // closedPnl_usdt = 0.09 * 1000 = 90  → fee ≈ 0.91
-    mockByCategory(fns, [], [makeInversePos({ side: 'Buy', avgEntryPrice: '1100', avgExitPrice: '1000' })])
-
-    const trades = await adapter.getTrades('acc', { start: '', end: '' })
-    const t = trades.find((t) => t.tradeType === 'futures')!
-    expect(t.fee).toBeCloseTo(0.91, 1)
-    expect(t.side).toBe('short')
-  })
-
-  it('fee = 0 when avgEntryPrice = 0 (guard against division by zero)', async () => {
-    const { adapter, fns } = buildAdapter()
-    mockByCategory(fns, [], [makeInversePos({ avgEntryPrice: '0' })])
-
-    const trades = await adapter.getTrades('acc', { start: '', end: '' })
-    const t = trades.find((t) => t.tradeType === 'futures')!
-    expect(t.fee).toBe(0)
-  })
-})
 
 // ─── Routing ──────────────────────────────────────────────────────────────────
 
 describe('BybitAdapter getTrades routing', () => {
-  it('calls privateGetV5PositionClosedPnl for both linear and inverse categories', async () => {
+  it('calls privateGetV5ExecutionList for both linear and inverse categories', async () => {
     const { adapter, fns } = buildAdapter()
-    mockByCategory(fns, [], [])
+    fns.privateGetV5ExecutionList.mockImplementation(emptyExecResponse())
 
     await adapter.getTrades('acc', { start: '', end: '' })
 
-    const categories = fns.privateGetV5PositionClosedPnl.mock.calls.map(
+    const categories = fns.privateGetV5ExecutionList.mock.calls.map(
       (c) => (c[0] as Record<string, unknown>).category
     )
     expect(categories).toContain('linear')
     expect(categories).toContain('inverse')
+  })
+
+  it('still calls fetchMyTrades for spot', async () => {
+    const { adapter, fns } = buildAdapter()
+    fns.privateGetV5ExecutionList.mockImplementation(emptyExecResponse())
+
+    await adapter.getTrades('acc', { start: '', end: '' })
+
+    expect(fns.fetchMyTrades).toHaveBeenCalledWith(
+      undefined, undefined, 100, expect.objectContaining({ category: 'spot' })
+    )
+  })
+
+  it('passes since and until as startTime and endTime', async () => {
+    const { adapter, fns } = buildAdapter()
+    fns.privateGetV5ExecutionList.mockImplementation(emptyExecResponse())
+
+    await adapter.getTrades('acc', { start: '', end: '' }, 1000, 100, 2000)
+
+    const calls = fns.privateGetV5ExecutionList.mock.calls as Array<[Record<string, unknown>]>
+    for (const [params] of calls) {
+      expect(params.startTime).toBe(1000)
+      expect(params.endTime).toBe(2000)
+    }
+  })
+})
+
+// ─── Pagination ───────────────────────────────────────────────────────────────
+
+describe('BybitAdapter fetchBybitExecutions pagination', () => {
+  it('follows nextPageCursor until empty', async () => {
+    const { adapter, fns } = buildAdapter()
+
+    let callCount = 0
+    fns.privateGetV5ExecutionList.mockImplementation(
+      (params: Record<string, unknown>) => {
+        if (params.category !== 'linear') {
+          return Promise.resolve({ result: { list: [], nextPageCursor: '' } })
+        }
+        callCount++
+        if (callCount === 1) {
+          return Promise.resolve({
+            result: { list: [makeOpeningExec()], nextPageCursor: 'cursor-page-2' },
+          })
+        }
+        return Promise.resolve({
+          result: { list: [makeClosingExec()], nextPageCursor: '' },
+        })
+      }
+    )
+
+    const trades = await adapter.getTrades('acc', { start: '', end: '' })
+
+    // Should have followed the cursor and fetched page 2
+    const linearCalls = fns.privateGetV5ExecutionList.mock.calls.filter(
+      (c) => (c[0] as Record<string, unknown>).category === 'linear'
+    )
+    expect(linearCalls.length).toBe(2)
+    expect((linearCalls[1][0] as Record<string, unknown>).cursor).toBe('cursor-page-2')
+
+    // One completed round-trip position → 1 futures trade
+    const futures = trades.filter(t => t.tradeType === 'futures')
+    expect(futures).toHaveLength(1)
+  })
+})
+
+// ─── End-to-end: executions → Trade ──────────────────────────────────────────
+
+describe('BybitAdapter getTrades executions → Trade mapping', () => {
+  it('linear long: correct side, entryPrice, exitPrice, pnl', async () => {
+    const { adapter, fns } = buildAdapter()
+    fns.privateGetV5ExecutionList.mockImplementation(
+      (params: Record<string, unknown>) =>
+        params.category === 'linear'
+          ? singleExecResponse([makeOpeningExec(), makeClosingExec()])(params)
+          : emptyExecResponse()(params)
+    )
+
+    const trades = await adapter.getTrades('acc', { start: '', end: '' })
+    const t = trades.find(t => t.tradeType === 'futures')!
+
+    expect(t.side).toBe('long')
+    expect(t.entryPrice).toBe(50000)
+    expect(t.exitPrice).toBe(51000)
+    expect(t.pnl).toBeCloseTo(95)
+    expect(t.quantity).toBe(0.1)
+  })
+
+  it('linear short: side=short when opened with Sell', async () => {
+    const { adapter, fns } = buildAdapter()
+    fns.privateGetV5ExecutionList.mockImplementation(
+      (params: Record<string, unknown>) =>
+        params.category === 'linear'
+          ? singleExecResponse([
+              makeOpeningExec({ side: 'Sell', closedSize: '0' }),
+              makeClosingExec({ side: 'Buy', execPrice: '49000', execPnl: '95' }),
+            ])(params)
+          : emptyExecResponse()(params)
+    )
+
+    const trades = await adapter.getTrades('acc', { start: '', end: '' })
+    expect(trades.find(t => t.tradeType === 'futures')?.side).toBe('short')
+  })
+
+  it('inverse: pnl converted from base currency to USDT', async () => {
+    const basePnl   = '0.000131579'
+    const exitPrice = '38000'
+    const { adapter, fns } = buildAdapter()
+    fns.privateGetV5ExecutionList.mockImplementation(
+      (params: Record<string, unknown>) =>
+        params.category === 'inverse'
+          ? singleExecResponse([
+              makeOpeningExec({ symbol: 'BTCUSD', side: 'Sell', execPrice: '40000', closedSize: '0' }),
+              makeClosingExec({ symbol: 'BTCUSD', side: 'Buy',  execPrice: exitPrice, execPnl: basePnl }),
+            ])(params)
+          : emptyExecResponse()(params)
+    )
+
+    const trades = await adapter.getTrades('acc', { start: '', end: '' })
+    const t = trades.find(t => t.tradeType === 'futures')!
+    expect(t.pnl).toBeCloseTo(Number(basePnl) * Number(exitPrice), 2)
+  })
+
+  it('openedAt is earlier than closedAt', async () => {
+    const { adapter, fns } = buildAdapter()
+    fns.privateGetV5ExecutionList.mockImplementation(
+      (params: Record<string, unknown>) =>
+        params.category === 'linear'
+          ? singleExecResponse([makeOpeningExec({ execTime: '1000000' }), makeClosingExec({ execTime: '9000000' })])(params)
+          : emptyExecResponse()(params)
+    )
+
+    const trades = await adapter.getTrades('acc', { start: '', end: '' })
+    const t = trades.find(t => t.tradeType === 'futures')!
+    expect(new Date(t.openedAt).getTime()).toBeLessThan(new Date(t.closedAt).getTime())
   })
 })

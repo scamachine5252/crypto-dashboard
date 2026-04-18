@@ -4,6 +4,137 @@ import type { ExchangeAdapter, BalanceResult, RawPosition } from './types'
 import type { DailyPnLEntry, Trade, DateRange, ExchangeId, TradeSide, TradeType } from '../types'
 import { mapCcxtTrade } from './ccxt-utils'
 
+// ---------------------------------------------------------------------------
+// Raw execution record from Bybit /v5/execution/list
+// ---------------------------------------------------------------------------
+export interface RawExecution {
+  execTime:   string  // ms timestamp
+  symbol:     string  // e.g. 'BTCUSDT'
+  side:       string  // 'Buy' | 'Sell'
+  execType:   string  // 'Trade' | 'Funding' | 'AdlTrade' | 'BustTrade'
+  execPrice:  string
+  execQty:    string
+  execPnl:    string  // USDT for linear; base currency for inverse; 0 for opening fills
+  execFee:    string  // commission (positive = cost, negative = income)
+  closedSize: string  // qty closed by this fill; 0 for pure opening fills
+  orderId:    string
+}
+
+// ---------------------------------------------------------------------------
+// Reconstruct closed positions from execution fills.
+//
+// Bybit's /v5/execution/list returns individual fills with real execTime.
+// This function groups them into position lifecycles and emits one Trade per
+// closing fill (partial or full), with:
+//   openedAt = execTime of the first opening fill of this position cycle
+//   closedAt = execTime of this closing fill
+// ---------------------------------------------------------------------------
+export function reconstructPositions(
+  executions: RawExecution[],
+  category: 'linear' | 'inverse',
+): Trade[] {
+  // Separate trade fills from funding entries
+  const tradeFills   = executions.filter(e => e.execType === 'Trade')
+  const fundingFills = executions.filter(e => e.execType === 'Funding')
+
+  // Sort trade fills chronologically
+  tradeFills.sort((a, b) => Number(a.execTime) - Number(b.execTime))
+
+  // Per-symbol funding accumulation (for proportional distribution)
+  const fundingBySymbol: Record<string, number> = {}
+  for (const f of fundingFills) {
+    fundingBySymbol[f.symbol] = (fundingBySymbol[f.symbol] ?? 0) + Number(f.execFee)
+  }
+
+  // Per-symbol total closed size (denominator for proportional funding)
+  const totalClosedBySymbol: Record<string, number> = {}
+  for (const f of tradeFills) {
+    const closed = Number(f.closedSize)
+    if (closed > 0) {
+      totalClosedBySymbol[f.symbol] = (totalClosedBySymbol[f.symbol] ?? 0) + closed
+    }
+  }
+
+  // Per-symbol position state
+  type SymbolState = {
+    size:     number
+    avgEntry: number
+    openTime: string
+    openSide: TradeSide
+  }
+  const stateMap = new Map<string, SymbolState>()
+
+  const result: Trade[] = []
+
+  for (const exec of tradeFills) {
+    const qty       = Number(exec.execQty)
+    const price     = Number(exec.execPrice)
+    const closedQty = Number(exec.closedSize)
+    const openedQty = qty - closedQty
+
+    let state = stateMap.get(exec.symbol) ?? { size: 0, avgEntry: 0, openTime: '', openSide: 'long' as TradeSide }
+
+    // ── Closing component ──────────────────────────────────────────────────
+    if (closedQty > 0) {
+      // PnL: linear is already USDT; inverse is in base currency → convert
+      const rawPnl = Number(exec.execPnl)
+      const pnl = category === 'inverse' ? rawPnl * price : rawPnl
+
+      // Proportional funding for this close
+      const totalFunding   = fundingBySymbol[exec.symbol]  ?? 0
+      const totalClosed    = totalClosedBySymbol[exec.symbol] ?? 1
+      const proportional   = closedQty / totalClosed
+      const fundingForFill = totalFunding * proportional
+
+      result.push({
+        id:           exec.orderId || String(Math.random()),
+        subAccountId: 'bybit' as ExchangeId,
+        exchangeId:   'bybit' as ExchangeId,
+        symbol:       bybitIdToSymbol(exec.symbol, category),
+        side:         state.openSide,
+        tradeType:    'futures' as TradeType,
+        entryPrice:   state.avgEntry,
+        exitPrice:    price,
+        quantity:     closedQty,
+        pnl,
+        pnlPercent:   0,
+        fee:          Number(exec.execFee) + fundingForFill,
+        durationMin:  0,
+        leverage:     1,
+        fundingCost:  0,
+        isOvernight:  false,
+        openedAt:     state.openTime,
+        closedAt:     new Date(Number(exec.execTime)).toISOString(),
+      })
+
+      state = { ...state, size: state.size - closedQty }
+
+      // If position fully closed (or flipped negative — guard), reset
+      if (state.size <= 0) {
+        state = { size: 0, avgEntry: 0, openTime: '', openSide: 'long' }
+      }
+    }
+
+    // ── Opening component ──────────────────────────────────────────────────
+    if (openedQty > 0) {
+      if (state.size === 0) {
+        // New position cycle starts here
+        state.openTime = new Date(Number(exec.execTime)).toISOString()
+        state.openSide = exec.side === 'Buy' ? 'long' : 'short'
+        state.avgEntry = price
+      } else {
+        // Scale-in: update weighted average entry
+        state.avgEntry = (state.avgEntry * state.size + price * openedQty) / (state.size + openedQty)
+      }
+      state = { ...state, size: state.size + openedQty }
+    }
+
+    stateMap.set(exec.symbol, state)
+  }
+
+  return result
+}
+
 function mapCcxtPosition(p: ccxt.Position): RawPosition {
   const symbol = p.symbol ?? ''
   const info = (p.info ?? {}) as Record<string, unknown>
@@ -93,106 +224,40 @@ export class BybitAdapter implements ExchangeAdapter {
     return []
   }
 
-  // Fetch closed futures positions from /v5/position/closed-pnl.
-  // This endpoint returns COMPLETED position records with real realized PnL —
-  // unlike fetchMyTrades (fills), which returns closedPnl=0 for opening fills
-  // and is unreliable for Bybit Unified accounts.
-  // Max 7-day window per call (Bybit API hard limit — use 7-day chunks).
-  private async fetchBybitClosedPnl(
+  // Fetch raw execution fills from /v5/execution/list.
+  // Returns Trade + Funding execType records for position reconstruction.
+  // Same 7-day window constraint as the old closed-pnl endpoint.
+  private async fetchBybitExecutions(
     category: 'linear' | 'inverse',
     since?: number,
     until?: number,
-  ): Promise<Trade[]> {
-    const trades: Trade[] = []
+  ): Promise<RawExecution[]> {
+    const executions: RawExecution[] = []
     let cursor: string | undefined
 
     do {
       const params: Record<string, unknown> = { category, limit: 100 }
       if (since !== undefined) params['startTime'] = since
-      if (until !== undefined) params['endTime'] = until
+      if (until !== undefined) params['endTime']   = until
       if (cursor) params['cursor'] = cursor
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const response = await (this.exchange as any).privateGetV5PositionClosedPnl(params) as Record<string, unknown>
-      const result = (response?.result ?? {}) as Record<string, unknown>
-      const list = (result.list ?? []) as Array<Record<string, string>>
+      const response = await (this.exchange as any).privateGetV5ExecutionList(params) as Record<string, unknown>
+      const res  = (response?.result ?? {}) as Record<string, unknown>
+      const list = (res.list ?? []) as Array<Record<string, string>>
 
       if (list.length === 0) break
 
-      for (const pos of list) {
-        // side = direction of the CLOSING order:
-        // "Sell" = selling to close a long position → trade direction is 'long'
-        // "Buy"  = buying to close a short position → trade direction is 'short'
-        const isLong      = pos.side === 'Sell'
-        const side: TradeSide = isLong ? 'long' : 'short'
-        const symbol      = bybitIdToSymbol(pos.symbol ?? 'UNKNOWN', category)
-
-        const avgEntry     = Number(pos.avgEntryPrice ?? 0)
-        const avgExit      = Number(pos.avgExitPrice  ?? 0)
-        const closedSize   = Number(pos.closedSize ?? pos.qty ?? 0)
-        const rawClosedPnl = Number(pos.closedPnl ?? 0)
-
-        // gross = price-movement PnL in USDT, before fees and funding.
-        // Linear (USDT-settled): straightforward price diff × size.
-        // Inverse (base-settled, e.g. BTCUSD → settlement in BTC):
-        //   each contract = $1 USD; gross_usdt = contracts × (exit−entry) / entry
-        //   closedPnl from Bybit is in base currency → convert to USDT via exitPrice.
-        let grossUsdt: number
-        let closedPnlUsdt: number
-
-        if (category === 'linear') {
-          grossUsdt     = isLong
-            ? (avgExit - avgEntry) * closedSize
-            : (avgEntry - avgExit) * closedSize
-          closedPnlUsdt = rawClosedPnl
-        } else {
-          // Guard: avgEntry=0 means malformed data — skip fee/pnl calculation entirely
-          if (avgEntry === 0) {
-            grossUsdt     = 0
-            closedPnlUsdt = 0
-          } else {
-            grossUsdt     = isLong
-              ? closedSize * (avgExit - avgEntry) / avgEntry
-              : closedSize * (avgEntry - avgExit) / avgEntry
-            closedPnlUsdt = rawClosedPnl * avgExit
-          }
+      for (const row of list) {
+        if (row['execType'] === 'Trade' || row['execType'] === 'Funding') {
+          executions.push(row as unknown as RawExecution)
         }
-
-        // fee = net friction cost (grossUsdt − actual credited PnL).
-        // Positive  → trading commission > funding income (normal case).
-        // Negative  → funding income > trading commission (funding-farming trade).
-        const fee = grossUsdt - closedPnlUsdt
-
-        trades.push({
-          id:           pos.orderId ?? String(Math.random()),
-          subAccountId: 'bybit' as ExchangeId,
-          exchangeId:   'bybit' as ExchangeId,
-          symbol,
-          side,
-          tradeType:    'futures' as TradeType,
-          entryPrice:   avgEntry,
-          exitPrice:    avgExit,
-          quantity:     closedSize,
-          pnl:          closedPnlUsdt,
-          pnlPercent:   0,
-          fee,
-          durationMin:  0,
-          leverage:     Number(pos.leverage ?? 1),
-          fundingCost:  0,
-          isOvernight:  false,
-          openedAt:     pos.createdTime
-            ? new Date(Number(pos.createdTime)).toISOString()
-            : new Date().toISOString(),
-          closedAt:     pos.updatedTime
-            ? new Date(Number(pos.updatedTime)).toISOString()
-            : new Date().toISOString(),
-        })
       }
 
-      cursor = result.nextPageCursor as string | undefined
+      cursor = res.nextPageCursor as string | undefined
     } while (cursor)
 
-    return trades
+    return executions
   }
 
   async getTrades(
@@ -209,10 +274,10 @@ export class BybitAdapter implements ExchangeAdapter {
       this.exchange.fetchMyTrades(undefined, since, limit ?? 100, { category: 'spot', paginate: true, ...untilParam }),
     ])
 
-    // Futures: use closed-pnl endpoint — returns real realized PnL per closed position
+    // Futures: use execution/list — real fill timestamps + execPnl per closing fill
     const [linearResult, inverseResult] = await Promise.allSettled([
-      this.fetchBybitClosedPnl('linear', since, until),
-      this.fetchBybitClosedPnl('inverse', since, until),
+      this.fetchBybitExecutions('linear',  since, until).then(e => reconstructPositions(e, 'linear')),
+      this.fetchBybitExecutions('inverse', since, until).then(e => reconstructPositions(e, 'inverse')),
     ])
 
     const spotTrades    = spotResult.status    === 'fulfilled' ? spotResult.value    : []
