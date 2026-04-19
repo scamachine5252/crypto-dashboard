@@ -500,7 +500,27 @@ describe('calculateMetrics', () => {
 [ ] New supabaseAdmin query returning >1000 rows? → pagination loop added
 [ ] New API route? → worst-case execution time < 5s on Vercel
 [ ] New exchange field? → raw response inspected, Number() wrapper added
+[ ] New exchange field used as logic signal? → live API call made and field
+    confirmed present BEFORE writing the implementation (see A28)
+[ ] Tests cover "field absent / undefined / null" case — not just happy-path
+[ ] Promise.allSettled rejections are propagated to caller, not silently → []
 ```
+
+### Exchange API field mapping rules (added after A28)
+
+Before implementing any adapter logic that reads a specific API field:
+
+1. **Call the real endpoint first.** Use the debug script or debug API route to
+   get an actual raw response. Confirm the key exists and its type.
+2. **Read the CCXT comment block header.** Comments are per-context:
+   `watchMyTrades` (WebSocket) ≠ `privateGetV5ExecutionList` (REST) ≠ `fetchMyTrades`.
+   A field present in WebSocket responses may be absent in REST.
+3. **Write the "missing field" test first.** Before implementing, add a test where
+   the field is `undefined`. The test must pass after the fix and fail if the
+   implementation regresses to assuming the field is always present.
+4. **Never swallow Promise.allSettled rejections silently.** When both categories
+   (linear + inverse) fail, throw — the sync route must return 500 with the real
+   error message, not `{ synced: 0 }` with no explanation.
 
 ---
 

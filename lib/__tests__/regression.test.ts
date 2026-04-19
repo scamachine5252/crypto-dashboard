@@ -565,6 +565,94 @@ describe('detectBinanceInstrument', () => {
 })
 
 // ---------------------------------------------------------------------------
+// A28 · Bybit reconstructPositions — execPnl absent from REST response
+//
+// Root cause: execPnl was assumed present (based on a CCXT watchMyTrades WebSocket
+// comment). The real /v5/execution/list REST endpoint does NOT include execPnl.
+// When execPnl key is absent: row['execPnl'] = undefined → Number(undefined) = NaN
+// → any signal based on "execPnl !== 0" silently mis-fires for ALL rows.
+//
+// These tests must fail if reconstruction logic uses execPnl as a detection signal.
+// They must pass if closedSize is the detection signal (correct behaviour).
+// ---------------------------------------------------------------------------
+describe('A28 · reconstructPositions — execPnl absent from REST API', () => {
+  function makeExec(o: Partial<RawExecution> & { execTime: string; execPrice: string }): RawExecution {
+    return {
+      execTime: o.execTime, symbol: o.symbol ?? 'BTCUSDT', side: o.side ?? 'Buy',
+      execType: o.execType ?? 'Trade', execPrice: o.execPrice,
+      execQty: o.execQty ?? '0',
+      // execPnl intentionally omitted when not provided — simulates real REST response
+      execPnl: o.execPnl as string,
+      execFee: o.execFee ?? '0', closedSize: o.closedSize ?? '0', orderId: o.orderId ?? 'o1',
+    }
+  }
+
+  it('emits trades when execPnl is undefined (key absent) and closedSize is non-zero', () => {
+    // Simulates real Bybit REST response: execPnl key is missing entirely
+    const execs = [
+      makeExec({ side: 'Buy',  execQty: '10', closedSize: '0',  execTime: '1000', execPrice: '100', execPnl: undefined }),
+      makeExec({ side: 'Sell', execQty: '10', closedSize: '10', execTime: '2000', execPrice: '110', execPnl: undefined }),
+    ]
+    const result = reconstructPositions(execs, 'linear')
+    // Must emit 1 trade — closedSize is the signal, execPnl absence must not break this
+    expect(result).toHaveLength(1)
+    expect(result[0].side).toBe('long')
+    expect(result[0].quantity).toBe(10)
+  })
+
+  it('emits 0 trades when closedSize is "0" for all rows (no closes), regardless of execPnl', () => {
+    const execs = [
+      makeExec({ side: 'Buy', execQty: '5', closedSize: '0', execTime: '1000', execPrice: '100', execPnl: undefined }),
+      makeExec({ side: 'Buy', execQty: '5', closedSize: '0', execTime: '1500', execPrice: '105', execPnl: undefined }),
+    ]
+    expect(reconstructPositions(execs, 'linear')).toHaveLength(0)
+  })
+
+  it('emits correct PnL when execPnl is null — calculated from entry/exit prices', () => {
+    // When execPnl is absent, PnL must be calculated from prices, not default to 0
+    const execs = [
+      makeExec({ side: 'Buy',  execQty: '10', closedSize: '0',  execTime: '1000', execPrice: '100', execPnl: undefined }),
+      makeExec({ side: 'Sell', execQty: '10', closedSize: '10', execTime: '2000', execPrice: '110', execPnl: undefined }),
+    ]
+    const result = reconstructPositions(execs, 'linear')
+    // long: (110 - 100) * 10 = 100 USDT
+    expect(result[0].pnl).toBeCloseTo(100, 1)
+  })
+
+  it('emits correct PnL for short when execPnl is absent', () => {
+    const execs = [
+      makeExec({ side: 'Sell', execQty: '5', closedSize: '0', execTime: '1000', execPrice: '200', execPnl: undefined }),
+      makeExec({ side: 'Buy',  execQty: '5', closedSize: '5', execTime: '2000', execPrice: '180', execPnl: undefined }),
+    ]
+    const result = reconstructPositions(execs, 'linear')
+    // short: (200 - 180) * 5 = 100 USDT
+    expect(result[0].pnl).toBeCloseTo(100, 1)
+  })
+
+  it('uses execPnl when it IS present — does not always calculate manually', () => {
+    // If Bybit ever returns execPnl (e.g., some account types), use it directly
+    const execs = [
+      makeExec({ side: 'Buy',  execQty: '10', closedSize: '0',  execTime: '1000', execPrice: '100', execPnl: '0' }),
+      makeExec({ side: 'Sell', execQty: '10', closedSize: '10', execTime: '2000', execPrice: '110', execPnl: '95' }),
+    ]
+    const result = reconstructPositions(execs, 'linear')
+    // Should use execPnl value (95) not calculated value (100)
+    expect(result[0].pnl).toBeCloseTo(95, 1)
+  })
+
+  it('large non-zero closedSize values are treated as closing fills', () => {
+    // Guards against "closedSize is always empty" regression — real API returns large qty values
+    const execs = [
+      makeExec({ side: 'Buy',  execQty: '127945', closedSize: '0',      execTime: '1000', execPrice: '0.05', execPnl: undefined }),
+      makeExec({ side: 'Sell', execQty: '127945', closedSize: '127945', execTime: '2000', execPrice: '0.06', execPnl: undefined }),
+    ]
+    const result = reconstructPositions(execs, 'linear')
+    expect(result).toHaveLength(1)
+    expect(result[0].quantity).toBe(127945)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Bybit execution reconstruction — opened_at ≠ closed_at
 // Regression for: closed-pnl endpoint mapped createdTime → openedAt which was
 // the close time, making openedAt ≈ closedAt (3ms apart). Fixed by switching

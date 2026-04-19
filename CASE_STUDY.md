@@ -68,6 +68,33 @@ These mistakes share one root cause: writing integration code before reading the
 
 ---
 
+### A28 · Bybit `execPnl` assumed present in REST response — field only exists in WebSocket
+
+**What happened.** After switching Bybit futures sync from `/v5/position/closed-pnl` to `/v5/execution/list`, the adapter used `closedSize > 0` to detect closing fills. When that was believed to be broken (based on a CCXT source comment), `execPnl !== 0` was proposed as Variant A. After deploying Variant A, Ryan's account showed 0 trades.
+
+**Root cause (three compounding errors):**
+
+1. The CCXT source comment showing `"closedSize": ""` (line 3049 of `bybit.js`) referred to a **spot / old-format unified account** response. For linear/inverse REST, `closedSize` IS populated with real values. This comment was misread as universal behaviour.
+2. The CCXT comment showing `"execPnl": "0"` (line 3129) is in the `watchMyTrades` block — **WebSocket stream**, not the REST endpoint. The REST `/v5/execution/list` does not include `execPnl` in its response at all. It was never verified with a live call.
+3. Unit tests mocked `execPnl: '95'` on closing fills — so all tests passed. The tests validated the logic *given the assumption*, not the assumption itself. No test covered the case where `execPnl` is `undefined` (key absent from API response).
+
+**Live diagnostic result.**
+```
+closedSize non-zero count: 101 / 500 rows  ← correct closing signal
+execPnl non-null count:      0 / 500 rows  ← field absent; Number(undefined) = NaN ≠ 0
+```
+With Variant A: `isClosingFill = NaN !== 0 = false` for all rows → 0 trades emitted.
+
+**Fix.** Revert to `closedSize > 0`. Add PnL fallback: if `execPnl` absent, calculate `(exitPrice − entryPrice) × qty × direction`.
+
+**Prevention rules.**
+1. **Live test before implementation.** Before writing any field mapping, call the real endpoint and inspect raw field values. A CCXT source comment is not a substitute for a real API response.
+2. **Check comment context.** CCXT comments label their block — `watchMyTrades`, `REST`, `USDC-settled`, etc. Always read the block header, not just the field.
+3. **Test missing fields explicitly.** Every reconstruction/mapping function must have a test case where the key field is `undefined` (absent). Mock data that always supplies the field hides real breakage.
+4. **Silent error swallowing is a diagnostic blocker.** `Promise.allSettled` that silently returns `[]` on failure makes 0 trades indistinguishable from "API returned no data". Both categories need to throw so the caller can log the real error.
+
+---
+
 ## Category B — Architectural Oversights
 
 These mistakes share one root cause: not thinking through the operational constraints (timeouts, rate limits, service limits) before designing a flow.
