@@ -39,24 +39,28 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const until = Date.now()
   const since = until - daysAgo * 24 * 60 * 60 * 1000
 
-  // ── Test 1: raw execution list ──────────────────────────────────────────────
-  let rawResponse: unknown = null
+  // ── Paginate up to 5 pages to find Trade fills (Funding fills may appear first) ──
   let rawError: string | null = null
+  const allRows: Array<Record<string, unknown>> = []
+  let cursor: string | undefined
+
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    rawResponse = await (exchange as any).privateGetV5ExecutionList({
-      category,
-      limit: 10,
-      startTime: since,
-      endTime:   until,
-    })
+    for (let page = 0; page < 5; page++) {
+      const params: Record<string, unknown> = { category, limit: 100, startTime: since, endTime: until }
+      if (cursor) params['cursor'] = cursor
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const rawResponse = await (exchange as any).privateGetV5ExecutionList(params) as Record<string, unknown>
+      const res  = (rawResponse?.result ?? {}) as Record<string, unknown>
+      const page_list = (res.list ?? []) as Array<Record<string, unknown>>
+      allRows.push(...page_list)
+      cursor = res.nextPageCursor as string | undefined
+      if (!cursor || page_list.length === 0) break
+    }
   } catch (e) {
     rawError = e instanceof Error ? `${e.constructor.name}: ${e.message}` : String(e)
   }
 
-  // ── Parse what we got ──────────────────────────────────────────────────────
-  const result = (rawResponse as Record<string, unknown>)?.result as Record<string, unknown> | undefined
-  const list   = (result?.list ?? []) as Array<Record<string, unknown>>
+  const list = allRows
 
   const fieldSample = list.slice(0, 3).map(row => ({
     execType:   row['execType'],
@@ -84,10 +88,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     category,
     time_window:      { since: new Date(since).toISOString(), until: new Date(until).toISOString(), days_ago: daysAgo },
     api_error:        rawError,
-    retCode:          (rawResponse as Record<string, unknown>)?.retCode,
-    retMsg:           (rawResponse as Record<string, unknown>)?.retMsg,
+    pages_fetched:    Math.ceil(allRows.length / 100) || (rawError ? 0 : 1),
     list_count:       list.length,
-    next_page_cursor: result?.nextPageCursor,
+    next_page_cursor: cursor ?? null,
     exec_type_counts: execTypeCounts,
     exec_pnl_values:  execPnlValues,
     non_zero_pnl_count: nonZeroPnl.length,
