@@ -233,6 +233,8 @@ export class BybitAdapter implements ExchangeAdapter {
   ): Promise<RawExecution[]> {
     const executions: RawExecution[] = []
     let cursor: string | undefined
+    let pageNum = 0
+    let totalRawRows = 0
 
     do {
       const params: Record<string, unknown> = { category, limit: 100 }
@@ -245,7 +247,17 @@ export class BybitAdapter implements ExchangeAdapter {
       const res  = (response?.result ?? {}) as Record<string, unknown>
       const list = (res.list ?? []) as Array<Record<string, string>>
 
+      totalRawRows += list.length
+      pageNum++
+
       if (list.length === 0) break
+
+      // Log first page sample for debugging
+      if (pageNum === 1 && list.length > 0) {
+        const sample = list[0]
+        console.log(`[bybit] execList ${category} p1: rows=${list.length} cursor="${res.nextPageCursor}" ` +
+          `sample execType=${sample['execType']} execPnl=${sample['execPnl']} closedSize=${sample['closedSize']} execQty=${sample['execQty']}`)
+      }
 
       for (const row of list) {
         if (row['execType'] === 'Trade' || row['execType'] === 'Funding') {
@@ -255,6 +267,9 @@ export class BybitAdapter implements ExchangeAdapter {
 
       cursor = res.nextPageCursor as string | undefined
     } while (cursor)
+
+    const nonZeroPnl = executions.filter(e => e.execType === 'Trade' && Number(e.execPnl) !== 0).length
+    console.log(`[bybit] execList ${category} done: pages=${pageNum} rawRows=${totalRawRows} executions=${executions.length} nonZeroPnl=${nonZeroPnl}`)
 
     return executions
   }
@@ -280,6 +295,15 @@ export class BybitAdapter implements ExchangeAdapter {
     ])
 
     const spotTrades    = spotResult.status    === 'fulfilled' ? spotResult.value    : []
+
+    // Propagate futures errors so the caller (sync route) can log them and return 500
+    // instead of silently returning 0 trades when the API rejects the request.
+    if (linearResult.status === 'rejected' && inverseResult.status === 'rejected') {
+      throw new Error(
+        `Bybit execution list failed — linear: ${linearResult.reason}; inverse: ${inverseResult.reason}`
+      )
+    }
+
     const linearTrades  = linearResult.status  === 'fulfilled' ? linearResult.value  : []
     const inverseTrades = inverseResult.status === 'fulfilled' ? inverseResult.value : []
 

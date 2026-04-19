@@ -255,16 +255,15 @@ describe('BybitAdapter', () => {
     expect(futures.length).toBe(1)  // 1 completed round-trip from 2 pages
   })
 
-  it('handles privateGetV5ExecutionList failure gracefully (returns spot trades only)', async () => {
+  it('throws when privateGetV5ExecutionList fails for both linear and inverse (exposes API errors)', async () => {
     mockFetchTrades.mockResolvedValue([{ ...sampleCcxtTrade, id: 'spot-1' }])
     mockPrivateGetV5ExecutionList.mockRejectedValue(new Error('API error'))
 
     const { BybitAdapter } = await import('../bybit')
     const adapter = new BybitAdapter({ apiKey: 'key', apiSecret: 'secret' })
-    const trades = await adapter.getTrades('all', {} as DateRange)
 
-    expect(trades.length).toBe(1)  // only spot trades
-    expect(trades[0].symbol).toBe('BTC/USDT')
+    // Both categories fail → throw so sync route can return 500 instead of silent 0
+    await expect(adapter.getTrades('all', {} as DateRange)).rejects.toThrow('Bybit execution list failed')
   })
 
   it('passes until to privateGetV5ExecutionList as endTime', async () => {

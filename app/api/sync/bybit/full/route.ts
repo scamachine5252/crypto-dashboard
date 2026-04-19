@@ -45,18 +45,26 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   let trades: Trade[]
   try {
     // since/until are exactly 7 days apart — within Bybit's API limit.
-    // CCXT receives endTime correctly and paginates via cursor until exhausted.
     trades = await adapter.getTrades('all', {} as DateRange, since, 1000, until)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return NextResponse.json({ error: message }, { status: 500 })
+    console.error(`[bybit/full] chunk=${chunkIndex} getTrades error:`, message)
+    return NextResponse.json({ error: message, chunk_index: chunkIndex }, { status: 500 })
   }
 
+  console.log(`[bybit/full] chunk=${chunkIndex} trades=${trades.length} window=${new Date(since).toISOString()}..${new Date(until).toISOString()}`)
+
   let synced = 0
+  let skippedNoOpenTime = 0
   if (trades.length > 0) {
     const seen = new Set<string>()
     const rows = trades
       .filter((t: Trade) => {
+        // Skip trades where openedAt is unknown (position opened before this chunk's window)
+        if (!t.openedAt) {
+          skippedNoOpenTime++
+          return false
+        }
         const key = `${accountId}|${t.symbol}|${t.openedAt}|${t.closedAt}`
         if (seen.has(key)) return false
         seen.add(key)
@@ -78,18 +86,21 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         trade_type:  t.tradeType,
       }))
 
-    const { error: upsertError } = await supabaseAdmin
-      .from('trades')
-      .upsert(rows, { onConflict: 'account_id,symbol,opened_at,closed_at' })
+    if (rows.length > 0) {
+      const { error: upsertError } = await supabaseAdmin
+        .from('trades')
+        .upsert(rows, { onConflict: 'account_id,symbol,opened_at,closed_at' })
 
-    if (upsertError) {
-      console.error('Trades upsert error:', JSON.stringify(upsertError))
-      return NextResponse.json({ synced: 0, failedCategories: [], upsertError: upsertError.message }, { status: 500 })
+      if (upsertError) {
+        console.error(`[bybit/full] chunk=${chunkIndex} upsert error:`, JSON.stringify(upsertError))
+        return NextResponse.json({ synced: 0, failedCategories: [], upsertError: upsertError.message, chunk_index: chunkIndex }, { status: 500 })
+      }
     }
     synced = rows.length
   }
 
-  return NextResponse.json({ synced, failedCategories: [] })
+  console.log(`[bybit/full] chunk=${chunkIndex} synced=${synced} skippedNoOpenTime=${skippedNoOpenTime}`)
+  return NextResponse.json({ synced, failedCategories: [], skipped_no_open_time: skippedNoOpenTime })
 }
 
 export async function PATCH(req: NextRequest): Promise<NextResponse> {
