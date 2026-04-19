@@ -291,18 +291,29 @@ export default function ApiSettingsPage() {
           [accountId]: { current: 0, total: totalChunks, failed: [] },
         }))
 
+        // Thread position state between chunks (oldest → newest) so positions that
+        // span a 7-day boundary are reconstructed correctly.
+        let inheritedState: Record<string, unknown> | undefined = undefined
+
         for (let i = 0; i < totalChunks; i++) {
           const res = await fetch(`/api/sync/${exchange}/full`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ account_id: accountId, chunk_index: i }),
+            body: JSON.stringify({
+              account_id:      accountId,
+              chunk_index:     i,
+              inherited_state: inheritedState,
+            }),
           })
           if (res.ok) {
             const data = (await res.json()) as {
               synced: number
               failedCategories?: { symbol: string; error: string }[]
+              final_state?: Record<string, unknown>
             }
             allFailed.push(...(data.failedCategories ?? []))
+            // Carry open positions forward to next chunk
+            if (data.final_state) inheritedState = data.final_state
           }
           setScanState((prev) => ({
             ...prev,

@@ -1,10 +1,10 @@
 // ---------------------------------------------------------------------------
 // Mocks
 // ---------------------------------------------------------------------------
-const mockGetTrades = jest.fn()
-const mockSelectEqSingle = jest.fn()
-const mockUpdateEq       = jest.fn()
-const mockUpsert         = jest.fn()
+const mockGetTradesForChunk = jest.fn()
+const mockSelectEqSingle    = jest.fn()
+const mockUpdateEq          = jest.fn()
+const mockUpsert            = jest.fn()
 
 jest.mock('@/lib/supabase/server', () => ({
   supabaseAdmin: {
@@ -27,7 +27,7 @@ jest.mock('@/lib/crypto/decrypt', () => ({
 
 jest.mock('@/lib/adapters/bybit', () => ({
   BybitAdapter: jest.fn().mockImplementation(() => ({
-    getTrades: mockGetTrades,
+    getTradesForChunk: mockGetTradesForChunk,
   })),
 }))
 
@@ -96,12 +96,12 @@ describe('POST /api/sync/bybit/full', () => {
     expect(res.status).toBe(404)
   })
 
-  it('returns { synced, failedCategories } on success with empty trades', async () => {
+  it('returns { synced, failedCategories, final_state } on success with empty trades', async () => {
     mockSelectEqSingle.mockResolvedValue({
       data: { id: 'uuid-1', api_key: 'enc-key', api_secret: 'enc-sec' },
       error: null,
     })
-    mockGetTrades.mockResolvedValue([])
+    mockGetTradesForChunk.mockResolvedValue({ trades: [], finalState: {} })
     mockUpsert.mockResolvedValue({ error: null })
 
     const { POST } = await import('../full/route')
@@ -111,6 +111,7 @@ describe('POST /api/sync/bybit/full', () => {
     const json = await res.json()
     expect(json.synced).toBe(0)
     expect(json.failedCategories).toEqual([])
+    expect(json.final_state).toBeDefined()
   })
 
   it('upserts fetched trades and returns correct synced count', async () => {
@@ -118,17 +119,20 @@ describe('POST /api/sync/bybit/full', () => {
       data: { id: 'uuid-1', api_key: 'enc-key', api_secret: 'enc-sec' },
       error: null,
     })
-    mockGetTrades.mockResolvedValue([
-      {
-        id: 't1', symbol: 'BTC/USDT', side: 'long', tradeType: 'futures',
-        entryPrice: 50000, exitPrice: 51000, quantity: 0.1, pnl: 100,
-        pnlPercent: 2, fee: 5, durationMin: 60, leverage: 10,
-        fundingCost: 0, isOvernight: false,
-        openedAt: '2025-01-01T00:00:00.000Z',
-        closedAt: '2025-01-01T01:00:00.000Z',
-        subAccountId: 'bybit', exchangeId: 'bybit',
-      },
-    ])
+    mockGetTradesForChunk.mockResolvedValue({
+      trades: [
+        {
+          id: 't1', symbol: 'BTC/USDT', side: 'long', tradeType: 'futures',
+          entryPrice: 50000, exitPrice: 51000, quantity: 0.1, pnl: 100,
+          pnlPercent: 2, fee: 5, durationMin: 60, leverage: 10,
+          fundingCost: 0, isOvernight: false,
+          openedAt: '2025-01-01T00:00:00.000Z',
+          closedAt: '2025-01-01T01:00:00.000Z',
+          subAccountId: 'bybit', exchangeId: 'bybit',
+        },
+      ],
+      finalState: {},
+    })
     mockUpsert.mockResolvedValue({ error: null })
 
     const { POST } = await import('../full/route')
@@ -146,17 +150,20 @@ describe('POST /api/sync/bybit/full', () => {
       data: { id: 'uuid-1', api_key: 'enc-key', api_secret: 'enc-sec' },
       error: null,
     })
-    mockGetTrades.mockResolvedValue([
-      {
-        id: 't1', symbol: 'ETH/USDT', side: 'short', tradeType: 'futures',
-        entryPrice: 3000, exitPrice: 2900, quantity: 1, pnl: 100,
-        pnlPercent: 3.33, fee: 3, durationMin: 30, leverage: 5,
-        fundingCost: 0, isOvernight: false,
-        openedAt: '2025-01-02T00:00:00.000Z',
-        closedAt: '2025-01-02T00:30:00.000Z',
-        subAccountId: 'bybit', exchangeId: 'bybit',
-      },
-    ])
+    mockGetTradesForChunk.mockResolvedValue({
+      trades: [
+        {
+          id: 't1', symbol: 'ETH/USDT', side: 'short', tradeType: 'futures',
+          entryPrice: 3000, exitPrice: 2900, quantity: 1, pnl: 100,
+          pnlPercent: 3.33, fee: 3, durationMin: 30, leverage: 5,
+          fundingCost: 0, isOvernight: false,
+          openedAt: '2025-01-02T00:00:00.000Z',
+          closedAt: '2025-01-02T00:30:00.000Z',
+          subAccountId: 'bybit', exchangeId: 'bybit',
+        },
+      ],
+      finalState: {},
+    })
     mockUpsert.mockResolvedValue({ error: { message: 'db write failed' } })
 
     const { POST } = await import('../full/route')
@@ -165,12 +172,12 @@ describe('POST /api/sync/bybit/full', () => {
     expect(res.status).toBe(500)
   })
 
-  it('returns 500 if getTrades throws', async () => {
+  it('returns 500 if getTradesForChunk throws', async () => {
     mockSelectEqSingle.mockResolvedValue({
       data: { id: 'uuid-1', api_key: 'enc-key', api_secret: 'enc-sec' },
       error: null,
     })
-    mockGetTrades.mockRejectedValue(new Error('exchange timeout'))
+    mockGetTradesForChunk.mockRejectedValue(new Error('exchange timeout'))
 
     const { POST } = await import('../full/route')
     const res = await POST(makePost({ account_id: 'uuid-1', chunk_index: 0 }))
@@ -180,27 +187,59 @@ describe('POST /api/sync/bybit/full', () => {
     expect(json.error).toMatch(/exchange timeout/)
   })
 
-  it('passes correct since, until (7-day window), and limit to getTrades', async () => {
+  it('passes correct since, until (7-day window) to getTradesForChunk', async () => {
     mockSelectEqSingle.mockResolvedValue({
       data: { id: 'uuid-1', api_key: 'enc-key', api_secret: 'enc-sec' },
       error: null,
     })
-    mockGetTrades.mockResolvedValue([])
+    mockGetTradesForChunk.mockResolvedValue({ trades: [], finalState: {} })
     mockUpsert.mockResolvedValue({ error: null })
 
     const { POST } = await import('../full/route')
     const res = await POST(makePost({ account_id: 'uuid-1', chunk_index: 0 }))
 
     expect(res.status).toBe(200)
-    const [, , since, limit, until] = mockGetTrades.mock.calls[0]
+    const [since, until] = mockGetTradesForChunk.mock.calls[0]
     expect(typeof since).toBe('number')
     expect(typeof until).toBe('number')
-    expect(limit).toBe(1000)
     // Window must be exactly 7 days — Bybit's API hard limit
     expect(until - since).toBe(7 * 24 * 60 * 60 * 1000)
   })
 
-  it('deduplicates trades with same account_id/symbol/openedAt before upsert', async () => {
+  it('passes inherited_state from request body to getTradesForChunk', async () => {
+    mockSelectEqSingle.mockResolvedValue({
+      data: { id: 'uuid-1', api_key: 'enc-key', api_secret: 'enc-sec' },
+      error: null,
+    })
+    mockGetTradesForChunk.mockResolvedValue({ trades: [], finalState: {} })
+    mockUpsert.mockResolvedValue({ error: null })
+
+    const inheritedState = { BTCUSDT: { size: 10, avgEntry: 100, openTime: '2025-01-01T00:00:00.000Z', openSide: 'long' } }
+
+    const { POST } = await import('../full/route')
+    await POST(makePost({ account_id: 'uuid-1', chunk_index: 5, inherited_state: inheritedState }))
+
+    const [, , passedState] = mockGetTradesForChunk.mock.calls[0]
+    expect(passedState).toEqual(inheritedState)
+  })
+
+  it('final_state from getTradesForChunk is returned in response', async () => {
+    mockSelectEqSingle.mockResolvedValue({
+      data: { id: 'uuid-1', api_key: 'enc-key', api_secret: 'enc-sec' },
+      error: null,
+    })
+    const finalState = { ETHUSDT: { size: 5, avgEntry: 3000, openTime: '2025-01-02T00:00:00.000Z', openSide: 'long' } }
+    mockGetTradesForChunk.mockResolvedValue({ trades: [], finalState })
+    mockUpsert.mockResolvedValue({ error: null })
+
+    const { POST } = await import('../full/route')
+    const res = await POST(makePost({ account_id: 'uuid-1', chunk_index: 0 }))
+
+    const json = await res.json()
+    expect(json.final_state).toEqual(finalState)
+  })
+
+  it('deduplicates trades with same account_id/symbol/openedAt/closedAt before upsert', async () => {
     mockSelectEqSingle.mockResolvedValue({
       data: { id: 'uuid-1', api_key: 'enc-key', api_secret: 'enc-sec' },
       error: null,
@@ -214,7 +253,7 @@ describe('POST /api/sync/bybit/full', () => {
       closedAt: '2025-01-01T00:00:00.000Z',
       subAccountId: 'bybit', exchangeId: 'bybit',
     }
-    mockGetTrades.mockResolvedValue([dupTrade, dupTrade])
+    mockGetTradesForChunk.mockResolvedValue({ trades: [dupTrade, dupTrade], finalState: {} })
     mockUpsert.mockResolvedValue({ error: null })
 
     const { POST } = await import('../full/route')

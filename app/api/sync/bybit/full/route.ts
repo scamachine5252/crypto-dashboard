@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/server'
 import { decrypt } from '@/lib/crypto/decrypt'
 import { BybitAdapter } from '@/lib/adapters/bybit'
+import type { ReconstructionStateJson } from '@/lib/adapters/bybit'
 import type { Trade, DateRange } from '@/lib/types'
 
 const CHUNK_DAYS   = 7    // Bybit Unified API enforces 7-day max window per request
@@ -10,9 +11,10 @@ const TOTAL_DAYS   = 182  // 26 × 7 days
 const TOTAL_CHUNKS = TOTAL_DAYS / CHUNK_DAYS  // 26
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  const body       = await req.json() as Record<string, unknown>
-  const accountId  = body.account_id  as string | undefined
-  const chunkIndex = body.chunk_index as number | undefined
+  const body           = await req.json() as Record<string, unknown>
+  const accountId      = body.account_id      as string | undefined
+  const chunkIndex     = body.chunk_index     as number | undefined
+  const inheritedState = body.inherited_state as ReconstructionStateJson | undefined
 
   if (!accountId)               return NextResponse.json({ error: 'account_id required' }, { status: 400 })
   if (chunkIndex === undefined) return NextResponse.json({ error: 'chunk_index required' }, { status: 400 })
@@ -31,7 +33,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
 
   // Compute time window from chunk_index
-  // chunk 0 = oldest (180d–150d ago), chunk 5 = newest (30d–0d ago)
+  // chunk 0 = oldest (182d–175d ago), chunk 25 = newest (7d–0d ago)
   const now     = Date.now()
   const chunkMs = CHUNK_DAYS * 24 * 60 * 60 * 1000
   const since   = now - (TOTAL_CHUNKS - chunkIndex) * chunkMs
@@ -43,12 +45,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   })
 
   let trades: Trade[]
+  let finalState: ReconstructionStateJson
   try {
     // since/until are exactly 7 days apart — within Bybit's API limit.
-    trades = await adapter.getTrades('all', {} as DateRange, since, 1000, until)
+    // inheritedState carries open positions from the previous chunk.
+    const result = await adapter.getTradesForChunk(since, until, inheritedState)
+    trades     = result.trades
+    finalState = result.finalState
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    console.error(`[bybit/full] chunk=${chunkIndex} getTrades error:`, message)
+    console.error(`[bybit/full] chunk=${chunkIndex} getTradesForChunk error:`, message)
     return NextResponse.json({ error: message, chunk_index: chunkIndex }, { status: 500 })
   }
 
@@ -60,7 +66,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const seen = new Set<string>()
     const rows = trades
       .filter((t: Trade) => {
-        // Skip trades where openedAt is unknown (position opened before this chunk's window)
+        // Skip trades where openedAt is unknown (position opened before this chunk's window
+        // and not carried via inherited_state — e.g., positions older than 182 days)
         if (!t.openedAt) {
           skippedNoOpenTime++
           return false
@@ -100,7 +107,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
 
   console.log(`[bybit/full] chunk=${chunkIndex} synced=${synced} skippedNoOpenTime=${skippedNoOpenTime}`)
-  return NextResponse.json({ synced, failedCategories: [], skipped_no_open_time: skippedNoOpenTime })
+  return NextResponse.json({
+    synced,
+    failedCategories:    [],
+    skipped_no_open_time: skippedNoOpenTime,
+    final_state:         finalState,  // pass to next chunk as inherited_state
+  })
 }
 
 export async function PATCH(req: NextRequest): Promise<NextResponse> {
@@ -122,3 +134,6 @@ export async function PATCH(req: NextRequest): Promise<NextResponse> {
 
   return NextResponse.json({ ok: true })
 }
+
+// Unused — kept for ExchangeAdapter interface compatibility if needed
+export { TOTAL_CHUNKS }
