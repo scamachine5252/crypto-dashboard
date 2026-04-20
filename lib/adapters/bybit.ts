@@ -66,11 +66,18 @@ function stateToJson(map: Map<string, SymbolState>): ReconstructionStateJson {
 // ---------------------------------------------------------------------------
 // Reconstruct closed positions from execution fills.
 //
-// Signal: closedSize > 0 marks a closing fill (confirmed by live API inspection:
-// 101/500 rows had non-zero closedSize; execPnl was absent for all 500 rows).
+// Signal: direction-based detection — a fill is a closing fill when its side is
+// opposite to the current open position direction. This is robust against the
+// Bybit REST quirk where closedSize may be "" or "0" for some fill types.
+//   long  position + Sell fill → closing
+//   short position + Buy  fill → closing
+//   closedQty = min(state.size, execQty)   — exact, no rounding
 //
-// PnL: use execPnl when present; otherwise calculate from reconstructed avgEntry.
-// This handles the common case where Bybit REST does not include execPnl.
+// PnL: use execPnl when present and non-zero; otherwise calculate from avgEntry.
+// execPnl is absent (null) in Bybit REST responses for most accounts.
+//
+// Funding: accumulated per-symbol, distributed proportionally by closedQty at the
+// end of the pass (post-processing — avoids a separate pre-pass).
 //
 // Stateful: accepts initialState from the previous chunk so cross-chunk
 // positions (opened in chunk N, closed in chunk N+1) are reconstructed correctly.
@@ -86,20 +93,10 @@ export function reconstructPositions(
   // Sort trade fills chronologically — required for correct state tracking
   tradeFills.sort((a, b) => Number(a.execTime) - Number(b.execTime))
 
-  // Per-symbol funding accumulation (for proportional distribution across closes)
+  // Per-symbol funding accumulation (distributed proportionally at the end)
   const fundingBySymbol: Record<string, number> = {}
   for (const f of fundingFills) {
     fundingBySymbol[f.symbol] = (fundingBySymbol[f.symbol] ?? 0) + Number(f.execFee)
-  }
-
-  // Per-symbol total closed qty — denominator for proportional funding
-  // Uses closedSize (correct signal, confirmed by live API data)
-  const totalClosedBySymbol: Record<string, number> = {}
-  for (const f of tradeFills) {
-    const cs = Number(f.closedSize)
-    if (cs > 0) {
-      totalClosedBySymbol[f.symbol] = (totalClosedBySymbol[f.symbol] ?? 0) + cs
-    }
   }
 
   // Initialize per-symbol state from previous chunk (or empty for first chunk)
@@ -108,45 +105,49 @@ export function reconstructPositions(
     : new Map()
 
   const trades: Trade[] = []
+  // Track emitted trade indices per symbol for post-processing funding distribution
+  const tradeRefsBySymbol: Record<string, Array<{ index: number; qty: number }>> = {}
 
   for (const exec of tradeFills) {
-    const qty       = Number(exec.execQty)
-    const price     = Number(exec.execPrice)
-    const closedQty = Number(exec.closedSize)  // 0 for opening fills; >0 for closing fills
+    const qty   = Number(exec.execQty)
+    const price = Number(exec.execPrice)
 
     let state = stateMap.get(exec.symbol) ?? {
       size: 0, avgEntry: 0, openTime: '', openSide: 'long' as TradeSide,
     }
 
+    // Direction-based closing detection: does this fill reduce an open position?
+    const isClosingFill = state.size > 0 && (
+      (state.openSide === 'long'  && exec.side === 'Sell') ||
+      (state.openSide === 'short' && exec.side === 'Buy')
+    )
+
+    const closedQty = isClosingFill ? Math.min(state.size, qty) : 0
+    const openedQty = qty - closedQty
+
     if (closedQty > 0) {
       // ── Closing fill ────────────────────────────────────────────────────────
-      // PnL: prefer execPnl if present, otherwise reconstruct from prices.
-      // execPnl is absent (undefined) in Bybit REST responses for most accounts.
-      const pnlRaw = exec.execPnl !== undefined && exec.execPnl !== null && exec.execPnl !== ''
-        ? Number(exec.execPnl)
-        : NaN  // absent → calculate below
+      // PnL: use execPnl when it carries a real value; otherwise reconstruct.
+      // execPnl is null in Bybit REST — Number(null)=0, treated as absent.
+      const execPnlNum = Number(exec.execPnl)
+      const hasExecPnl = exec.execPnl !== undefined && exec.execPnl !== null &&
+                         exec.execPnl !== '' && !isNaN(execPnlNum) && execPnlNum !== 0
 
       let pnl: number
-      if (!isNaN(pnlRaw)) {
+      if (hasExecPnl) {
         // execPnl present: linear = already USDT; inverse = base currency → convert
-        pnl = category === 'inverse' ? pnlRaw * price : pnlRaw
+        pnl = category === 'inverse' ? execPnlNum * price : execPnlNum
       } else {
-        // execPnl absent: reconstruct from weighted-average entry price
+        // Reconstruct from weighted-average entry price (mathematically exact for linear)
         const dir = state.openSide === 'long' ? 1 : -1
         if (category === 'inverse' && state.avgEntry > 0) {
-          // Inverse: PnL in USDT ≈ closedQty × (exitPrice/entryPrice − 1) × dir
           pnl = dir * closedQty * (price / state.avgEntry - 1)
         } else {
-          // Linear: PnL in USDT = (exitPrice − entryPrice) × closedQty × dir
           pnl = dir * (price - state.avgEntry) * closedQty
         }
       }
 
-      // Proportional funding for this closing fill
-      const totalFunding   = fundingBySymbol[exec.symbol] ?? 0
-      const totalClosed    = totalClosedBySymbol[exec.symbol] ?? 1
-      const fundingForFill = totalFunding * (closedQty / totalClosed)
-
+      const tradeIndex = trades.length
       trades.push({
         id:           exec.orderId || String(Math.random()),
         subAccountId: 'bybit' as ExchangeId,
@@ -159,7 +160,7 @@ export function reconstructPositions(
         quantity:     closedQty,
         pnl,
         pnlPercent:   0,
-        fee:          Number(exec.execFee) + fundingForFill,
+        fee:          Number(exec.execFee),  // funding added in post-processing below
         durationMin:  0,
         leverage:     1,
         fundingCost:  0,
@@ -168,14 +169,16 @@ export function reconstructPositions(
         closedAt:     new Date(Number(exec.execTime)).toISOString(),
       })
 
-      state = { ...state, size: Math.max(0, state.size - closedQty) }
+      if (!tradeRefsBySymbol[exec.symbol]) tradeRefsBySymbol[exec.symbol] = []
+      tradeRefsBySymbol[exec.symbol].push({ index: tradeIndex, qty: closedQty })
+
+      state = { ...state, size: state.size - closedQty }
     }
 
     // ── Opening fill (or the opened portion of a flip/partial-close fill) ────
-    const openedQty = qty - closedQty
     if (openedQty > 0) {
       if (state.size === 0) {
-        // New position cycle — record start time and side
+        // New position cycle — record start time and direction
         state = {
           size:     openedQty,
           avgEntry: price,
@@ -193,6 +196,20 @@ export function reconstructPositions(
     }
 
     stateMap.set(exec.symbol, state)
+  }
+
+  // Post-process: distribute funding proportionally by closedQty across each symbol's trades
+  for (const [symbol, refs] of Object.entries(tradeRefsBySymbol)) {
+    const totalFunding = fundingBySymbol[symbol] ?? 0
+    if (totalFunding === 0) continue
+    const totalQty = refs.reduce((s, r) => s + r.qty, 0)
+    if (totalQty === 0) continue
+    for (const { index, qty } of refs) {
+      trades[index] = {
+        ...trades[index],
+        fee: trades[index].fee + totalFunding * (qty / totalQty),
+      }
+    }
   }
 
   return { trades, finalState: stateToJson(stateMap) }
