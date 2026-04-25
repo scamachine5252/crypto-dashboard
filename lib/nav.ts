@@ -10,4 +10,5 @@ export const NAV_ITEMS: NavItem[] = [
   { label: 'Results',      href: '/results',      description: 'Equity curves & comparison table' },
   { label: 'History',      href: '/history',      description: 'Full trade log & export' },
   { label: 'API',          href: '/api-settings', description: 'Connect exchanges & manage keys' },
+  { label: 'Risk',         href: '/risk-management', description: 'Position limits & Telegram alerts' },
 ]
