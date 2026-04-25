@@ -15,6 +15,10 @@ import {
   normalizeEquityCurve,
   buildPerAccountMetrics,
 } from '../calculations'
+import { evaluateRules } from '../risk/evaluate'
+import { formatAlertMessage } from '../telegram'
+import type { EvaluateInput, RiskRule } from '../risk/types'
+import type { Position } from '../types'
 import { mapCcxtTrade } from '../adapters/ccxt-utils'
 import { reconstructPositions } from '../adapters/bybit'
 import type { RawExecution } from '../adapters/bybit'
@@ -689,5 +693,105 @@ describe('Bybit reconstructPositions — opened_at ≠ closed_at', () => {
     const { trades: result } = reconstructPositions(execs, 'linear')
     expect(result[0].openedAt).toBe(new Date(Number(openTime)).toISOString())
     expect(result[0].closedAt).toBe(new Date(Number(closeTime)).toISOString())
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Risk evaluation — boundary and format regressions
+//
+// evaluateRules uses `currentValue <= alert_threshold` to skip (no violation).
+// EQUAL to threshold must NOT fire — only values that EXCEED it should.
+// If this boundary changes to `<`, thresholds become inclusive and risk rules
+// would fire one unit too early, causing false positives.
+//
+// formatAlertMessage prefix regression: ⚠️ for warning, 🔴 for critical+kill.
+// If someone changes the emoji or removes it, Telegram alerts lose their
+// severity signal. These tests document the expected message format.
+// ---------------------------------------------------------------------------
+describe('Risk evaluation — threshold boundary regression', () => {
+  function makeRiskRule(overrides: Partial<RiskRule> & { rule_type: RiskRule['rule_type'] }): RiskRule {
+    return { id: 'r1', account_id: 'a1', alert_threshold: 1000, kill_threshold: null, enabled: true, ...overrides }
+  }
+  function makePos(overrides: Partial<Position> = {}): Position {
+    return {
+      symbol: 'BTC/USDT', side: 'long', size: 1, entryPrice: 100, markPrice: 100,
+      notional: 1000, unrealizedPnl: 0, leverage: 1, margin: 100, liquidationPrice: 0,
+      openTimestamp: 0, accountId: 'a1', accountName: 'T', exchange: 'bybit', ...overrides,
+    }
+  }
+  const base: EvaluateInput = { positions: [], currentUsdtBalance: 100000, athUsdtBalance: 110000, rules: [] }
+
+  it('position_size: value equal to alert_threshold does NOT fire (must exceed)', () => {
+    const rule = makeRiskRule({ rule_type: 'position_size', alert_threshold: 1000 })
+    // notional exactly equals threshold → no violation
+    const result = evaluateRules({ ...base, positions: [makePos({ notional: 1000 })], rules: [rule] })
+    expect(result).toHaveLength(0)
+  })
+
+  it('position_size: value ONE UNIT above threshold fires warning', () => {
+    const rule = makeRiskRule({ rule_type: 'position_size', alert_threshold: 1000 })
+    const result = evaluateRules({ ...base, positions: [makePos({ notional: 1000.01 })], rules: [rule] })
+    expect(result).toHaveLength(1)
+  })
+
+  it('max_drawdown: value equal to alert_threshold does NOT fire', () => {
+    // ath=100000, current=90000 → dd=10% exactly
+    const rule = makeRiskRule({ rule_type: 'max_drawdown', alert_threshold: 10 })
+    const result = evaluateRules({ ...base, currentUsdtBalance: 90000, athUsdtBalance: 100000, rules: [rule] })
+    expect(result).toHaveLength(0)
+  })
+
+  it('max_drawdown: value above threshold fires', () => {
+    // ath=100000, current=89000 → dd=11%
+    const rule = makeRiskRule({ rule_type: 'max_drawdown', alert_threshold: 10 })
+    const result = evaluateRules({ ...base, currentUsdtBalance: 89000, athUsdtBalance: 100000, rules: [rule] })
+    expect(result).toHaveLength(1)
+  })
+
+  it('max_positions: count equal to threshold does NOT fire', () => {
+    const rule = makeRiskRule({ rule_type: 'max_positions', alert_threshold: 2 })
+    const positions = [makePos(), makePos({ symbol: 'ETH/USDT' })]
+    expect(evaluateRules({ ...base, positions, rules: [rule] })).toHaveLength(0)
+  })
+
+  it('max_net_position_account: net equal to threshold does NOT fire', () => {
+    const rule = makeRiskRule({ rule_type: 'max_net_position_account', alert_threshold: 1000 })
+    const positions = [makePos({ side: 'long', notional: 1000 })]
+    expect(evaluateRules({ ...base, positions, rules: [rule] })).toHaveLength(0)
+  })
+})
+
+describe('Risk evaluation — formatAlertMessage prefix regression', () => {
+  const base = {
+    accountName: 'Aniket', exchange: 'bybit', ruleType: 'max_drawdown',
+    currentValue: 1.8, alertThreshold: 1.5, killThreshold: 2.0,
+  }
+
+  it('warning message starts with ⚠️ (not 🔴)', () => {
+    const msg = formatAlertMessage({ ...base, severity: 'warning' })
+    expect(msg.startsWith('⚠️')).toBe(true)
+    expect(msg.startsWith('🔴')).toBe(false)
+  })
+
+  it('critical+suspended message starts with 🔴 (not ⚠️)', () => {
+    const msg = formatAlertMessage({ ...base, severity: 'critical', suspended: true })
+    expect(msg.startsWith('🔴')).toBe(true)
+    expect(msg.startsWith('⚠️')).toBe(false)
+  })
+
+  it('warning message contains account name and exchange', () => {
+    const msg = formatAlertMessage({ ...base, severity: 'warning' })
+    expect(msg).toContain('Aniket')
+    expect(msg).toContain('bybit')
+  })
+
+  it('critical+suspended message contains SUSPENDED keyword', () => {
+    const msg = formatAlertMessage({ ...base, severity: 'critical', suspended: true })
+    expect(msg).toContain('SUSPENDED')
+  })
+
+  it('warning message does NOT contain SUSPENDED', () => {
+    const msg = formatAlertMessage({ ...base, severity: 'warning', suspended: false })
+    expect(msg).not.toContain('SUSPENDED')
   })
 })
