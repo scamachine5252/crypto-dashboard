@@ -6,8 +6,11 @@ import { BybitAdapter }   from '@/lib/adapters/bybit'
 import { BinanceAdapter } from '@/lib/adapters/binance'
 import { OkxAdapter }     from '@/lib/adapters/okx'
 import { MexcAdapter }    from '@/lib/adapters/mexc'
+import { extractBybitTransfers } from '@/lib/backfill-utils'
 import type { ExchangeAdapter } from '@/lib/adapters/types'
 import type { DateRange } from '@/lib/types'
+import * as ccxt from 'ccxt'
+import { runRiskEvaluation } from '@/lib/risk/run-evaluation'
 
 // ---------------------------------------------------------------------------
 // Shared sync logic
@@ -132,6 +135,135 @@ async function runSync(): Promise<NextResponse> {
         }
       }
 
+      // Fetch and upsert deposits/withdrawals for last 48h
+      const txRows: Array<Record<string, unknown>> = []
+      try {
+        if (row.exchange === 'bybit') {
+          const bybitEx = new ccxt.bybit({
+            apiKey: decrypt(row.api_key),
+            secret: decrypt(row.api_secret),
+            options: { defaultType: 'unified' },
+          })
+          // External deposits
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const depRaw = await (bybitEx as any).privateGetV5AssetDepositQueryRecord({
+              startTime: since, endTime: Date.now(), limit: 50,
+            }) as Record<string, unknown>
+            const depList = ((depRaw?.result as Record<string, unknown>)?.rows ?? []) as Array<Record<string, string>>
+            for (const d of depList) {
+              if (!d['txID']) continue
+              txRows.push({
+                account_id: row.id, exchange: 'bybit', type: 'deposit',
+                asset: d['coin'] ?? 'USDT', amount: Number(d['amount'] ?? 0),
+                fee: null, status: d['status'] ?? null, tx_id: d['txID'],
+                recorded_at: new Date(Number(d['depositFeeTime'] ?? d['createTime'] ?? since)).toISOString(),
+              })
+            }
+          } catch { /* ok */ }
+          // External withdrawals
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const wdRaw = await (bybitEx as any).privateGetV5AssetWithdrawQueryRecord({
+              startTime: since, endTime: Date.now(), limit: 50,
+            }) as Record<string, unknown>
+            const wdList = ((wdRaw?.result as Record<string, unknown>)?.list ?? []) as Array<Record<string, string>>
+            for (const w of wdList) {
+              if (!w['withdrawId'] && !w['id']) continue
+              txRows.push({
+                account_id: row.id, exchange: 'bybit', type: 'withdrawal',
+                asset: w['coin'] ?? 'USDT', amount: Number(w['amount'] ?? 0),
+                fee: w['withdrawFee'] ? Number(w['withdrawFee']) : null,
+                status: w['status'] ?? null, tx_id: w['withdrawId'] ?? w['id'],
+                recorded_at: new Date(Number(w['updateTime'] ?? w['createTime'] ?? since)).toISOString(),
+              })
+            }
+          } catch { /* ok */ }
+          // Internal sub-account transfers via transaction-log (TRANSFER_IN / TRANSFER_OUT)
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const resp = await (bybitEx as any).privateGetV5AccountTransactionLog({
+              accountType: 'UNIFIED', startTime: since, endTime: Date.now(), limit: 100,
+            }) as Record<string, unknown>
+            const list = ((resp?.result as Record<string, unknown>)?.list ?? []) as import('@/lib/backfill-utils').BybitTxLogRow[]
+            const transfers = extractBybitTransfers(list, row.id) as unknown as Record<string, unknown>[]
+            txRows.push(...transfers)
+          } catch { /* ok */ }
+        } else if (row.exchange === 'binance') {
+          const binEx = new ccxt.binance({ apiKey: decrypt(row.api_key), secret: decrypt(row.api_secret) })
+          // External blockchain deposits/withdrawals
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const deposits = await (binEx as any).fetchDeposits(undefined, since, 100) as Array<Record<string, unknown>>
+            for (const d of deposits) {
+              const info = (d['info'] ?? {}) as Record<string, string>
+              txRows.push({
+                account_id: row.id, exchange: 'binance', type: 'deposit',
+                asset: String(d['currency'] ?? 'USDT'), amount: Number(d['amount'] ?? 0),
+                fee: d['fee'] ? Number((d['fee'] as Record<string, unknown>)['cost'] ?? 0) : null,
+                status: String(d['status'] ?? ''), tx_id: String(d['id'] ?? info['txId'] ?? ''),
+                recorded_at: d['datetime'] ? String(d['datetime']) : new Date(Number(d['timestamp'])).toISOString(),
+              })
+            }
+          } catch { /* ok */ }
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const withdrawals = await (binEx as any).fetchWithdrawals(undefined, since, 100) as Array<Record<string, unknown>>
+            for (const w of withdrawals) {
+              const info = (w['info'] ?? {}) as Record<string, string>
+              txRows.push({
+                account_id: row.id, exchange: 'binance', type: 'withdrawal',
+                asset: String(w['currency'] ?? 'USDT'), amount: Number(w['amount'] ?? 0),
+                fee: w['fee'] ? Number((w['fee'] as Record<string, unknown>)['cost'] ?? 0) : null,
+                status: String(w['status'] ?? ''), tx_id: String(w['id'] ?? info['id'] ?? ''),
+                recorded_at: w['datetime'] ? String(w['datetime']) : new Date(Number(w['timestamp'])).toISOString(),
+              })
+            }
+          } catch { /* ok */ }
+          // Internal transfers via Futures/PM income history
+          try {
+            const incomeRows: Array<Record<string, string>> = []
+            const isPortfolioMargin = row.instrument === 'portfolio_margin'
+            const methods = isPortfolioMargin
+              ? ['papiGetUmIncome', 'papiGetCmIncome']
+              : ['fapiPrivateGetIncome']
+            for (const method of methods) {
+              try {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const resp = await (binEx as any)[method]({
+                  incomeType: 'TRANSFER', startTime: since, endTime: Date.now(), limit: 1000,
+                })
+                if (Array.isArray(resp)) {
+                  incomeRows.push(...(resp as Array<Record<string, string>>))
+                }
+              } catch { /* method unavailable */ }
+            }
+            for (const item of incomeRows) {
+              const amount = Number(item['income'] ?? 0)
+              if (amount === 0) continue
+              const tranId = String(item['tranId'] ?? '')
+              if (!tranId) continue
+              txRows.push({
+                account_id: row.id, exchange: 'binance',
+                type: amount > 0 ? 'deposit' : 'withdrawal',
+                asset: item['asset'] ?? 'USDT',
+                amount: Math.abs(amount),
+                fee: null, status: 'completed',
+                tx_id: `income_${tranId}`,
+                recorded_at: new Date(Number(item['time'] ?? 0)).toISOString(),
+              })
+            }
+          } catch { /* ok */ }
+        }
+        const validTx = txRows.filter(r => r['tx_id'])
+        if (validTx.length > 0) {
+          await supabaseAdmin.from('transactions').upsert(validTx, { onConflict: 'account_id,tx_id', ignoreDuplicates: true })
+          diag.transactionsSynced = validTx.length
+        }
+      } catch (txErr) {
+        diag.transactionsError = txErr instanceof Error ? txErr.message : String(txErr)
+      }
+
       await supabaseAdmin
         .from('accounts')
         .update({ last_incremental_sync_at: new Date().toISOString() })
@@ -149,8 +281,16 @@ async function runSync(): Promise<NextResponse> {
     diagnostics.push(diag)
   }
 
+  // Risk evaluation after sync — errors don't block response
+  let riskResult: { evaluated: number; violations: number } = { evaluated: 0, violations: 0 }
+  try {
+    riskResult = await runRiskEvaluation()
+  } catch (e) {
+    console.error('Risk evaluation error:', e)
+  }
+
   return NextResponse.json(
-    { synced, errors, accounts: syncedAccounts, diagnostics },
+    { synced, errors, accounts: syncedAccounts, diagnostics, risk: riskResult },
     { status: 200 },
   )
 }
