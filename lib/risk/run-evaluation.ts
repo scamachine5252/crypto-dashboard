@@ -42,7 +42,6 @@ export async function runRiskEvaluation(): Promise<{ evaluated: number; violatio
         .eq('enabled', true)
 
       const rules = (rulesData ?? []) as RiskRule[]
-      if (rules.length === 0) continue
 
       const apiKey    = decrypt(row.api_key)
       const apiSecret = decrypt(row.api_secret)

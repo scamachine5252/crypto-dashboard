@@ -46,7 +46,8 @@ function getCellStyle(
   value: number | undefined,
   rule: RiskRule | undefined,
 ): React.CSSProperties {
-  if (value === undefined || !rule) return { color: 'var(--text-muted)' }
+  if (value === undefined) return { color: 'var(--text-muted)' }
+  if (!rule) return { color: 'var(--text-primary)' }           // value exists, no rule → show neutral
   if (rule.kill_threshold !== null && value > rule.kill_threshold)
     return { color: 'var(--accent-loss)', fontWeight: 600 }
   if (value > rule.alert_threshold)
@@ -97,6 +98,8 @@ export default function RiskManagementPage() {
   const [accountToggles, setAccountToggles] = useState<Record<string, { monitorEnabled: boolean; killEnabled: boolean }>>({})
   const [saving, setSaving]     = useState(false)
   const [saveMsg, setSaveMsg]   = useState<string | null>(null)
+  // Kill switch confirmation: stores account id awaiting confirmation
+  const [killConfirm, setKillConfirm] = useState<string | null>(null)
 
   // ---------------------------------------------------------------------------
   // Load shared data
@@ -274,9 +277,9 @@ export default function RiskManagementPage() {
   const headerCell: React.CSSProperties = {
     ...cellBase,
     background: 'var(--bg-elevated)',
-    color: 'var(--text-muted)',
+    color: 'var(--text-primary)',
     fontSize: 10,
-    fontWeight: 600,
+    fontWeight: 700,
     textTransform: 'uppercase',
     letterSpacing: '0.06em',
   }
@@ -510,7 +513,7 @@ export default function RiskManagementPage() {
             </div>
 
             {/* Settings table */}
-            <div style={{ border: '1px solid var(--border-subtle)', overflowX: 'auto' }}>
+            <div style={{ border: '1px solid rgba(255,255,255,0.12)', overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
                 <thead>
                   <tr>
@@ -518,25 +521,25 @@ export default function RiskManagementPage() {
                       Account
                     </th>
                     {RULE_TYPES.map(rt => (
-                      <th key={rt.value} colSpan={2} style={{ ...headerCell, textAlign: 'center', borderLeft: '1px solid var(--border-subtle)' }}>
+                      <th key={rt.value} colSpan={2} style={{ ...headerCell, textAlign: 'center', borderLeft: '1px solid rgba(255,255,255,0.1)' }}>
                         {rt.label}
-                        <span className="ml-1 opacity-60">({rt.unit})</span>
+                        <span className="ml-1" style={{ color: 'var(--text-muted)', fontWeight: 400 }}>({rt.unit})</span>
                       </th>
                     ))}
-                    <th rowSpan={2} style={{ ...headerCell, textAlign: 'center', minWidth: 70, borderLeft: '1px solid var(--border-subtle)', verticalAlign: 'bottom' }}>
+                    <th rowSpan={2} style={{ ...headerCell, textAlign: 'center', minWidth: 70, borderLeft: '1px solid rgba(255,255,255,0.1)', verticalAlign: 'bottom' }}>
                       Monitor
                     </th>
-                    <th rowSpan={2} style={{ ...headerCell, textAlign: 'center', minWidth: 70, borderLeft: '1px solid var(--border-subtle)', verticalAlign: 'bottom' }}>
+                    <th rowSpan={2} style={{ ...headerCell, textAlign: 'center', minWidth: 70, borderLeft: '1px solid rgba(255,255,255,0.1)', verticalAlign: 'bottom' }}>
                       Kill SW
                     </th>
                   </tr>
                   <tr>
                     {RULE_TYPES.map(rt => (
                       <React.Fragment key={rt.value}>
-                        <th style={{ ...headerCell, textAlign: 'center', borderLeft: '1px solid var(--border-subtle)', color: '#FFD700', minWidth: 80 }}>
+                        <th style={{ ...headerCell, textAlign: 'center', borderLeft: '1px solid rgba(255,255,255,0.1)', color: '#FFD700', minWidth: 80 }}>
                           Alert
                         </th>
-                        <th style={{ ...headerCell, textAlign: 'center', color: 'var(--accent-loss)', minWidth: 80 }}>
+                        <th style={{ ...headerCell, textAlign: 'center', color: '#FF6B6B', minWidth: 80 }}>
                           Kill
                         </th>
                       </React.Fragment>
@@ -552,7 +555,7 @@ export default function RiskManagementPage() {
                       <tr
                         key={acc.id}
                         style={{
-                          background: i % 2 === 0 ? 'var(--bg-secondary)' : 'var(--bg-elevated)',
+                          background: i % 2 === 0 ? 'var(--bg-secondary)' : '#1e1e2a',
                           opacity: rowOpacity,
                         }}
                       >
@@ -572,7 +575,7 @@ export default function RiskManagementPage() {
                             }))
                           return (
                             <React.Fragment key={rt.value}>
-                              <td style={{ ...cellBase, borderLeft: '1px solid var(--border-subtle)', padding: '4px 6px' }}>
+                              <td style={{ ...cellBase, borderLeft: '1px solid rgba(255,255,255,0.08)', padding: '5px 6px' }}>
                                 <input
                                   type="number"
                                   placeholder="—"
@@ -580,15 +583,16 @@ export default function RiskManagementPage() {
                                   onChange={e => setCell({ alert: e.target.value })}
                                   className="w-full px-1.5 py-1 text-xs font-mono text-right"
                                   style={{
-                                    background: 'var(--bg-elevated)',
-                                    border: '1px solid rgba(255,215,0,0.3)',
-                                    color: 'var(--text-primary)',
+                                    background: '#252535',
+                                    border: '1px solid rgba(255,215,0,0.5)',
+                                    color: '#fff',
                                     borderRadius: 2,
                                     width: 76,
+                                    outline: 'none',
                                   }}
                                 />
                               </td>
-                              <td style={{ ...cellBase, padding: '4px 6px' }}>
+                              <td style={{ ...cellBase, padding: '5px 6px' }}>
                                 <input
                                   type="number"
                                   placeholder="—"
@@ -596,11 +600,12 @@ export default function RiskManagementPage() {
                                   onChange={e => setCell({ kill: e.target.value })}
                                   className="w-full px-1.5 py-1 text-xs font-mono text-right"
                                   style={{
-                                    background: 'var(--bg-elevated)',
-                                    border: '1px solid rgba(255,59,59,0.3)',
-                                    color: 'var(--text-primary)',
+                                    background: '#252535',
+                                    border: '1px solid rgba(255,80,80,0.55)',
+                                    color: '#fff',
                                     borderRadius: 2,
                                     width: 76,
+                                    outline: 'none',
                                   }}
                                 />
                               </td>
@@ -609,7 +614,7 @@ export default function RiskManagementPage() {
                         })}
 
                         {/* Monitor toggle */}
-                        <td style={{ ...cellBase, textAlign: 'center', borderLeft: '1px solid var(--border-subtle)' }}>
+                        <td style={{ ...cellBase, textAlign: 'center', borderLeft: '1px solid rgba(255,255,255,0.08)' }}>
                           <button
                             onClick={() =>
                               setAccountToggles(prev => ({
@@ -631,25 +636,59 @@ export default function RiskManagementPage() {
                         </td>
 
                         {/* Kill toggle */}
-                        <td style={{ ...cellBase, textAlign: 'center', borderLeft: '1px solid var(--border-subtle)' }}>
-                          <button
-                            onClick={() =>
-                              setAccountToggles(prev => ({
-                                ...prev,
-                                [acc.id]: { ...prev[acc.id], killEnabled: !toggles.killEnabled },
-                              }))
-                            }
-                            className="px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider"
-                            style={{
-                              background: toggles.killEnabled ? 'rgba(255,59,59,0.15)' : 'var(--bg-elevated)',
-                              color:      toggles.killEnabled ? 'var(--accent-loss)' : 'var(--text-muted)',
-                              border:     `1px solid ${toggles.killEnabled ? 'var(--accent-loss)' : 'var(--border-subtle)'}`,
-                              borderRadius: 3,
-                              minWidth: 40,
-                            }}
-                          >
-                            {toggles.killEnabled ? 'ON' : 'OFF'}
-                          </button>
+                        <td style={{ ...cellBase, textAlign: 'center', borderLeft: '1px solid var(--border-subtle)', minWidth: 110 }}>
+                          {killConfirm === acc.id ? (
+                            <div className="flex flex-col items-center gap-1">
+                              <span className="text-[9px] uppercase tracking-wider font-semibold" style={{ color: 'var(--accent-loss)' }}>
+                                Enable kill?
+                              </span>
+                              <div className="flex gap-1">
+                                <button
+                                  onClick={() => {
+                                    setKillConfirm(null)
+                                    setAccountToggles(prev => ({
+                                      ...prev,
+                                      [acc.id]: { ...prev[acc.id], killEnabled: true },
+                                    }))
+                                  }}
+                                  className="px-2 py-0.5 text-[10px] font-semibold uppercase"
+                                  style={{ background: 'rgba(255,59,59,0.2)', color: 'var(--accent-loss)', border: '1px solid var(--accent-loss)', borderRadius: 2 }}
+                                >
+                                  Yes
+                                </button>
+                                <button
+                                  onClick={() => setKillConfirm(null)}
+                                  className="px-2 py-0.5 text-[10px] font-semibold uppercase"
+                                  style={{ background: 'var(--bg-elevated)', color: 'var(--text-muted)', border: '1px solid var(--border-subtle)', borderRadius: 2 }}
+                                >
+                                  No
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => {
+                                if (!toggles.killEnabled) {
+                                  setKillConfirm(acc.id)
+                                } else {
+                                  setAccountToggles(prev => ({
+                                    ...prev,
+                                    [acc.id]: { ...prev[acc.id], killEnabled: false },
+                                  }))
+                                }
+                              }}
+                              className="px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider"
+                              style={{
+                                background: toggles.killEnabled ? 'rgba(255,59,59,0.15)' : 'var(--bg-elevated)',
+                                color:      toggles.killEnabled ? 'var(--accent-loss)' : 'var(--text-muted)',
+                                border:     `1px solid ${toggles.killEnabled ? 'var(--accent-loss)' : 'var(--border-subtle)'}`,
+                                borderRadius: 3,
+                                minWidth: 40,
+                              }}
+                            >
+                              {toggles.killEnabled ? 'ON' : 'OFF'}
+                            </button>
+                          )}
                         </td>
                       </tr>
                     )
