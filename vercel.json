@@ -1,13 +1,14 @@
 {
   "functions": {
     "app/api/**": {
+      "maxDuration": 60,
       "regions": ["fra1"]
     }
   },
   "crons": [
     {
       "path": "/api/sync",
-      "schedule": "0 9 * * *"
+      "schedule": "0 */4 * * *"
     }
   ]
 }

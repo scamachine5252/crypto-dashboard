@@ -8,6 +8,7 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
+  ReferenceLine,
 } from 'recharts'
 import { ACCOUNT_COLORS } from '@/lib/mock-data'
 import { formatMoney } from '@/lib/utils'
@@ -17,11 +18,19 @@ interface BalanceSeries {
   data: { date: string; value: number }[]
 }
 
+export interface TransactionMarker {
+  date: string   // YYYY-MM-DD
+  type: 'deposit' | 'withdrawal'
+  amount: number
+  asset: string
+}
+
 interface BalanceLineChartProps {
   series: BalanceSeries[]
   height?: number
   colorMap?: Record<string, string>
   nameMap?: Record<string, string>
+  transactions?: TransactionMarker[]
 }
 
 interface TooltipPayloadItem {
@@ -65,20 +74,25 @@ function CustomTooltip({ active, label, payload, nameMap }: CustomTooltipProps) 
 }
 
 // Merge all series into recharts-friendly format: [{ date, id1: val, id2: val }]
-function mergeData(series: BalanceSeries[]): Record<string, number | string>[] {
+// Uses date-based matching (not index) + carry-forward for missing dates.
+export function mergeData(series: BalanceSeries[]): Record<string, number | string>[] {
   if (series.length === 0) return []
 
-  // Use first series as date scaffold
-  return series[0].data.map((entry, i) => {
-    const point: Record<string, number | string> = { date: entry.date }
+  const allDates = [...new Set(series.flatMap(s => s.data.map(d => d.date)))].sort()
+  const lastKnown: Record<string, number> = {}
+
+  return allDates.map(date => {
+    const point: Record<string, number | string> = { date }
     for (const s of series) {
-      point[s.subAccountId] = s.data[i]?.value ?? 0
+      const found = s.data.find(d => d.date === date)
+      if (found !== undefined) lastKnown[s.subAccountId] = found.value
+      point[s.subAccountId] = lastKnown[s.subAccountId] ?? 0
     }
     return point
   })
 }
 
-export default function BalanceLineChart({ series, height = 240, colorMap, nameMap }: BalanceLineChartProps) {
+export default function BalanceLineChart({ series, height = 240, colorMap, nameMap, transactions }: BalanceLineChartProps) {
   const data = mergeData(series)
 
   const formatY = (v: number) => {
@@ -152,6 +166,22 @@ export default function BalanceLineChart({ series, height = 240, colorMap, nameM
                 strokeWidth={1.5}
                 dot={false}
                 activeDot={{ r: 3, stroke: 'var(--bg-secondary)', strokeWidth: 2 }}
+              />
+            ))}
+            {transactions?.map((tx, i) => (
+              <ReferenceLine
+                key={`tx-${i}`}
+                x={tx.date}
+                stroke={tx.type === 'deposit' ? 'var(--accent-profit)' : 'var(--accent-loss)'}
+                strokeDasharray="4 3"
+                strokeWidth={1.5}
+                label={{
+                  value: `${tx.type === 'deposit' ? '+' : '-'}$${Math.abs(tx.amount).toLocaleString('en', { maximumFractionDigits: 0 })}`,
+                  position: 'top',
+                  fontSize: 9,
+                  fill: tx.type === 'deposit' ? 'var(--accent-profit)' : 'var(--accent-loss)',
+                  fontFamily: 'var(--font-geist-mono)',
+                }}
               />
             ))}
           </LineChart>

@@ -175,6 +175,9 @@ export default function ApiSettingsPage() {
   type ScanEntry = { current: number; total: number; failed: { symbol: string; error: string }[]; completed?: boolean; isError?: boolean; errorMsg?: string }
   const [scanState, setScanState] = useState<Record<string, ScanEntry>>({})
 
+  type BackfillEntry = { phase: 'balance' | 'transactions'; current: number; total: number; completed?: boolean; isError?: boolean; errorMsg?: string }
+  const [backfillState, setBackfillState] = useState<Record<string, BackfillEntry>>({})
+
 
   // ---------------------------------------------------------------------------
   // Load accounts from API on mount
@@ -338,6 +341,51 @@ export default function ApiSettingsPage() {
       setScanState((prev) => ({ ...prev, [accountId]: { current: 0, total: 0, failed: [], isError: true, errorMsg: friendlyError(err) } }))
     }
   }, [fetchAccounts])
+
+  // ---------------------------------------------------------------------------
+  // Balance + transactions backfill — chunked, with phase progress
+  // ---------------------------------------------------------------------------
+  const handleBackfill = useCallback(async (accountId: string) => {
+    setBackfillState((prev) => ({ ...prev, [accountId]: { phase: 'balance', current: 0, total: 0 } }))
+
+    try {
+      // Phase 1: balance backfill
+      const balChunksRes = await fetch(`/api/sync/balance-backfill?account_id=${accountId}`)
+      if (!balChunksRes.ok) throw new Error('Failed to get balance chunk count')
+      const { totalChunks: balTotal } = (await balChunksRes.json()) as { totalChunks: number }
+
+      setBackfillState((prev) => ({ ...prev, [accountId]: { phase: 'balance', current: 0, total: balTotal } }))
+
+      for (let i = 0; i < balTotal; i++) {
+        await fetch('/api/sync/balance-backfill', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ account_id: accountId, chunk_index: i }),
+        })
+        setBackfillState((prev) => ({ ...prev, [accountId]: { phase: 'balance', current: i + 1, total: balTotal } }))
+      }
+
+      // Phase 2: transactions backfill
+      const txChunksRes = await fetch(`/api/sync/transactions-backfill?account_id=${accountId}`)
+      if (!txChunksRes.ok) throw new Error('Failed to get transactions chunk count')
+      const { totalChunks: txTotal } = (await txChunksRes.json()) as { totalChunks: number }
+
+      setBackfillState((prev) => ({ ...prev, [accountId]: { phase: 'transactions', current: 0, total: txTotal } }))
+
+      for (let i = 0; i < txTotal; i++) {
+        await fetch('/api/sync/transactions-backfill', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ account_id: accountId, chunk_index: i }),
+        })
+        setBackfillState((prev) => ({ ...prev, [accountId]: { phase: 'transactions', current: i + 1, total: txTotal } }))
+      }
+
+      setBackfillState((prev) => ({ ...prev, [accountId]: { phase: 'transactions', current: txTotal, total: txTotal, completed: true } }))
+    } catch (err) {
+      setBackfillState((prev) => ({ ...prev, [accountId]: { phase: 'balance', current: 0, total: 0, isError: true, errorMsg: friendlyError(err) } }))
+    }
+  }, [])
 
   const patch = useCallback((field: keyof typeof EMPTY_FORM, value: string) => {
     setForm((prev) => ({ ...prev, [field]: value }))
@@ -854,6 +902,37 @@ export default function ApiSettingsPage() {
                                 FULL HISTORY
                               </button>
                             )}
+
+                            {/* Backfill History — balance + transactions */}
+                            {(() => {
+                              const bs = backfillState[account.id]
+                              if (bs && !bs.completed && !bs.isError) {
+                                const label = bs.phase === 'balance' ? 'Balance' : 'Transactions'
+                                return (
+                                  <span style={{ fontSize: 10, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                                    {label} {bs.current}/{bs.total}…
+                                  </span>
+                                )
+                              }
+                              if (bs?.completed) return <span style={{ fontSize: 10, color: 'var(--accent-profit)' }}>✓ Backfill done</span>
+                              if (bs?.isError) return <span style={{ fontSize: 10, color: 'var(--accent-loss)' }}>{bs.errorMsg ?? 'Backfill error'}</span>
+                              return (
+                                <button
+                                  onClick={() => handleBackfill(account.id)}
+                                  style={{
+                                    fontSize: 10,
+                                    padding: '3px 8px',
+                                    border: '1px solid var(--border-medium)',
+                                    background: 'transparent',
+                                    color: 'var(--accent-gold)',
+                                    cursor: 'pointer',
+                                    letterSpacing: '0.05em',
+                                  }}
+                                >
+                                  BACKFILL
+                                </button>
+                              )
+                            })()}
 
                             {/* Test */}
                             <button

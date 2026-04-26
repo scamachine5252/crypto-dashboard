@@ -220,6 +220,31 @@ async function runSync(): Promise<NextResponse> {
               })
             }
           } catch { /* ok */ }
+          // Internal sub-account transfers (type=1: in, type=2: out)
+          for (const transferType of [1, 2] as const) {
+            try {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const resp = await (binEx as any).sapiGetSubAccountTransferSubUserHistory({
+                type: transferType, startTime: since, endTime: Date.now(), limit: 500,
+              }) as Array<Record<string, string>>
+              if (!Array.isArray(resp)) continue
+              for (const item of resp) {
+                const tranId = String(item['tranId'] ?? '')
+                if (!tranId) continue
+                const amount = Number(item['qty'] ?? item['amount'] ?? 0)
+                if (amount === 0) continue
+                if (item['status'] && item['status'] !== 'SUCCESS') continue
+                txRows.push({
+                  account_id: row.id, exchange: 'binance',
+                  type: transferType === 1 ? 'deposit' : 'withdrawal',
+                  asset: item['asset'] ?? 'USDT', amount,
+                  fee: null, status: 'completed',
+                  tx_id: `subtransfer_${tranId}`,
+                  recorded_at: new Date(Number(item['time'] ?? 0)).toISOString(),
+                })
+              }
+            } catch { /* ok */ }
+          }
           // Internal transfers via Futures/PM income history
           try {
             const incomeRows: Array<Record<string, string>> = []
@@ -246,8 +271,7 @@ async function runSync(): Promise<NextResponse> {
               txRows.push({
                 account_id: row.id, exchange: 'binance',
                 type: amount > 0 ? 'deposit' : 'withdrawal',
-                asset: item['asset'] ?? 'USDT',
-                amount: Math.abs(amount),
+                asset: item['asset'] ?? 'USDT', amount: Math.abs(amount),
                 fee: null, status: 'completed',
                 tx_id: `income_${tranId}`,
                 recorded_at: new Date(Number(item['time'] ?? 0)).toISOString(),

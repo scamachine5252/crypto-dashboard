@@ -5,7 +5,7 @@ import type { Period, DateRange, Timeframe, DailyPnLEntry, ExchangeId } from '@/
 import { resolveDateRange, aggregateChartData } from '@/lib/calculations'
 import Header from '@/components/layout/Header'
 import PeriodSelector from '@/components/ui/PeriodSelector'
-import BalanceLineChart from '@/components/charts/BalanceLineChart'
+import BalanceLineChart, { type TransactionMarker } from '@/components/charts/BalanceLineChart'
 import PnlHistogramChart from '@/components/charts/PnlHistogramChart'
 import { formatMoney } from '@/lib/utils'
 
@@ -59,15 +59,17 @@ const TIMEFRAME_OPTIONS: { label: string; value: Timeframe }[] = [
 ]
 
 type AccountSummary = {
-  accountId:   string
-  accountName: string
-  exchange:    string
-  fund:        string
-  startUsdt:   number
-  endUsdt:     number
-  deltaUsdt:   number
-  totalFees:   number
-  totalPnl:    number
+  accountId:     string
+  accountName:   string
+  exchange:      string
+  fund:          string
+  startUsdt:     number
+  endUsdt:       number
+  deltaUsdt:     number
+  netDeposits:   number
+  tradingResult: number
+  totalFees:     number
+  totalPnl:      number
 }
 
 type AccountInfo = { id: string; account_name: string; exchange: string; fund: string }
@@ -83,6 +85,11 @@ export default function ResultsPage() {
   const [accounts, setAccounts]                 = useState<AccountInfo[]>([])
   const [checkedIds, setCheckedIds]             = useState<Set<string>>(new Set())
   const [loading, setLoading]                   = useState(true)
+  const [transactions, setTransactions]         = useState<Array<{
+    id: string; account_id: string; exchange: string; type: 'deposit'|'withdrawal'
+    asset: string; amount: number; fee: number|null; status: string|null
+    tx_id: string|null; recorded_at: string
+  }>>([])
 
   const handlePeriodChange = (p: Period, range?: DateRange) => {
     setPeriod(p)
@@ -129,11 +136,21 @@ export default function ResultsPage() {
         dailyPnl?: { accountId: string; date: string; pnl: number }[]
         accountSummaries?: AccountSummary[]
       }) => {
-        setAccounts(data.accounts ?? [])
+        const accs = data.accounts ?? []
+        setAccounts(accs)
         setBalanceHistory(data.balanceHistory ?? [])
         setDailyPnl(data.dailyPnl ?? [])
         setAccountSummaries(data.accountSummaries ?? [])
-        setCheckedIds(new Set((data.accounts ?? []).map((a) => a.id)))
+        setCheckedIds(new Set(accs.map((a) => a.id)))
+
+        // Fetch transactions for this period
+        if (accs.length > 0) {
+          const ids = accs.map((a) => a.id).join(',')
+          fetch(`/api/transactions?account_ids=${ids}&since=${new Date(range.start).toISOString()}&until=${new Date(range.end + 'T23:59:59Z').toISOString()}`)
+            .then(r => r.json())
+            .then((d: { transactions?: typeof transactions }) => setTransactions(d.transactions ?? []))
+            .catch(() => {})
+        }
       })
       .catch(() => { /* keep previous */ })
       .finally(() => setLoading(false))
@@ -176,10 +193,31 @@ export default function ResultsPage() {
   )
 
   const totals = useMemo(() => ({
-    deltaUsdt: visibleSummaries.reduce((s, r) => s + r.deltaUsdt, 0),
-    fees:      visibleSummaries.reduce((s, r) => s + r.totalFees, 0),
-    pnl:       visibleSummaries.reduce((s, r) => s + r.totalPnl, 0),
+    deltaUsdt:     visibleSummaries.reduce((s, r) => s + r.deltaUsdt, 0),
+    netDeposits:   visibleSummaries.reduce((s, r) => s + r.netDeposits, 0),
+    tradingResult: visibleSummaries.reduce((s, r) => s + r.tradingResult, 0),
+    fees:          visibleSummaries.reduce((s, r) => s + r.totalFees, 0),
+    pnl:           visibleSummaries.reduce((s, r) => s + r.totalPnl, 0),
   }), [visibleSummaries])
+
+  // Transaction markers for balance chart (checked accounts only)
+  const txMarkers = useMemo<TransactionMarker[]>(
+    () => transactions
+      .filter(t => checkedIds.has(t.account_id))
+      .map(t => ({
+        date:   t.recorded_at.slice(0, 10),
+        type:   t.type,
+        amount: t.amount,
+        asset:  t.asset,
+      })),
+    [transactions, checkedIds]
+  )
+
+  // Visible transactions for the table
+  const visibleTx = useMemo(
+    () => transactions.filter(t => checkedIds.has(t.account_id)),
+    [transactions, checkedIds]
+  )
 
   const cellBorder = { borderRight: '1px solid var(--border-subtle)', borderBottom: '1px solid var(--border-subtle)' }
   const numCell    = 'px-3 py-2 text-center font-mono tabular text-xs'
@@ -201,7 +239,7 @@ export default function ResultsPage() {
         {/* Charts row */}
         <div className="px-4 pt-3 pb-2 grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* USDT Balance chart */}
-          <BalanceLineChart series={usdtSeries} height={220} colorMap={colorMap} nameMap={nameMap} />
+          <BalanceLineChart series={usdtSeries} height={220} colorMap={colorMap} nameMap={nameMap} transactions={txMarkers} />
 
           {/* PnL histogram */}
           <div style={{ border: '1px solid var(--border-subtle)' }}>
@@ -249,7 +287,7 @@ export default function ResultsPage() {
                       style={{ accentColor: 'var(--accent-blue)' }}
                     />
                   </th>
-                  {['Exchange', 'Account', 'Fund', 'Opening', 'Closing', 'Difference', 'Fees', 'PnL'].map((col) => (
+                  {['Exchange', 'Account', 'Fund', 'Opening', 'Closing', 'Difference', 'Net Deposits', 'Trading Result', 'Fees', 'PnL'].map((col) => (
                     <th
                       key={col}
                       className="px-3 py-2 text-center text-[10px] uppercase tracking-widest font-semibold"
@@ -313,6 +351,8 @@ export default function ResultsPage() {
                           {formatMoney(summary.endUsdt)}
                         </td>
                         <td className={numCell} style={cellBorder}><Delta value={summary.deltaUsdt} /></td>
+                        <td className={numCell} style={cellBorder}><Delta value={summary.netDeposits} /></td>
+                        <td className={numCell} style={cellBorder}><Delta value={summary.tradingResult} /></td>
                         <td className={numCell} style={{ ...cellBorder, color: 'var(--accent-loss)' }}>
                           {formatMoney(summary.totalFees)}
                         </td>
@@ -336,6 +376,12 @@ export default function ResultsPage() {
                     <td className="px-3 py-2 text-center" style={{ borderRight: '1px solid var(--border-subtle)' }}>
                       <Delta value={totals.deltaUsdt} />
                     </td>
+                    <td className="px-3 py-2 text-center" style={{ borderRight: '1px solid var(--border-subtle)' }}>
+                      <Delta value={totals.netDeposits} />
+                    </td>
+                    <td className="px-3 py-2 text-center" style={{ borderRight: '1px solid var(--border-subtle)' }}>
+                      <Delta value={totals.tradingResult} />
+                    </td>
                     <td className="px-3 py-2 text-center font-mono tabular text-xs" style={{ color: 'var(--accent-loss)', borderRight: '1px solid var(--border-subtle)' }}>
                       {formatMoney(totals.fees)}
                     </td>
@@ -348,6 +394,71 @@ export default function ResultsPage() {
             </table>
           </div>
         </div>
+        {/* Deposits & Withdrawals table */}
+        {visibleTx.length > 0 && (
+          <div className="px-4 pt-4">
+            <div style={{ border: '1px solid var(--border-subtle)', overflowX: 'auto' }}>
+              <div
+                className="px-4 py-2 text-xs font-semibold tracking-wide uppercase font-heading"
+                style={{ borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-primary)', background: 'var(--bg-secondary)' }}
+              >
+                Deposits &amp; Withdrawals
+              </div>
+              <table className="w-full text-xs border-collapse" style={{ minWidth: 560 }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-secondary)' }}>
+                    {['Date', 'Account', 'Type', 'Asset', 'Amount', 'Fee', 'Status'].map((col) => (
+                      <th
+                        key={col}
+                        className="px-3 py-2 text-center text-[10px] uppercase tracking-widest font-semibold"
+                        style={{ color: 'var(--text-muted)', borderRight: '1px solid var(--border-subtle)', whiteSpace: 'nowrap' }}
+                      >
+                        {col}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleTx.map((tx) => {
+                    const isDeposit = tx.type === 'deposit'
+                    const amtColor  = isDeposit ? 'var(--accent-profit)' : 'var(--accent-loss)'
+                    const accName   = nameMap[tx.account_id] ?? tx.account_id.slice(0, 8)
+                    return (
+                      <tr key={tx.id} style={{ borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-secondary)' }}>
+                        <td className="px-3 py-2 text-center font-mono text-[11px]" style={{ color: 'var(--text-muted)', borderRight: '1px solid var(--border-subtle)', whiteSpace: 'nowrap' }}>
+                          {tx.recorded_at.slice(0, 10)}
+                        </td>
+                        <td className="px-3 py-2" style={{ color: 'var(--text-primary)', borderRight: '1px solid var(--border-subtle)', whiteSpace: 'nowrap' }}>
+                          {accName}
+                        </td>
+                        <td className="px-3 py-2 text-center" style={{ borderRight: '1px solid var(--border-subtle)' }}>
+                          <span
+                            className="px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider"
+                            style={{ background: isDeposit ? 'rgba(0,255,136,0.12)' : 'rgba(255,59,59,0.12)', color: amtColor, borderRadius: 2 }}
+                          >
+                            {tx.type}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 text-center font-mono text-[11px]" style={{ color: 'var(--text-secondary)', borderRight: '1px solid var(--border-subtle)' }}>
+                          {tx.asset}
+                        </td>
+                        <td className="px-3 py-2 text-right font-mono tabular text-[11px] font-semibold" style={{ color: amtColor, borderRight: '1px solid var(--border-subtle)' }}>
+                          {isDeposit ? '+' : '-'}{Number(tx.amount).toLocaleString('en', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        <td className="px-3 py-2 text-right font-mono tabular text-[11px]" style={{ color: 'var(--text-muted)', borderRight: '1px solid var(--border-subtle)' }}>
+                          {tx.fee != null ? Number(tx.fee).toFixed(4) : '—'}
+                        </td>
+                        <td className="px-3 py-2 text-center text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                          {tx.status ?? '—'}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </main>
     </div>
   )

@@ -4,6 +4,7 @@ import { supabaseAdmin } from '@/lib/supabase/server'
 
 type BalRow   = { account_id: string; usdt_balance: number; recorded_at: string }
 type TradeRow = { account_id: string; pnl: number | null; fee: number | null; closed_at: string }
+type TxRow    = { account_id: string; type: string; amount: number }
 type AccRow   = { id: string; account_name: string; exchange: string; fund: string }
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
@@ -93,6 +94,20 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     }
   }
 
+  // Net deposits per account (deposits - withdrawals in range)
+  const { data: txData } = await supabaseAdmin
+    .from('transactions')
+    .select('account_id, type, amount')
+    .in('account_id', accountIds)
+    .gte('recorded_at', sinceDate)
+    .lte('recorded_at', untilDate)
+
+  const netDepositsMap: Record<string, number> = {}
+  for (const tx of (txData ?? []) as TxRow[]) {
+    const sign = tx.type === 'deposit' ? 1 : -1
+    netDepositsMap[tx.account_id] = (netDepositsMap[tx.account_id] ?? 0) + sign * Number(tx.amount)
+  }
+
   // Account summaries: first/last balance + total fees/pnl in range
   const accountSummaries = (accounts as AccRow[]).map((acc) => {
     const accDates = Object.keys(dayMap[acc.id] ?? {}).sort()
@@ -101,6 +116,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const accTrades = tradeRows.filter((t) => t.account_id === acc.id)
     const totalFees = accTrades.reduce((s, t) => s + Number(t.fee ?? 0), 0)
     const totalPnl  = accTrades.reduce((s, t) => s + Number(t.pnl ?? 0), 0)
+    const netDeposits   = netDepositsMap[acc.id] ?? 0
+    const deltaUsdt     = endUsdt - startUsdt
+    const tradingResult = deltaUsdt - netDeposits
     return {
       accountId:   acc.id,
       accountName: acc.account_name,
@@ -108,7 +126,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       fund:        acc.fund,
       startUsdt,
       endUsdt,
-      deltaUsdt: endUsdt - startUsdt,
+      deltaUsdt,
+      netDeposits,
+      tradingResult,
       totalFees,
       totalPnl,
     }
