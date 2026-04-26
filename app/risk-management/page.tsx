@@ -74,10 +74,10 @@ export default function RiskManagementPage() {
     setSaving(true)
     setSaveMsg(null)
     try {
-      for (const rt of RULE_TYPES) {
+      await Promise.all(RULE_TYPES.map(rt => {
         const f = form[rt.value]
         if (f.enabled && f.alert) {
-          await fetch('/api/risk/rules', {
+          return fetch('/api/risk/rules', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -87,22 +87,22 @@ export default function RiskManagementPage() {
               enabled: true,
             }),
           })
-        } else {
-          const existing = rules.find(r => r.rule_type === rt.value)
-          if (existing) {
-            await fetch('/api/risk/rules', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                account_id: selectedId, rule_type: rt.value,
-                alert_threshold: existing.alert_threshold,
-                kill_threshold: existing.kill_threshold,
-                enabled: false,
-              }),
-            })
-          }
         }
-      }
+        const existing = rules.find(r => r.rule_type === rt.value)
+        if (existing) {
+          return fetch('/api/risk/rules', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              account_id: selectedId, rule_type: rt.value,
+              alert_threshold: existing.alert_threshold,
+              kill_threshold: existing.kill_threshold,
+              enabled: false,
+            }),
+          })
+        }
+        return Promise.resolve()
+      }))
       setSaveMsg('Saved')
     } catch {
       setSaveMsg('Error saving')
@@ -113,8 +113,8 @@ export default function RiskManagementPage() {
   }
 
   const handleAcknowledge = async (id: string) => {
-    await fetch(`/api/risk/alerts/${id}/acknowledge`, { method: 'PATCH' })
-    setAlerts(prev => prev.filter(a => a.id !== id))
+    const res = await fetch(`/api/risk/alerts/${id}/acknowledge`, { method: 'PATCH' })
+    if (res.ok) setAlerts(prev => prev.filter(a => a.id !== id))
   }
 
   const visibleAlerts = alerts.filter(a => {

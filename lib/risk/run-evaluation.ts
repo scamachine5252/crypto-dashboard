@@ -121,16 +121,20 @@ export async function runRiskEvaluation(): Promise<{ evaluated: number; violatio
           await supabaseAdmin.from('accounts').update({ is_suspended: true }).eq('id', row.id)
         }
 
-        await sendTelegramAlert(formatAlertMessage({
-          accountName:    row.account_name,
-          exchange:       row.exchange,
-          ruleType:       v.rule.rule_type,
-          currentValue:   v.current_value,
-          alertThreshold: v.rule.alert_threshold,
-          severity:       v.severity,
-          killThreshold:  v.rule.kill_threshold,
-          suspended,
-        }))
+        try {
+          await sendTelegramAlert(formatAlertMessage({
+            accountName:    row.account_name,
+            exchange:       row.exchange,
+            ruleType:       v.rule.rule_type,
+            currentValue:   v.current_value,
+            alertThreshold: v.rule.alert_threshold,
+            severity:       v.severity,
+            killThreshold:  v.rule.kill_threshold,
+            suspended,
+          }))
+        } catch (e) {
+          console.error('Telegram alert failed:', e)
+        }
 
         totalViolations++
       }
