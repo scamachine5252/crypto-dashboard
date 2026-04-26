@@ -9,14 +9,16 @@ const VALID_RULE_TYPES = [
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const account_id = req.nextUrl.searchParams.get('account_id')
-  if (!account_id) return NextResponse.json({ error: 'account_id required' }, { status: 400 })
 
-  const { data, error } = await supabaseAdmin
+  let query = supabaseAdmin
     .from('risk_rules')
     .select('id, account_id, rule_type, alert_threshold, kill_threshold, enabled, created_at, updated_at')
-    .eq('account_id', account_id)
+    .order('account_id')
     .order('rule_type')
 
+  if (account_id) query = query.eq('account_id', account_id)
+
+  const { data, error } = await query
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ rules: data ?? [] })
 }

@@ -1,4 +1,4 @@
-import { evaluateRules } from '../risk/evaluate'
+import { evaluateRules, computeAllMetricValues } from '../risk/evaluate'
 import type { EvaluateInput, RiskRule } from '../risk/types'
 import type { Position } from '../types'
 
@@ -145,5 +145,52 @@ describe('evaluateRules', () => {
       expect(result).toHaveLength(1)
       expect(result[0].current_value).toBe(45000)
     })
+  })
+})
+
+describe('computeAllMetricValues', () => {
+  it('returns 0 for all metrics when no positions and no drawdown', () => {
+    const result = computeAllMetricValues({ positions: [], currentUsdtBalance: 100000, athUsdtBalance: 100000 })
+    expect(result.position_size).toBe(0)
+    expect(result.max_drawdown).toBe(0)
+    expect(result.max_positions).toBe(0)
+    expect(result.max_unrealized_pnl_per_position).toBe(0)
+    expect(result.max_net_position_instrument).toBe(0)
+    expect(result.max_net_position_account).toBe(0)
+  })
+
+  it('computes correct values with a long position and drawdown', () => {
+    const positions = [makePosition({ notional: 50000, unrealizedPnl: -2000 })]
+    const result = computeAllMetricValues({ positions, currentUsdtBalance: 90000, athUsdtBalance: 100000 })
+    expect(result.position_size).toBe(50000)
+    expect(result.max_drawdown).toBeCloseTo(10, 1)
+    expect(result.max_positions).toBe(1)
+    expect(result.max_unrealized_pnl_per_position).toBe(2000)
+    expect(result.max_net_position_account).toBe(50000)
+  })
+
+  it('net exposure account is abs(long - short)', () => {
+    const positions = [
+      makePosition({ symbol: 'BTC/USDT', side: 'long',  notional: 60000 }),
+      makePosition({ symbol: 'ETH/USDT', side: 'short', notional: 40000 }),
+    ]
+    const result = computeAllMetricValues({ positions, currentUsdtBalance: 100000, athUsdtBalance: 100000 })
+    expect(result.max_net_position_account).toBe(20000)
+  })
+
+  it('max_drawdown is 0 when ath equals current', () => {
+    const result = computeAllMetricValues({ positions: [], currentUsdtBalance: 110000, athUsdtBalance: 110000 })
+    expect(result.max_drawdown).toBe(0)
+  })
+
+  it('max_drawdown is 0 when ath is 0', () => {
+    const result = computeAllMetricValues({ positions: [], currentUsdtBalance: 0, athUsdtBalance: 0 })
+    expect(result.max_drawdown).toBe(0)
+  })
+
+  it('max_unrealized_pnl_per_position is 0 when all positions are profitable', () => {
+    const positions = [makePosition({ unrealizedPnl: 500 })]
+    const result = computeAllMetricValues({ positions, currentUsdtBalance: 100000, athUsdtBalance: 100000 })
+    expect(result.max_unrealized_pnl_per_position).toBe(0)
   })
 })

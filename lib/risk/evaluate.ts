@@ -1,5 +1,38 @@
 import type { Position } from '@/lib/types'
-import type { EvaluateInput, RiskViolation } from './types'
+import type { EvaluateInput, RiskViolation, RuleType } from './types'
+
+export function computeAllMetricValues(
+  input: Omit<EvaluateInput, 'rules'>,
+): Record<RuleType, number> {
+  const { positions, currentUsdtBalance, athUsdtBalance } = input
+
+  const bySymbol: Record<string, number> = {}
+  for (const p of positions)
+    bySymbol[p.symbol] = (bySymbol[p.symbol] ?? 0) + (p.side === 'long' ? p.notional : -p.notional)
+
+  return {
+    position_size: positions.length > 0 ? Math.max(...positions.map((p: Position) => p.notional)) : 0,
+    max_drawdown:
+      athUsdtBalance > 0 && currentUsdtBalance < athUsdtBalance
+        ? (athUsdtBalance - currentUsdtBalance) / athUsdtBalance * 100
+        : 0,
+    max_positions: positions.length,
+    max_unrealized_pnl_per_position:
+      positions.length > 0
+        ? Math.abs(Math.min(...positions.map((p: Position) => p.unrealizedPnl), 0))
+        : 0,
+    max_net_position_instrument: Object.values(bySymbol).reduce(
+      (m, v) => Math.max(m, Math.abs(v)),
+      0,
+    ),
+    max_net_position_account: Math.abs(
+      positions.reduce(
+        (s: number, p: Position) => s + (p.side === 'long' ? p.notional : -p.notional),
+        0,
+      ),
+    ),
+  }
+}
 
 export function evaluateRules(input: EvaluateInput): RiskViolation[] {
   const { positions, currentUsdtBalance, athUsdtBalance, rules } = input

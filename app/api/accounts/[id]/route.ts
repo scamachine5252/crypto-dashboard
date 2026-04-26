@@ -35,6 +35,7 @@ export async function PATCH(
   if (typeof body.fund         === 'string' && body.fund.trim())         updates.fund         = body.fund.trim()
   if (typeof body.account_name === 'string' && body.account_name.trim()) updates.account_name = body.account_name.trim()
   if (typeof body.account_id_memo === 'string') updates.account_id_memo = body.account_id_memo.trim() || null
+  if (typeof body.kill_switch_enabled === 'boolean') updates.kill_switch_enabled = body.kill_switch_enabled
 
   const aumRaw = body.initial_aum
   if (aumRaw !== undefined) {

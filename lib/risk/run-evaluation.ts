@@ -6,7 +6,7 @@ import { BinanceAdapter } from '@/lib/adapters/binance'
 import { OkxAdapter }     from '@/lib/adapters/okx'
 import { MexcAdapter }    from '@/lib/adapters/mexc'
 import type { ExchangeAdapter } from '@/lib/adapters/types'
-import { evaluateRules } from './evaluate'
+import { evaluateRules, computeAllMetricValues } from './evaluate'
 import { sendTelegramAlert, formatAlertMessage } from '@/lib/telegram'
 import type { RiskRule } from './types'
 
@@ -19,12 +19,13 @@ type AccountRow = {
   passphrase: string | null
   instrument: string | null
   is_suspended: boolean
+  kill_switch_enabled: boolean
 }
 
 export async function runRiskEvaluation(): Promise<{ evaluated: number; violations: number }> {
   const { data: accounts, error: accErr } = await supabaseAdmin
     .from('accounts')
-    .select('id, account_name, exchange, api_key, api_secret, passphrase, instrument, is_suspended')
+    .select('id, account_name, exchange, api_key, api_secret, passphrase, instrument, is_suspended, kill_switch_enabled')
     .eq('is_suspended', false)
 
   if (accErr || !accounts) return { evaluated: 0, violations: 0 }
@@ -91,6 +92,18 @@ export async function runRiskEvaluation(): Promise<{ evaluated: number; violatio
 
       const athUsdtBalance = Number(athBal?.[0]?.usdt_balance ?? currentUsdtBalance)
 
+      // Upsert metric snapshots for ALL metrics (not just violations) so Monitor table can display them
+      const allValues = computeAllMetricValues({ positions, currentUsdtBalance, athUsdtBalance })
+      const evaluatedAt = new Date().toISOString()
+      await supabaseAdmin
+        .from('risk_metric_snapshots')
+        .upsert(
+          Object.entries(allValues).map(([rule_type, current_value]) => ({
+            account_id: row.id, rule_type, current_value, evaluated_at: evaluatedAt,
+          })),
+          { onConflict: 'account_id,rule_type' },
+        )
+
       const violations = evaluateRules({ positions, currentUsdtBalance, athUsdtBalance, rules })
       evaluated++
 
@@ -115,7 +128,9 @@ export async function runRiskEvaluation(): Promise<{ evaluated: number; violatio
           severity:        v.severity,
         })
 
-        const suspended = v.severity === 'critical' && v.rule.kill_threshold !== null
+        const suspended = v.severity === 'critical'
+          && v.rule.kill_threshold !== null
+          && row.kill_switch_enabled !== false
 
         if (suspended) {
           await supabaseAdmin.from('accounts').update({ is_suspended: true }).eq('id', row.id)
