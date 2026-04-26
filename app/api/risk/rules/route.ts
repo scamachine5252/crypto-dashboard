@@ -5,6 +5,7 @@ import { supabaseAdmin } from '@/lib/supabase/server'
 const VALID_RULE_TYPES = [
   'position_size', 'max_drawdown', 'max_positions',
   'max_unrealized_pnl_per_position', 'max_net_position_instrument', 'max_net_position_account',
+  'leverage', 'margin_utilization', 'min_liq_distance',
 ] as const
 
 export async function GET(req: NextRequest): Promise<NextResponse> {

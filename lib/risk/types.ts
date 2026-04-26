@@ -7,6 +7,9 @@ export type RuleType =
   | 'max_unrealized_pnl_per_position'
   | 'max_net_position_instrument'
   | 'max_net_position_account'
+  | 'leverage'
+  | 'margin_utilization'
+  | 'min_liq_distance'
 
 export interface RiskRule {
   id: string
@@ -39,5 +42,7 @@ export interface EvaluateInput {
   positions: Position[]
   currentUsdtBalance: number
   athUsdtBalance: number
+  peakAdjustedBalance?: number
+  currentAdjustedBalance?: number
   rules: RiskRule[]
 }

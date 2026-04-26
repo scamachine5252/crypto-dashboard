@@ -157,6 +157,9 @@ describe('computeAllMetricValues', () => {
     expect(result.max_unrealized_pnl_per_position).toBe(0)
     expect(result.max_net_position_instrument).toBe(0)
     expect(result.max_net_position_account).toBe(0)
+    expect(result.leverage).toBe(0)
+    expect(result.margin_utilization).toBe(0)
+    expect(result.min_liq_distance).toBe(100)
   })
 
   it('computes correct values with a long position and drawdown', () => {
@@ -192,5 +195,148 @@ describe('computeAllMetricValues', () => {
     const positions = [makePosition({ unrealizedPnl: 500 })]
     const result = computeAllMetricValues({ positions, currentUsdtBalance: 100000, athUsdtBalance: 100000 })
     expect(result.max_unrealized_pnl_per_position).toBe(0)
+  })
+
+  it('leverage = total notional / balance', () => {
+    const positions = [makePosition({ notional: 300000 })]
+    const result = computeAllMetricValues({ positions, currentUsdtBalance: 100000, athUsdtBalance: 100000 })
+    expect(result.leverage).toBeCloseTo(3, 2)
+  })
+
+  it('leverage is 0 when balance is 0', () => {
+    const positions = [makePosition({ notional: 100000 })]
+    const result = computeAllMetricValues({ positions, currentUsdtBalance: 0, athUsdtBalance: 0 })
+    expect(result.leverage).toBe(0)
+  })
+
+  it('margin_utilization = sum(margin) / balance * 100', () => {
+    const positions = [makePosition({ margin: 60000 })]
+    const result = computeAllMetricValues({ positions, currentUsdtBalance: 100000, athUsdtBalance: 100000 })
+    expect(result.margin_utilization).toBeCloseTo(60, 1)
+  })
+
+  it('margin_utilization sums across multiple positions', () => {
+    const positions = [
+      makePosition({ margin: 30000 }),
+      makePosition({ symbol: 'ETH/USDT', margin: 20000 }),
+    ]
+    const result = computeAllMetricValues({ positions, currentUsdtBalance: 100000, athUsdtBalance: 100000 })
+    expect(result.margin_utilization).toBeCloseTo(50, 1)
+  })
+
+  it('min_liq_distance = % gap to closest liquidation', () => {
+    const positions = [
+      makePosition({ markPrice: 100, liquidationPrice: 90 }),  // 10%
+      makePosition({ symbol: 'ETH/USDT', markPrice: 100, liquidationPrice: 95 }),  // 5%
+    ]
+    const result = computeAllMetricValues({ positions, currentUsdtBalance: 100000, athUsdtBalance: 100000 })
+    expect(result.min_liq_distance).toBeCloseTo(5, 1)
+  })
+
+  it('min_liq_distance is 100 when no positions have liq data', () => {
+    const positions = [makePosition({ liquidationPrice: 0 })]
+    const result = computeAllMetricValues({ positions, currentUsdtBalance: 100000, athUsdtBalance: 100000 })
+    expect(result.min_liq_distance).toBe(100)
+  })
+
+  it('drawdown uses adjusted balance when available', () => {
+    // balance = 150K (includes 50K deposit), peakAdjusted = 110K, currentAdjusted = 105K
+    const result = computeAllMetricValues({
+      positions: [], currentUsdtBalance: 150000, athUsdtBalance: 150000,
+      peakAdjustedBalance: 110000, currentAdjustedBalance: 105000,
+    })
+    expect(result.max_drawdown).toBeCloseTo(4.55, 1)  // (110-105)/110
+  })
+
+  it('drawdown falls back to raw ATH when adjusted balances not provided', () => {
+    const result = computeAllMetricValues({
+      positions: [], currentUsdtBalance: 90000, athUsdtBalance: 100000,
+    })
+    expect(result.max_drawdown).toBeCloseTo(10, 1)
+  })
+
+  it('adjusted drawdown is 0 when currentAdjusted >= peakAdjusted', () => {
+    const result = computeAllMetricValues({
+      positions: [], currentUsdtBalance: 100000, athUsdtBalance: 100000,
+      peakAdjustedBalance: 90000, currentAdjustedBalance: 95000,
+    })
+    expect(result.max_drawdown).toBe(0)
+  })
+})
+
+describe('evaluateRules — leverage', () => {
+  it('no violation when leverage below threshold', () => {
+    const rule = makeRule({ rule_type: 'leverage', alert_threshold: 5 })
+    const positions = [makePosition({ notional: 300000 })]
+    expect(evaluateRules({ ...baseInput, positions, currentUsdtBalance: 100000, rules: [rule] })).toHaveLength(0)
+  })
+
+  it('warning when leverage exceeds alert_threshold', () => {
+    const rule = makeRule({ rule_type: 'leverage', alert_threshold: 2 })
+    const positions = [makePosition({ notional: 300000 })]
+    const result = evaluateRules({ ...baseInput, positions, currentUsdtBalance: 100000, rules: [rule] })
+    expect(result).toHaveLength(1)
+    expect(result[0].severity).toBe('warning')
+    expect(result[0].current_value).toBeCloseTo(3, 2)
+  })
+
+  it('critical when leverage exceeds kill_threshold', () => {
+    const rule = makeRule({ rule_type: 'leverage', alert_threshold: 2, kill_threshold: 2.5 })
+    const positions = [makePosition({ notional: 300000 })]
+    const result = evaluateRules({ ...baseInput, positions, currentUsdtBalance: 100000, rules: [rule] })
+    expect(result[0].severity).toBe('critical')
+  })
+
+  it('no violation when balance is 0', () => {
+    const rule = makeRule({ rule_type: 'leverage', alert_threshold: 1 })
+    const positions = [makePosition({ notional: 100000 })]
+    expect(evaluateRules({ ...baseInput, positions, currentUsdtBalance: 0, rules: [rule] })).toHaveLength(0)
+  })
+})
+
+describe('evaluateRules — margin_utilization', () => {
+  it('warning when margin utilization exceeds threshold', () => {
+    const rule = makeRule({ rule_type: 'margin_utilization', alert_threshold: 50 })
+    const positions = [makePosition({ margin: 60000 })]
+    const result = evaluateRules({ ...baseInput, positions, currentUsdtBalance: 100000, rules: [rule] })
+    expect(result).toHaveLength(1)
+    expect(result[0].current_value).toBeCloseTo(60, 1)
+  })
+
+  it('no violation when margin utilization below threshold', () => {
+    const rule = makeRule({ rule_type: 'margin_utilization', alert_threshold: 70 })
+    const positions = [makePosition({ margin: 60000 })]
+    expect(evaluateRules({ ...baseInput, positions, currentUsdtBalance: 100000, rules: [rule] })).toHaveLength(0)
+  })
+})
+
+describe('evaluateRules — min_liq_distance (inverted)', () => {
+  it('fires warning when distance is BELOW alert_threshold', () => {
+    const rule = makeRule({ rule_type: 'min_liq_distance', alert_threshold: 10 })
+    const positions = [makePosition({ markPrice: 100, liquidationPrice: 95 })]  // 5% distance
+    const result = evaluateRules({ ...baseInput, positions, rules: [rule] })
+    expect(result).toHaveLength(1)
+    expect(result[0].severity).toBe('warning')
+    expect(result[0].current_value).toBeCloseTo(5, 1)
+  })
+
+  it('fires critical when distance is BELOW kill_threshold', () => {
+    const rule = makeRule({ rule_type: 'min_liq_distance', alert_threshold: 10, kill_threshold: 7 })
+    const positions = [makePosition({ markPrice: 100, liquidationPrice: 95 })]  // 5% distance
+    const result = evaluateRules({ ...baseInput, positions, rules: [rule] })
+    expect(result).toHaveLength(1)
+    expect(result[0].severity).toBe('critical')
+  })
+
+  it('does NOT fire when distance is ABOVE threshold', () => {
+    const rule = makeRule({ rule_type: 'min_liq_distance', alert_threshold: 3 })
+    const positions = [makePosition({ markPrice: 100, liquidationPrice: 95 })]  // 5% distance
+    expect(evaluateRules({ ...baseInput, positions, rules: [rule] })).toHaveLength(0)
+  })
+
+  it('does NOT fire when no positions have liq data', () => {
+    const rule = makeRule({ rule_type: 'min_liq_distance', alert_threshold: 50 })
+    const positions = [makePosition({ liquidationPrice: 0 })]
+    expect(evaluateRules({ ...baseInput, positions, rules: [rule] })).toHaveLength(0)
   })
 })

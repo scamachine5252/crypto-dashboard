@@ -4,7 +4,7 @@ import type { EvaluateInput, RiskViolation, RuleType } from './types'
 export function computeAllMetricValues(
   input: Omit<EvaluateInput, 'rules'>,
 ): Record<RuleType, number> {
-  const { positions, currentUsdtBalance, athUsdtBalance } = input
+  const { positions, currentUsdtBalance, athUsdtBalance, peakAdjustedBalance, currentAdjustedBalance } = input
 
   const bySymbol: Record<string, number> = {}
   for (const p of positions)
@@ -12,10 +12,12 @@ export function computeAllMetricValues(
 
   return {
     position_size: positions.length > 0 ? Math.max(...positions.map((p: Position) => p.notional)) : 0,
-    max_drawdown:
-      athUsdtBalance > 0 && currentUsdtBalance < athUsdtBalance
-        ? (athUsdtBalance - currentUsdtBalance) / athUsdtBalance * 100
-        : 0,
+    max_drawdown: (() => {
+      if (peakAdjustedBalance !== undefined && currentAdjustedBalance !== undefined && peakAdjustedBalance > 0)
+        return Math.max((peakAdjustedBalance - currentAdjustedBalance) / peakAdjustedBalance * 100, 0)
+      return athUsdtBalance > 0 && currentUsdtBalance < athUsdtBalance
+        ? (athUsdtBalance - currentUsdtBalance) / athUsdtBalance * 100 : 0
+    })(),
     max_positions: positions.length,
     max_unrealized_pnl_per_position:
       positions.length > 0
@@ -31,11 +33,23 @@ export function computeAllMetricValues(
         0,
       ),
     ),
+    leverage: currentUsdtBalance > 0
+      ? positions.reduce((s, p) => s + p.notional, 0) / currentUsdtBalance
+      : 0,
+    margin_utilization: currentUsdtBalance > 0
+      ? positions.reduce((s, p) => s + p.margin, 0) / currentUsdtBalance * 100
+      : 0,
+    min_liq_distance: (() => {
+      const dists = positions
+        .filter(p => p.liquidationPrice > 0 && p.markPrice > 0)
+        .map(p => Math.abs(p.markPrice - p.liquidationPrice) / p.markPrice * 100)
+      return dists.length > 0 ? Math.min(...dists) : 100
+    })(),
   }
 }
 
 export function evaluateRules(input: EvaluateInput): RiskViolation[] {
-  const { positions, currentUsdtBalance, athUsdtBalance, rules } = input
+  const { positions, currentUsdtBalance, athUsdtBalance, peakAdjustedBalance, currentAdjustedBalance, rules } = input
   const violations: RiskViolation[] = []
 
   for (const rule of rules) {
@@ -50,9 +64,14 @@ export function evaluateRules(input: EvaluateInput): RiskViolation[] {
         break
       }
       case 'max_drawdown': {
-        if (athUsdtBalance <= 0) continue
-        currentValue = (athUsdtBalance - currentUsdtBalance) / athUsdtBalance * 100
-        if (currentValue <= 0) continue
+        if (peakAdjustedBalance !== undefined && currentAdjustedBalance !== undefined && peakAdjustedBalance > 0) {
+          currentValue = Math.max((peakAdjustedBalance - currentAdjustedBalance) / peakAdjustedBalance * 100, 0)
+          if (currentValue <= 0) continue
+        } else {
+          if (athUsdtBalance <= 0) continue
+          currentValue = (athUsdtBalance - currentUsdtBalance) / athUsdtBalance * 100
+          if (currentValue <= 0) continue
+        }
         break
       }
       case 'max_positions': {
@@ -80,6 +99,28 @@ export function evaluateRules(input: EvaluateInput): RiskViolation[] {
         const totalNet = positions.reduce((sum: number, p: Position) => sum + (p.side === 'long' ? p.notional : -p.notional), 0)
         currentValue = Math.abs(totalNet)
         break
+      }
+      case 'leverage': {
+        if (currentUsdtBalance <= 0) continue
+        currentValue = positions.reduce((s, p) => s + p.notional, 0) / currentUsdtBalance
+        break
+      }
+      case 'margin_utilization': {
+        if (currentUsdtBalance <= 0) continue
+        currentValue = positions.reduce((s, p) => s + p.margin, 0) / currentUsdtBalance * 100
+        break
+      }
+      case 'min_liq_distance': {
+        const dists = positions
+          .filter(p => p.liquidationPrice > 0 && p.markPrice > 0)
+          .map(p => Math.abs(p.markPrice - p.liquidationPrice) / p.markPrice * 100)
+        if (dists.length === 0) continue
+        const minDist = Math.min(...dists)
+        if (minDist >= rule.alert_threshold) continue
+        const severity: 'warning' | 'critical' =
+          rule.kill_threshold !== null && minDist < rule.kill_threshold ? 'critical' : 'warning'
+        violations.push({ rule, current_value: minDist, severity })
+        continue
       }
     }
 

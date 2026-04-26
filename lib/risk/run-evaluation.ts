@@ -22,6 +22,46 @@ type AccountRow = {
   kill_switch_enabled: boolean
 }
 
+async function computeAdjustedBalances(accountId: string, currentUsdtBalance: number): Promise<{
+  peakAdjustedBalance: number
+  currentAdjustedBalance: number
+}> {
+  const [{ data: txns }, { data: allBals }] = await Promise.all([
+    supabaseAdmin
+      .from('transactions')
+      .select('type, amount, recorded_at')
+      .eq('account_id', accountId)
+      .eq('asset', 'USDT')
+      .order('recorded_at', { ascending: true }),
+    supabaseAdmin
+      .from('balances')
+      .select('usdt_balance, recorded_at')
+      .eq('account_id', accountId)
+      .is('token_symbol', null)
+      .order('recorded_at', { ascending: true }),
+  ])
+
+  const txList = (txns ?? []) as { type: string; amount: number; recorded_at: string }[]
+  let peakAdjustedBalance = 0
+  let cumDeps = 0, cumWith = 0, txIdx = 0
+
+  for (const bal of (allBals ?? [])) {
+    while (txIdx < txList.length && txList[txIdx].recorded_at <= bal.recorded_at) {
+      if (txList[txIdx].type === 'deposit')    cumDeps += Number(txList[txIdx].amount)
+      if (txList[txIdx].type === 'withdrawal') cumWith += Number(txList[txIdx].amount)
+      txIdx++
+    }
+    const adj = Number(bal.usdt_balance) - cumDeps + cumWith
+    if (adj > peakAdjustedBalance) peakAdjustedBalance = adj
+  }
+
+  const totalDeps = txList.filter(t => t.type === 'deposit').reduce((s, t) => s + Number(t.amount), 0)
+  const totalWith = txList.filter(t => t.type === 'withdrawal').reduce((s, t) => s + Number(t.amount), 0)
+  const currentAdjustedBalance = currentUsdtBalance - totalDeps + totalWith
+
+  return { peakAdjustedBalance, currentAdjustedBalance }
+}
+
 export async function runRiskEvaluation(): Promise<{ evaluated: number; violations: number }> {
   const { data: accounts, error: accErr } = await supabaseAdmin
     .from('accounts')
@@ -71,29 +111,30 @@ export async function runRiskEvaluation(): Promise<{ evaluated: number; violatio
         exchange:    row.exchange,
       }))
 
-      const { data: latestBal } = await supabaseAdmin
-        .from('balances')
-        .select('usdt_balance')
-        .eq('account_id', row.id)
-        .is('token_symbol', null)
-        .order('recorded_at', { ascending: false })
-        .limit(1)
+      const [{ data: latestBal }, { data: athBal }] = await Promise.all([
+        supabaseAdmin
+          .from('balances')
+          .select('usdt_balance')
+          .eq('account_id', row.id)
+          .is('token_symbol', null)
+          .order('recorded_at', { ascending: false })
+          .limit(1),
+        supabaseAdmin
+          .from('balances')
+          .select('usdt_balance')
+          .eq('account_id', row.id)
+          .is('token_symbol', null)
+          .order('usdt_balance', { ascending: false })
+          .limit(1),
+      ])
 
       const currentUsdtBalance = Number(latestBal?.[0]?.usdt_balance ?? 0)
-
-      const { data: athBal } = await supabaseAdmin
-        .from('balances')
-        .select('usdt_balance')
-        .eq('account_id', row.id)
-        .is('token_symbol', null)
-        .order('usdt_balance', { ascending: false })
-        .limit(1)
-
       const athUsdtBalance = Number(athBal?.[0]?.usdt_balance ?? currentUsdtBalance)
 
-      // Upsert metric snapshots for ALL metrics (not just violations) so Monitor table can display them
-      const allValues = computeAllMetricValues({ positions, currentUsdtBalance, athUsdtBalance })
+      const { peakAdjustedBalance, currentAdjustedBalance } = await computeAdjustedBalances(row.id, currentUsdtBalance)
+
       const evaluatedAt = new Date().toISOString()
+      const allValues = computeAllMetricValues({ positions, currentUsdtBalance, athUsdtBalance, peakAdjustedBalance, currentAdjustedBalance })
       await supabaseAdmin
         .from('risk_metric_snapshots')
         .upsert(
@@ -103,7 +144,7 @@ export async function runRiskEvaluation(): Promise<{ evaluated: number; violatio
           { onConflict: 'account_id,rule_type' },
         )
 
-      const violations = evaluateRules({ positions, currentUsdtBalance, athUsdtBalance, rules })
+      const violations = evaluateRules({ positions, currentUsdtBalance, athUsdtBalance, peakAdjustedBalance, currentAdjustedBalance, rules })
       evaluated++
 
       for (const v of violations) {

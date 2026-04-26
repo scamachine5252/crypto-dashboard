@@ -3,19 +3,27 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import Header from '@/components/layout/Header'
 import type { RiskRule, RiskAlert, RuleType } from '@/lib/risk/types'
+import type { Position } from '@/lib/types'
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-const RULE_TYPES: { value: RuleType; label: string; unit: string }[] = [
-  { value: 'position_size',                   label: 'Position Size',       unit: 'USD'   },
-  { value: 'max_drawdown',                    label: 'Max Drawdown',        unit: '%'     },
-  { value: 'max_positions',                   label: 'Open Positions',      unit: 'count' },
-  { value: 'max_unrealized_pnl_per_position', label: 'Unrealized Loss',     unit: 'USD'   },
-  { value: 'max_net_position_instrument',     label: 'Net Exp (Symbol)',    unit: 'USD'   },
-  { value: 'max_net_position_account',        label: 'Net Exp (Account)',   unit: 'USD'   },
+const ALERT_COLOR = '#F97316'
+
+const RULE_TYPES: { value: RuleType; label: string; unit: string; invertedAlert?: boolean }[] = [
+  { value: 'max_positions',                   label: 'Open Positions',    unit: 'count' },
+  { value: 'position_size',                   label: 'Position Size',     unit: 'USD'   },
+  { value: 'max_drawdown',                    label: 'Max Drawdown',      unit: '%'     },
+  { value: 'max_unrealized_pnl_per_position', label: 'Unrealized Loss',   unit: 'USD'   },
+  { value: 'max_net_position_instrument',     label: 'Net Exp (Symbol)',  unit: 'USD'   },
+  { value: 'max_net_position_account',        label: 'Net Exp (Account)', unit: 'USD'   },
+  { value: 'leverage',                        label: 'Leverage',          unit: 'x'     },
+  { value: 'margin_utilization',              label: 'Margin Used',       unit: '%'     },
+  { value: 'min_liq_distance',                label: 'Liq Distance',      unit: '%', invertedAlert: true },
 ]
+
+const MONITOR_COLS = 2 + RULE_TYPES.length  // Account + Exchange + 9 metrics
 
 // ---------------------------------------------------------------------------
 // Types
@@ -29,11 +37,14 @@ type AccountRow = {
   kill_switch_enabled: boolean
 }
 
-type SnapshotRow = {
+type LiveResult = {
   account_id: string
-  rule_type: RuleType
-  current_value: number
-  evaluated_at: string
+  account_name: string
+  exchange: string
+  fund: string
+  metrics: Record<RuleType, number>
+  positions: Position[]
+  currentUsdtBalance: number
 }
 
 type RuleFormCell = { alert: string; kill: string }
@@ -45,13 +56,21 @@ type RuleFormCell = { alert: string; kill: string }
 function getCellStyle(
   value: number | undefined,
   rule: RiskRule | undefined,
+  inverted = false,
 ): React.CSSProperties {
   if (value === undefined) return { color: 'var(--text-muted)' }
-  if (!rule) return { color: 'var(--text-primary)' }           // value exists, no rule → show neutral
+  if (!rule) return { color: 'var(--text-primary)' }
+  if (inverted) {
+    if (rule.kill_threshold !== null && value < rule.kill_threshold)
+      return { color: 'var(--accent-loss)', fontWeight: 600 }
+    if (value < rule.alert_threshold)
+      return { color: ALERT_COLOR, fontWeight: 600 }
+    return { color: 'var(--accent-profit)' }
+  }
   if (rule.kill_threshold !== null && value > rule.kill_threshold)
     return { color: 'var(--accent-loss)', fontWeight: 600 }
   if (value > rule.alert_threshold)
-    return { color: '#FFD700', fontWeight: 600 }
+    return { color: ALERT_COLOR, fontWeight: 600 }
   return { color: 'var(--accent-profit)' }
 }
 
@@ -59,6 +78,7 @@ function formatValue(value: number | undefined, unit: string): string {
   if (value === undefined) return '—'
   if (unit === '%') return value.toFixed(2) + '%'
   if (unit === 'count') return String(Math.round(value))
+  if (unit === 'x') return value.toFixed(2) + 'x'
   if (value >= 1_000_000) return '$' + (value / 1_000_000).toFixed(2) + 'M'
   if (value >= 1_000)     return '$' + (value / 1_000).toFixed(1) + 'K'
   return '$' + value.toFixed(0)
@@ -67,11 +87,67 @@ function formatValue(value: number | undefined, unit: string): string {
 function timeAgo(iso: string): string {
   const diffMs = Date.now() - new Date(iso).getTime()
   const mins = Math.floor(diffMs / 60000)
-  if (mins < 1)   return 'just now'
-  if (mins < 60)  return `${mins}m ago`
+  if (mins < 1)  return 'just now'
+  if (mins < 60) return `${mins}m ago`
   const hrs = Math.floor(mins / 60)
-  if (hrs < 24)   return `${hrs}h ago`
+  if (hrs < 24)  return `${hrs}h ago`
   return `${Math.floor(hrs / 24)}d ago`
+}
+
+function getTopPositionsForMetric(
+  positions: Position[],
+  ruleType: RuleType,
+): Position[] {
+  if (positions.length === 0) return []
+
+  switch (ruleType) {
+    case 'max_positions':
+    case 'position_size':
+    case 'leverage':
+      return [...positions].sort((a, b) => b.notional - a.notional).slice(0, 5)
+
+    case 'max_unrealized_pnl_per_position':
+      return [...positions].sort((a, b) => a.unrealizedPnl - b.unrealizedPnl).slice(0, 5)
+
+    case 'max_net_position_instrument': {
+      const bySymbol: Record<string, number> = {}
+      for (const p of positions)
+        bySymbol[p.symbol] = (bySymbol[p.symbol] ?? 0) + (p.side === 'long' ? p.notional : -p.notional)
+      const sorted = Object.entries(bySymbol)
+        .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
+        .slice(0, 5)
+        .map(([sym]) => sym)
+      return positions
+        .filter(p => sorted.includes(p.symbol))
+        .sort((a, b) => b.notional - a.notional)
+        .slice(0, 5)
+    }
+
+    case 'max_net_position_account':
+      return [...positions]
+        .sort((a, b) => {
+          const av = a.side === 'long' ? a.notional : -a.notional
+          const bv = b.side === 'long' ? b.notional : -b.notional
+          return bv - av
+        })
+        .slice(0, 5)
+
+    case 'margin_utilization':
+      return [...positions].sort((a, b) => b.margin - a.margin).slice(0, 5)
+
+    case 'min_liq_distance':
+      return [...positions]
+        .filter(p => p.liquidationPrice > 0 && p.markPrice > 0)
+        .sort((a, b) => {
+          const da = Math.abs(a.markPrice - a.liquidationPrice) / a.markPrice
+          const db = Math.abs(b.markPrice - b.liquidationPrice) / b.markPrice
+          return da - db
+        })
+        .slice(0, 5)
+
+    default:
+      return []
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -82,48 +158,68 @@ export default function RiskManagementPage() {
   const [tab, setTab] = useState<'monitor' | 'settings'>('monitor')
 
   // Shared data
-  const [accounts, setAccounts]   = useState<AccountRow[]>([])
-  const [rules, setRules]         = useState<RiskRule[]>([])
-  const [snapshots, setSnapshots] = useState<SnapshotRow[]>([])
-  const [alerts, setAlerts]       = useState<RiskAlert[]>([])
+  const [accounts, setAccounts] = useState<AccountRow[]>([])
+  const [rules, setRules]       = useState<RiskRule[]>([])
+  const [alerts, setAlerts]     = useState<RiskAlert[]>([])
+
+  // Live metrics
+  const [liveMetrics, setLiveMetrics]   = useState<Record<string, Record<RuleType, number>>>({})
+  const [livePositions, setLivePositions] = useState<Record<string, Position[]>>({})
+  const [liveLoading, setLiveLoading]   = useState(false)
+  const [liveLoadedAt, setLiveLoadedAt] = useState<string | null>(null)
+
+  // Tooltip
+  const [expandedCell, setExpandedCell] = useState<{ accountId: string; ruleType: RuleType } | null>(null)
 
   // Monitor state
-  const [refreshing, setRefreshing]     = useState(false)
-  const [alertFilter, setAlertFilter]   = useState<'all' | 'unread' | 'critical'>('unread')
+  const [refreshing, setRefreshing]   = useState(false)
+  const [alertFilter, setAlertFilter] = useState<'all' | 'unread' | 'critical'>('unread')
 
   // Settings state
-  // form[accountId][ruleType] = { alert, kill }
   const [form, setForm] = useState<Record<string, Record<RuleType, RuleFormCell>>>({})
-  // accountToggles[accountId] = { monitorEnabled, killEnabled }
   const [accountToggles, setAccountToggles] = useState<Record<string, { monitorEnabled: boolean; killEnabled: boolean }>>({})
-  const [saving, setSaving]     = useState(false)
-  const [saveMsg, setSaveMsg]   = useState<string | null>(null)
-  // Kill switch confirmation: stores account id awaiting confirmation
+  const [saving, setSaving]   = useState(false)
+  const [saveMsg, setSaveMsg] = useState<string | null>(null)
   const [killConfirm, setKillConfirm] = useState<string | null>(null)
 
   // ---------------------------------------------------------------------------
-  // Load shared data
+  // Load
   // ---------------------------------------------------------------------------
 
+  const loadLiveMetrics = useCallback(async () => {
+    setLiveLoading(true)
+    try {
+      const res = await fetch('/api/risk/live-metrics')
+      const data = await res.json() as { results: LiveResult[] }
+      const metricsMap: Record<string, Record<RuleType, number>> = {}
+      const positionsMap: Record<string, Position[]> = {}
+      for (const r of data.results ?? []) {
+        metricsMap[r.account_id]   = r.metrics
+        positionsMap[r.account_id] = r.positions
+      }
+      setLiveMetrics(metricsMap)
+      setLivePositions(positionsMap)
+      setLiveLoadedAt(new Date().toISOString())
+    } finally {
+      setLiveLoading(false)
+    }
+  }, [])
+
   const loadAll = useCallback(async () => {
-    const [accRes, rulesRes, snapRes, alertRes] = await Promise.all([
+    const [accRes, rulesRes, alertRes] = await Promise.all([
       fetch('/api/accounts').then(r => r.json()),
       fetch('/api/risk/rules').then(r => r.json()),
-      fetch('/api/risk/snapshots').then(r => r.json()),
       fetch('/api/risk/alerts?acknowledged=false').then(r => r.json()),
     ])
 
     const accs: AccountRow[] = Array.isArray(accRes) ? accRes : (accRes.accounts ?? [])
     const loadedRules: RiskRule[] = rulesRes.rules ?? []
-    const loadedSnaps: SnapshotRow[] = snapRes.snapshots ?? []
     const loadedAlerts: RiskAlert[] = alertRes.alerts ?? []
 
     setAccounts(accs)
     setRules(loadedRules)
-    setSnapshots(loadedSnaps)
     setAlerts(loadedAlerts)
 
-    // Build Settings form state from loaded rules
     const newForm: Record<string, Record<RuleType, RuleFormCell>> = {}
     const newToggles: Record<string, { monitorEnabled: boolean; killEnabled: boolean }> = {}
     for (const acc of accs) {
@@ -145,7 +241,10 @@ export default function RiskManagementPage() {
     setAccountToggles(newToggles)
   }, [])
 
-  useEffect(() => { loadAll().catch(() => {}) }, [loadAll])
+  useEffect(() => {
+    loadAll().catch(() => {})
+    loadLiveMetrics().catch(() => {})
+  }, [loadAll, loadLiveMetrics])
 
   // ---------------------------------------------------------------------------
   // Monitor: Refresh
@@ -153,14 +252,14 @@ export default function RiskManagementPage() {
 
   const handleRefresh = async () => {
     setRefreshing(true)
+    setExpandedCell(null)
     try {
-      await fetch('/api/risk/evaluate', { method: 'POST' })
-      const [snapRes, alertRes] = await Promise.all([
-        fetch('/api/risk/snapshots').then(r => r.json()),
+      const [, , alertRes] = await Promise.all([
+        loadLiveMetrics(),
+        fetch('/api/risk/evaluate', { method: 'POST' }),
         fetch('/api/risk/alerts?acknowledged=false').then(r => r.json()),
       ])
-      setSnapshots(snapRes.snapshots ?? [])
-      setAlerts(alertRes.alerts ?? [])
+      setAlerts((alertRes as { alerts?: RiskAlert[] }).alerts ?? [])
     } finally {
       setRefreshing(false)
     }
@@ -243,18 +342,8 @@ export default function RiskManagementPage() {
   // Derived helpers
   // ---------------------------------------------------------------------------
 
-  const getSnapshot = (accountId: string, ruleType: RuleType) =>
-    snapshots.find(s => s.account_id === accountId && s.rule_type === ruleType)
-
   const getRule = (accountId: string, ruleType: RuleType) =>
     rules.find(r => r.account_id === accountId && r.rule_type === ruleType)
-
-  const lastEvaluated = snapshots.length > 0
-    ? snapshots.reduce((latest, s) =>
-        s.evaluated_at > latest ? s.evaluated_at : latest,
-        snapshots[0].evaluated_at,
-      )
-    : null
 
   const visibleAlerts = alerts.filter(a => {
     if (alertFilter === 'unread')   return !a.acknowledged
@@ -324,27 +413,30 @@ export default function RiskManagementPage() {
             <div className="flex items-center gap-3">
               <button
                 onClick={handleRefresh}
-                disabled={refreshing}
+                disabled={refreshing || liveLoading}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold uppercase tracking-wider"
                 style={{
                   background: 'var(--bg-elevated)',
                   border: '1px solid var(--border-subtle)',
-                  color: refreshing ? 'var(--text-muted)' : 'var(--text-primary)',
+                  color: (refreshing || liveLoading) ? 'var(--text-muted)' : 'var(--text-primary)',
                 }}
               >
-                <span style={{ display: 'inline-block', animation: refreshing ? 'spin 1s linear infinite' : 'none' }}>↻</span>
-                {refreshing ? 'Refreshing…' : 'Refresh'}
+                <span style={{ display: 'inline-block', animation: (refreshing || liveLoading) ? 'spin 1s linear infinite' : 'none' }}>↻</span>
+                {(refreshing || liveLoading) ? 'Loading…' : 'Refresh'}
               </button>
-              {lastEvaluated && (
+              {liveLoadedAt && (
                 <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                  Last updated: {timeAgo(lastEvaluated)}
+                  Live data · {timeAgo(liveLoadedAt)}
                 </span>
               )}
-              {!lastEvaluated && !refreshing && (
+              {!liveLoadedAt && !liveLoading && (
                 <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                  No data yet — click Refresh to load
+                  Click Refresh to load live data
                 </span>
               )}
+              <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                · Click any metric cell for position details
+              </span>
             </div>
 
             {/* Metrics table */}
@@ -362,39 +454,120 @@ export default function RiskManagementPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {accounts.map((acc, i) => (
-                    <tr
-                      key={acc.id}
-                      style={{ background: i % 2 === 0 ? 'var(--bg-secondary)' : 'var(--bg-elevated)' }}
-                    >
-                      <td style={{ ...cellBase, color: 'var(--text-primary)', fontWeight: 600 }}>
-                        {acc.account_name}
-                      </td>
-                      <td style={{ ...cellBase, color: 'var(--text-muted)', fontSize: 10, textTransform: 'uppercase' }}>
-                        {acc.exchange}
-                      </td>
-                      {RULE_TYPES.map(rt => {
-                        const snap = getSnapshot(acc.id, rt.value)
-                        const rule = getRule(acc.id, rt.value)
-                        return (
-                          <td
-                            key={rt.value}
-                            style={{
-                              ...cellBase,
-                              textAlign: 'right',
-                              fontFamily: 'var(--font-geist-mono, monospace)',
-                              ...getCellStyle(snap?.current_value, rule),
-                            }}
-                          >
-                            {formatValue(snap?.current_value, rt.unit)}
+                  {accounts.map((acc, i) => {
+                    const accMetrics = liveMetrics[acc.id]
+                    const isExpanded = expandedCell?.accountId === acc.id
+                    const expandedRt = isExpanded ? expandedCell!.ruleType : null
+                    const expandedPositions = expandedRt && expandedRt !== 'max_drawdown'
+                      ? getTopPositionsForMetric(livePositions[acc.id] ?? [], expandedRt)
+                      : []
+
+                    return (
+                      <React.Fragment key={acc.id}>
+                        <tr style={{ background: i % 2 === 0 ? 'var(--bg-secondary)' : 'var(--bg-elevated)' }}>
+                          <td style={{ ...cellBase, color: 'var(--text-primary)', fontWeight: 600 }}>
+                            {acc.account_name}
                           </td>
-                        )
-                      })}
-                    </tr>
-                  ))}
+                          <td style={{ ...cellBase, color: 'var(--text-muted)', fontSize: 10, textTransform: 'uppercase' }}>
+                            {acc.exchange}
+                          </td>
+                          {RULE_TYPES.map(rt => {
+                            const value = accMetrics?.[rt.value]
+                            const rule  = getRule(acc.id, rt.value)
+                            const isThisExpanded = isExpanded && expandedCell?.ruleType === rt.value
+                            return (
+                              <td
+                                key={rt.value}
+                                onClick={() => {
+                                  if (value === undefined) return
+                                  setExpandedCell(prev =>
+                                    prev?.accountId === acc.id && prev?.ruleType === rt.value
+                                      ? null
+                                      : { accountId: acc.id, ruleType: rt.value },
+                                  )
+                                }}
+                                style={{
+                                  ...cellBase,
+                                  textAlign: 'right',
+                                  fontFamily: 'var(--font-geist-mono, monospace)',
+                                  cursor: value !== undefined ? 'pointer' : 'default',
+                                  background: isThisExpanded ? 'rgba(255,255,255,0.05)' : undefined,
+                                  ...getCellStyle(value, rule, rt.invertedAlert),
+                                }}
+                              >
+                                {liveLoading ? <span style={{ color: 'var(--text-muted)' }}>…</span> : formatValue(value, rt.unit)}
+                              </td>
+                            )
+                          })}
+                        </tr>
+
+                        {/* Expanded tooltip row */}
+                        {isExpanded && (
+                          <tr style={{ background: 'rgba(255,255,255,0.02)' }}>
+                            <td
+                              colSpan={MONITOR_COLS}
+                              style={{ padding: '8px 16px 12px', borderBottom: '1px solid var(--border-subtle)' }}
+                            >
+                              <div className="text-[10px] uppercase tracking-widest mb-2 font-semibold" style={{ color: 'var(--text-muted)' }}>
+                                {RULE_TYPES.find(r => r.value === expandedRt)?.label} — Top positions
+                                <button
+                                  onClick={() => setExpandedCell(null)}
+                                  className="ml-3 px-1.5 py-0.5"
+                                  style={{ color: 'var(--text-muted)', border: '1px solid var(--border-subtle)', borderRadius: 2 }}
+                                >
+                                  ✕
+                                </button>
+                              </div>
+
+                              {expandedRt === 'max_drawdown' ? (
+                                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                                  Drawdown is a balance-level metric — not attributable to individual positions.
+                                </p>
+                              ) : expandedPositions.length === 0 ? (
+                                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>No positions with relevant data.</p>
+                              ) : (
+                                <table style={{ borderCollapse: 'collapse', fontSize: 11, width: '100%', maxWidth: 900 }}>
+                                  <thead>
+                                    <tr>
+                                      {['Symbol', 'Side', 'Notional', 'Entry', 'Mark', 'Unreal. PnL', 'Liq Price', 'Liq Dist'].map(col => (
+                                        <th key={col} style={{ padding: '3px 8px', textAlign: 'right', color: 'var(--text-muted)', fontWeight: 600, fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid var(--border-subtle)' }}>
+                                          {col}
+                                        </th>
+                                      ))}
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {expandedPositions.map((p, idx) => {
+                                      const liqDist = p.liquidationPrice > 0 && p.markPrice > 0
+                                        ? (Math.abs(p.markPrice - p.liquidationPrice) / p.markPrice * 100).toFixed(2) + '%'
+                                        : '—'
+                                      return (
+                                        <tr key={idx}>
+                                          <td style={{ padding: '3px 8px', fontFamily: 'var(--font-geist-mono)', fontWeight: 600, color: 'var(--text-primary)', textAlign: 'right' }}>{p.symbol}</td>
+                                          <td style={{ padding: '3px 8px', textAlign: 'right', color: p.side === 'long' ? 'var(--accent-profit)' : 'var(--accent-loss)', fontWeight: 600, textTransform: 'uppercase', fontSize: 10 }}>{p.side}</td>
+                                          <td style={{ padding: '3px 8px', textAlign: 'right', fontFamily: 'var(--font-geist-mono)', color: 'var(--text-primary)' }}>{formatValue(p.notional, 'USD')}</td>
+                                          <td style={{ padding: '3px 8px', textAlign: 'right', fontFamily: 'var(--font-geist-mono)', color: 'var(--text-muted)' }}>{p.entryPrice?.toFixed(4) ?? '—'}</td>
+                                          <td style={{ padding: '3px 8px', textAlign: 'right', fontFamily: 'var(--font-geist-mono)', color: 'var(--text-primary)' }}>{p.markPrice?.toFixed(4) ?? '—'}</td>
+                                          <td style={{ padding: '3px 8px', textAlign: 'right', fontFamily: 'var(--font-geist-mono)', color: p.unrealizedPnl >= 0 ? 'var(--accent-profit)' : 'var(--accent-loss)' }}>
+                                            {p.unrealizedPnl >= 0 ? '+' : ''}{p.unrealizedPnl.toFixed(2)}
+                                          </td>
+                                          <td style={{ padding: '3px 8px', textAlign: 'right', fontFamily: 'var(--font-geist-mono)', color: 'var(--text-muted)' }}>{p.liquidationPrice > 0 ? p.liquidationPrice.toFixed(4) : '—'}</td>
+                                          <td style={{ padding: '3px 8px', textAlign: 'right', fontFamily: 'var(--font-geist-mono)', color: 'var(--text-primary)' }}>{liqDist}</td>
+                                        </tr>
+                                      )
+                                    })}
+                                  </tbody>
+                                </table>
+                              )}
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    )
+                  })}
                   {accounts.length === 0 && (
                     <tr>
-                      <td colSpan={8} style={{ ...cellBase, textAlign: 'center', color: 'var(--text-muted)' }}>
+                      <td colSpan={MONITOR_COLS} style={{ ...cellBase, textAlign: 'center', color: 'var(--text-muted)' }}>
                         No accounts configured
                       </td>
                     </tr>
@@ -406,9 +579,10 @@ export default function RiskManagementPage() {
             {/* Legend */}
             <div className="flex items-center gap-4 text-[10px]" style={{ color: 'var(--text-muted)' }}>
               <span><span style={{ color: 'var(--accent-profit)' }}>●</span> OK</span>
-              <span><span style={{ color: '#FFD700' }}>●</span> Alert threshold exceeded</span>
+              <span><span style={{ color: ALERT_COLOR }}>●</span> Alert threshold exceeded</span>
               <span><span style={{ color: 'var(--accent-loss)' }}>●</span> Kill threshold exceeded</span>
-              <span style={{ color: 'var(--text-muted)' }}>— No rule set / no data</span>
+              <span>— No rule / no data</span>
+              <span style={{ color: 'var(--text-muted)' }}>Liq Distance: inverted (lower = closer to liquidation)</span>
             </div>
 
             {/* Alerts section */}
@@ -442,8 +616,8 @@ export default function RiskManagementPage() {
                     const ruleLabel  = RULE_TYPES.find(r => r.value === alert.rule_type)?.label ?? alert.rule_type
                     const accName    = accounts.find(a => a.id === alert.account_id)?.account_name ?? alert.account_id.slice(0, 8)
                     const isCritical = alert.severity === 'critical'
-                    const bg    = isCritical ? 'rgba(255,59,59,0.07)' : 'rgba(255,215,0,0.06)'
-                    const color = isCritical ? 'var(--accent-loss)' : '#FFD700'
+                    const bg         = isCritical ? 'rgba(255,59,59,0.07)' : 'rgba(249,115,22,0.06)'
+                    const color      = isCritical ? 'var(--accent-loss)' : ALERT_COLOR
                     return (
                       <div
                         key={alert.id}
@@ -536,7 +710,7 @@ export default function RiskManagementPage() {
                   <tr>
                     {RULE_TYPES.map(rt => (
                       <React.Fragment key={rt.value}>
-                        <th style={{ ...headerCell, textAlign: 'center', borderLeft: '1px solid rgba(255,255,255,0.1)', color: '#FFD700', minWidth: 80 }}>
+                        <th style={{ ...headerCell, textAlign: 'center', borderLeft: '1px solid rgba(255,255,255,0.1)', color: ALERT_COLOR, minWidth: 80 }}>
                           Alert
                         </th>
                         <th style={{ ...headerCell, textAlign: 'center', color: '#FF6B6B', minWidth: 80 }}>
@@ -584,7 +758,7 @@ export default function RiskManagementPage() {
                                   className="w-full px-1.5 py-1 text-xs font-mono text-right"
                                   style={{
                                     background: '#252535',
-                                    border: '1px solid rgba(255,215,0,0.5)',
+                                    border: `1px solid ${ALERT_COLOR}80`,
                                     color: '#fff',
                                     borderRadius: 2,
                                     width: 76,
@@ -695,7 +869,7 @@ export default function RiskManagementPage() {
                   })}
                   {accounts.length === 0 && (
                     <tr>
-                      <td colSpan={15} style={{ ...cellBase, textAlign: 'center', color: 'var(--text-muted)' }}>
+                      <td colSpan={1 + RULE_TYPES.length * 2 + 2} style={{ ...cellBase, textAlign: 'center', color: 'var(--text-muted)' }}>
                         No accounts configured
                       </td>
                     </tr>
