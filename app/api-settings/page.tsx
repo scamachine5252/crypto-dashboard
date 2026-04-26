@@ -903,8 +903,8 @@ export default function ApiSettingsPage() {
                               </button>
                             )}
 
-                            {/* Backfill History — balance + transactions */}
-                            {(() => {
+                            {/* Backfill History — balance + transactions (Bybit + Binance only) */}
+                            {account.exchange !== 'okx' && account.exchange !== 'mexc' && (() => {
                               const bs = backfillState[account.id]
                               if (bs && !bs.completed && !bs.isError) {
                                 const label = bs.phase === 'balance' ? 'Balance' : 'Transactions'

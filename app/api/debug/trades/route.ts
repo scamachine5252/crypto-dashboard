@@ -3,10 +3,15 @@ import { NextRequest, NextResponse } from 'next/server'
 import * as ccxt from 'ccxt'
 import { supabaseAdmin } from '@/lib/supabase/server'
 import { decrypt } from '@/lib/crypto/decrypt'
+import { requireDebugAuth } from '@/lib/debug-auth'
 
 // GET /api/debug/trades?account_id=xxx&category=linear&limit=3
 // Returns raw CCXT trade info fields so we can see what PnL fields are available.
+// Requires x-debug-secret header matching DEBUG_SECRET env var.
 export async function GET(req: NextRequest): Promise<NextResponse> {
+  const deny = requireDebugAuth(req)
+  if (deny) return deny
+
   const accountId = req.nextUrl.searchParams.get('account_id')
   const category  = req.nextUrl.searchParams.get('category') ?? 'linear'
   const limit     = Number(req.nextUrl.searchParams.get('limit') ?? '3')

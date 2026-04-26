@@ -15,6 +15,27 @@ const mockGetTrades = jest.fn()
 jest.mock('@/lib/adapters/bybit',   () => ({ BybitAdapter:   jest.fn(() => ({ fetchBalance: mockFetchBalance, getTrades: mockGetTrades })) }))
 jest.mock('@/lib/adapters/binance', () => ({ BinanceAdapter: jest.fn(() => ({ fetchBalance: mockFetchBalance, getTrades: mockGetTrades })) }))
 jest.mock('@/lib/adapters/okx',     () => ({ OkxAdapter:     jest.fn(() => ({ fetchBalance: mockFetchBalance, getTrades: mockGetTrades })) }))
+jest.mock('@/lib/adapters/mexc',    () => ({ MexcAdapter:    jest.fn(() => ({ fetchBalance: mockFetchBalance, getTrades: mockGetTrades })) }))
+jest.mock('@/lib/risk/run-evaluation', () => ({ runRiskEvaluation: jest.fn().mockResolvedValue({ evaluated: 0, violations: 0 }) }))
+
+// ccxt is used directly in sync route for deposits/withdrawals — mock to prevent real HTTP calls
+const mockBybitCcxt = {
+  privateGetV5AssetDepositQueryRecord:  jest.fn().mockResolvedValue({ result: { rows: [] } }),
+  privateGetV5AssetWithdrawQueryRecord: jest.fn().mockResolvedValue({ result: { list: [] } }),
+  privateGetV5AccountTransactionLog:    jest.fn().mockResolvedValue({ result: { list: [] } }),
+}
+const mockBinanceCcxt = {
+  fetchDeposits:                              jest.fn().mockResolvedValue([]),
+  fetchWithdrawals:                           jest.fn().mockResolvedValue([]),
+  sapiGetSubAccountTransferSubUserHistory:    jest.fn().mockResolvedValue([]),
+  fapiPrivateGetIncome:                       jest.fn().mockResolvedValue([]),
+  papiGetUmIncome:                            jest.fn().mockResolvedValue([]),
+  papiGetCmIncome:                            jest.fn().mockResolvedValue([]),
+}
+jest.mock('ccxt', () => ({
+  bybit:   jest.fn(() => mockBybitCcxt),
+  binance: jest.fn(() => mockBinanceCcxt),
+}))
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -80,11 +101,14 @@ describe('POST /api/sync', () => {
     mockTradesUpsert   = jest.fn().mockResolvedValue({ error: null })
     const mockAccountsUpdate = jest.fn().mockReturnValue({ eq: jest.fn().mockResolvedValue({ error: null }) })
 
+    const mockTxUpsert = jest.fn().mockResolvedValue({ data: [], error: null })
+
     const { supabaseAdmin } = require('@/lib/supabase/server')
     ;(supabaseAdmin.from as jest.Mock).mockImplementation((table: string) => {
-      if (table === 'accounts') return { select: mockAccountsSelect, update: mockAccountsUpdate }
-      if (table === 'balances') return { insert: mockBalancesInsert }
-      if (table === 'trades')   return { upsert: mockTradesUpsert }
+      if (table === 'accounts')     return { select: mockAccountsSelect, update: mockAccountsUpdate }
+      if (table === 'balances')     return { insert: mockBalancesInsert }
+      if (table === 'trades')       return { upsert: mockTradesUpsert }
+      if (table === 'transactions') return { upsert: mockTxUpsert }
       return {}
     })
 

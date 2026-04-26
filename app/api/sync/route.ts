@@ -140,8 +140,8 @@ async function runSync(): Promise<NextResponse> {
       try {
         if (row.exchange === 'bybit') {
           const bybitEx = new ccxt.bybit({
-            apiKey: decrypt(row.api_key),
-            secret: decrypt(row.api_secret),
+            apiKey,
+            secret: apiSecret,
             options: { defaultType: 'unified' },
           })
           // External deposits
@@ -190,7 +190,7 @@ async function runSync(): Promise<NextResponse> {
             txRows.push(...transfers)
           } catch { /* ok */ }
         } else if (row.exchange === 'binance') {
-          const binEx = new ccxt.binance({ apiKey: decrypt(row.api_key), secret: decrypt(row.api_secret) })
+          const binEx = new ccxt.binance({ apiKey, secret: apiSecret })
           // External blockchain deposits/withdrawals
           try {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any

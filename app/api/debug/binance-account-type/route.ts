@@ -2,14 +2,19 @@ import 'server-only'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/server'
 import { decrypt } from '@/lib/crypto/decrypt'
+import { requireDebugAuth } from '@/lib/debug-auth'
 import * as ccxt from 'ccxt'
 
 /**
  * POST /api/debug/binance-account-type
  * Diagnoses whether a Binance account is a sub-account or master account,
  * and what transfer history is accessible with its own API keys.
+ * Requires x-debug-secret header matching DEBUG_SECRET env var.
  */
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  const deny = requireDebugAuth(req)
+  if (deny) return deny
+
   const body      = await req.json() as Record<string, unknown>
   const accountId = body.account_id as string | undefined
 

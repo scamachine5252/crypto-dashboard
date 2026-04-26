@@ -246,7 +246,7 @@ crypto-dashboard/          ← project root (NOT src/)
 - Bybit trades: 4 categories (`spot`, `linear`, `inverse`, `option`)
 - OKX trades: 5 instTypes (`SPOT`, `SWAP`, `FUTURES`, `OPTION`, `MARGIN`)
 - Vercel region: `fra1` (Frankfurt) — required for Bybit CloudFront
-- Cron: daily at `09:00 UTC` (Hobby plan limitation)
+- Cron: every 4 hours (`0 */4 * * *`) — Vercel Pro plan, upgraded April 2026
 
 ---
 

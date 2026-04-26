@@ -4,6 +4,26 @@
  */
 
 // ---------------------------------------------------------------------------
+// Bybit: group transaction-log rows by day, keeping the last cashBalance per day
+// ---------------------------------------------------------------------------
+
+export function groupByDay(
+  rows: Array<Record<string, string>>,
+): Record<string, number> {
+  const map: Record<string, { time: number; balance: number }> = {}
+  for (const row of rows) {
+    const t    = Number(row['transactionTime'])
+    const date = new Date(t).toISOString().slice(0, 10)
+    if (!map[date] || t > map[date].time) {
+      map[date] = { time: t, balance: Number(row['cashBalance']) }
+    }
+  }
+  const result: Record<string, number> = {}
+  for (const [date, { balance }] of Object.entries(map)) result[date] = balance
+  return result
+}
+
+// ---------------------------------------------------------------------------
 // Bybit: extract TRANSFER_IN / TRANSFER_OUT from transaction-log rows
 // ---------------------------------------------------------------------------
 

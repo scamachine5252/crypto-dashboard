@@ -84,60 +84,64 @@ async function backfillBybitTransactions(acc: Record<string, string>, chunkIndex
 
   const toInsert: Array<Record<string, unknown>> = []
 
-  // Deposits
+  // Deposits — paginated via cursor
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const depRaw = await (exchange as any).privateGetV5AssetDepositQueryRecord({
-      startTime: since,
-      endTime:   until,
-      limit:     50,
-    }) as Record<string, unknown>
-    const depResult = (depRaw?.result ?? {}) as Record<string, unknown>
-    const depList   = (depResult.rows ?? []) as Array<Record<string, string>>
-
-    for (const d of depList) {
-      if (!d['txID']) continue
-      toInsert.push({
-        account_id:  acc.id,
-        exchange:    'bybit',
-        type:        'deposit',
-        asset:       d['coin'] ?? 'USDT',
-        amount:      Number(d['amount'] ?? 0),
-        fee:         null,
-        status:      d['status'] ?? null,
-        tx_id:       d['txID'],
-        recorded_at: new Date(Number(d['depositFeeTime'] ?? d['createTime'] ?? since)).toISOString(),
-      })
-    }
+    let depCursor: string | undefined
+    do {
+      const params: Record<string, unknown> = { startTime: since, endTime: until, limit: 50 }
+      if (depCursor) params['cursor'] = depCursor
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const depRaw    = await (exchange as any).privateGetV5AssetDepositQueryRecord(params) as Record<string, unknown>
+      const depResult = (depRaw?.result ?? {}) as Record<string, unknown>
+      const depList   = (depResult.rows ?? []) as Array<Record<string, string>>
+      for (const d of depList) {
+        if (!d['txID']) continue
+        toInsert.push({
+          account_id:  acc.id,
+          exchange:    'bybit',
+          type:        'deposit',
+          asset:       d['coin'] ?? 'USDT',
+          amount:      Number(d['amount'] ?? 0),
+          fee:         null,
+          status:      d['status'] ?? null,
+          tx_id:       d['txID'],
+          recorded_at: new Date(Number(d['depositFeeTime'] ?? d['createTime'] ?? since)).toISOString(),
+        })
+      }
+      depCursor = depResult.nextPageCursor as string | undefined
+      if (!depCursor || depList.length === 0) break
+    } while (depCursor)
   } catch {
     // No deposits in this window — ok
   }
 
-  // Withdrawals
+  // Withdrawals — paginated via cursor
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const wdRaw = await (exchange as any).privateGetV5AssetWithdrawQueryRecord({
-      startTime: since,
-      endTime:   until,
-      limit:     50,
-    }) as Record<string, unknown>
-    const wdResult = (wdRaw?.result ?? {}) as Record<string, unknown>
-    const wdList   = (wdResult.rows ?? wdResult.list ?? []) as Array<Record<string, string>>
-
-    for (const w of wdList) {
-      if (!w['withdrawId'] && !w['id']) continue
-      toInsert.push({
-        account_id:  acc.id,
-        exchange:    'bybit',
-        type:        'withdrawal',
-        asset:       w['coin'] ?? 'USDT',
-        amount:      Number(w['amount'] ?? 0),
-        fee:         w['withdrawFee'] ? Number(w['withdrawFee']) : null,
-        status:      w['status'] ?? null,
-        tx_id:       w['withdrawId'] ?? w['id'],
-        recorded_at: new Date(Number(w['updateTime'] ?? w['createTime'] ?? since)).toISOString(),
-      })
-    }
+    let wdCursor: string | undefined
+    do {
+      const params: Record<string, unknown> = { startTime: since, endTime: until, limit: 50 }
+      if (wdCursor) params['cursor'] = wdCursor
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const wdRaw    = await (exchange as any).privateGetV5AssetWithdrawQueryRecord(params) as Record<string, unknown>
+      const wdResult = (wdRaw?.result ?? {}) as Record<string, unknown>
+      const wdList   = (wdResult.rows ?? wdResult.list ?? []) as Array<Record<string, string>>
+      for (const w of wdList) {
+        if (!w['withdrawId'] && !w['id']) continue
+        toInsert.push({
+          account_id:  acc.id,
+          exchange:    'bybit',
+          type:        'withdrawal',
+          asset:       w['coin'] ?? 'USDT',
+          amount:      Number(w['amount'] ?? 0),
+          fee:         w['withdrawFee'] ? Number(w['withdrawFee']) : null,
+          status:      w['status'] ?? null,
+          tx_id:       w['withdrawId'] ?? w['id'],
+          recorded_at: new Date(Number(w['updateTime'] ?? w['createTime'] ?? since)).toISOString(),
+        })
+      }
+      wdCursor = wdResult.nextPageCursor as string | undefined
+      if (!wdCursor || wdList.length === 0) break
+    } while (wdCursor)
   } catch {
     // No withdrawals in this window — ok
   }

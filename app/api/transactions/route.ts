@@ -16,20 +16,29 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ transactions: [] })
   }
 
-  let query = supabaseAdmin
-    .from('transactions')
-    .select('id, account_id, exchange, type, asset, amount, fee, status, tx_id, recorded_at')
-    .in('account_id', accountIds)
-    .order('recorded_at', { ascending: false })
+  const PAGE = 1000
+  const all: unknown[] = []
+  let from = 0
 
-  if (since) query = query.gte('recorded_at', since)
-  if (until) query = query.lte('recorded_at', until)
+  while (true) {
+    let query = supabaseAdmin
+      .from('transactions')
+      .select('id, account_id, exchange, type, asset, amount, fee, status, tx_id, recorded_at')
+      .in('account_id', accountIds)
+      .order('recorded_at', { ascending: false })
+      .range(from, from + PAGE - 1)
 
-  const { data, error } = await query
+    if (since) query = query.gte('recorded_at', since)
+    if (until) query = query.lte('recorded_at', until)
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    const { data, error } = await query
+
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (!data || data.length === 0) break
+    all.push(...data)
+    if (data.length < PAGE) break
+    from += PAGE
   }
 
-  return NextResponse.json({ transactions: data ?? [] })
+  return NextResponse.json({ transactions: all })
 }

@@ -301,13 +301,13 @@ export default function ResultsPage() {
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan={9} className="px-4 py-8 text-center text-xs" style={{ color: 'var(--text-muted)' }}>
+                    <td colSpan={11} className="px-4 py-8 text-center text-xs" style={{ color: 'var(--text-muted)' }}>
                       Loading…
                     </td>
                   </tr>
                 ) : accountSummaries.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="px-4 py-8 text-center text-xs" style={{ color: 'var(--text-muted)' }}>
+                    <td colSpan={11} className="px-4 py-8 text-center text-xs" style={{ color: 'var(--text-muted)' }}>
                       No data for selected period. Run a sync first.
                     </td>
                   </tr>

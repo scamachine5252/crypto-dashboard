@@ -1,13 +1,18 @@
 import 'server-only'
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/server'
+import { requireDebugAuth } from '@/lib/debug-auth'
 
 /**
  * GET /api/debug/balance-coverage
  * Returns min/max date and row count per account in the balances table.
  * Used to verify that balance backfill actually wrote data.
+ * Requires x-debug-secret header matching DEBUG_SECRET env var.
  */
-export async function GET(): Promise<NextResponse> {
+export async function GET(req: NextRequest): Promise<NextResponse> {
+  const deny = requireDebugAuth(req)
+  if (deny) return deny
+
   // Fetch all accounts for name lookup
   const { data: accounts } = await supabaseAdmin
     .from('accounts')

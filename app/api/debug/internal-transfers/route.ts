@@ -2,14 +2,19 @@ import 'server-only'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/server'
 import { decrypt } from '@/lib/crypto/decrypt'
+import { requireDebugAuth } from '@/lib/debug-auth'
 import * as ccxt from 'ccxt'
 
 /**
  * POST /api/debug/internal-transfers
  * Checks Bybit internal (sub-account) transfers for an account.
  * These do NOT appear in the regular deposit endpoint.
+ * Requires x-debug-secret header matching DEBUG_SECRET env var.
  */
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  const deny = requireDebugAuth(req)
+  if (deny) return deny
+
   const body      = await req.json() as Record<string, unknown>
   const accountId = body.account_id as string | undefined
   const daysAgo   = typeof body.days_ago === 'number' ? body.days_ago : 30

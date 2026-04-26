@@ -1,42 +1,29 @@
 import { mergeData } from '@/components/charts/BalanceLineChart'
 import {
+  groupByDay,
   extractBybitTransfers,
   extractUsdtFromSnapshot,
   mergeBinanceBalances,
 } from '@/lib/backfill-utils'
 
 // ---------------------------------------------------------------------------
-// groupByDay — pure helper, tested inline via the backfill logic
+// groupByDay (Bybit transaction-log)
 // ---------------------------------------------------------------------------
 
-function groupByDay(rows: Array<{ transactionTime: string; cashBalance: string }>): Record<string, number> {
-  const map: Record<string, { time: number; balance: number }> = {}
-  for (const row of rows) {
-    const t    = Number(row.transactionTime)
-    const date = new Date(t).toISOString().slice(0, 10)
-    if (!map[date] || t > map[date].time) {
-      map[date] = { time: t, balance: Number(row.cashBalance) }
-    }
-  }
-  const result: Record<string, number> = {}
-  for (const [date, { balance }] of Object.entries(map)) result[date] = balance
-  return result
-}
-
 describe('groupByDay (Bybit transaction-log)', () => {
-  it('берёт последний cashBalance per день', () => {
+  it('takes the last cashBalance for the day', () => {
     const t1 = new Date('2026-01-01T10:00:00Z').getTime()
     const t2 = new Date('2026-01-01T22:00:00Z').getTime()
     const rows = [
       { transactionTime: String(t1), cashBalance: '100' },
-      { transactionTime: String(t2), cashBalance: '200' }, // позже, тот же день
+      { transactionTime: String(t2), cashBalance: '200' },
     ]
     const result = groupByDay(rows)
     expect(Object.keys(result)).toHaveLength(1)
     expect(result['2026-01-01']).toBe(200)
   })
 
-  it('несколько дней → несколько ключей', () => {
+  it('multiple days produce multiple keys', () => {
     const rows = [
       { transactionTime: String(new Date('2026-01-01T10:00:00Z').getTime()), cashBalance: '1000' },
       { transactionTime: String(new Date('2026-01-02T10:00:00Z').getTime()), cashBalance: '1100' },
@@ -44,14 +31,14 @@ describe('groupByDay (Bybit transaction-log)', () => {
     ]
     const result = groupByDay(rows)
     expect(result['2026-01-01']).toBe(1000)
-    expect(result['2026-01-02']).toBe(1150) // последняя запись дня
+    expect(result['2026-01-02']).toBe(1150)
   })
 
-  it('пустой ввод → пустой объект', () => {
+  it('empty input returns empty object', () => {
     expect(groupByDay([])).toEqual({})
   })
 
-  it('одна запись → один ключ', () => {
+  it('single row produces single key', () => {
     const rows = [{ transactionTime: String(new Date('2026-03-15T00:00:00Z').getTime()), cashBalance: '50000' }]
     const result = groupByDay(rows)
     expect(result['2026-03-15']).toBe(50000)
@@ -63,11 +50,11 @@ describe('groupByDay (Bybit transaction-log)', () => {
 // ---------------------------------------------------------------------------
 
 describe('mergeData (BalanceLineChart)', () => {
-  it('пустой ввод → пустой массив', () => {
+  it('empty input returns empty array', () => {
     expect(mergeData([])).toEqual([])
   })
 
-  it('один аккаунт, одна дата', () => {
+  it('single account, single date', () => {
     const series = [{ subAccountId: 'a', data: [{ date: '2026-01-01', value: 100 }] }]
     const merged = mergeData(series)
     expect(merged).toHaveLength(1)
@@ -75,7 +62,7 @@ describe('mergeData (BalanceLineChart)', () => {
     expect(merged[0].a).toBe(100)
   })
 
-  it('два аккаунта с одинаковыми датами — значения не смещаются', () => {
+  it('two accounts with identical dates — no value misalignment', () => {
     const series = [
       { subAccountId: 'a', data: [{ date: '2026-01-01', value: 100 }, { date: '2026-01-02', value: 110 }] },
       { subAccountId: 'b', data: [{ date: '2026-01-01', value: 200 }, { date: '2026-01-02', value: 210 }] },
@@ -86,7 +73,7 @@ describe('mergeData (BalanceLineChart)', () => {
     expect(merged[1]).toMatchObject({ date: '2026-01-02', a: 110, b: 210 })
   })
 
-  it('разные наборы дат: нет смещения', () => {
+  it('different date sets — no value misalignment', () => {
     const series = [
       { subAccountId: 'a', data: [{ date: '2026-01-01', value: 100 }, { date: '2026-01-03', value: 110 }] },
       { subAccountId: 'b', data: [{ date: '2026-01-02', value: 200 }] },
@@ -98,36 +85,31 @@ describe('mergeData (BalanceLineChart)', () => {
     const day2 = merged.find(r => r.date === '2026-01-02')!
     const day3 = merged.find(r => r.date === '2026-01-03')!
 
-    // '2026-01-01': a=100, b ещё нет данных → 0
     expect(day1.a).toBe(100)
-    expect(day1.b).toBe(0)
+    expect(day1.b).toBe(0) // b has no data yet
 
-    // '2026-01-02': carry-forward a=100, b=200
-    expect(day2.a).toBe(100)
+    expect(day2.a).toBe(100) // carry-forward from 01-01
     expect(day2.b).toBe(200)
 
-    // '2026-01-03': a=110 (новое), carry-forward b=200
-    expect(day3.a).toBe(110)
-    expect(day3.b).toBe(200)
+    expect(day3.a).toBe(110) // new value
+    expect(day3.b).toBe(200) // carry-forward
   })
 
-  it('carry-forward: значение переносится на все последующие даты', () => {
+  it('carry-forward propagates value to all later dates', () => {
     const series = [
       { subAccountId: 'a', data: [{ date: '2026-01-01', value: 500 }] },
       { subAccountId: 'b', data: [
         { date: '2026-01-01', value: 100 },
-        { date: '2026-01-05', value: 200 }, // пропуск 3 дней
+        { date: '2026-01-05', value: 200 },
       ]},
     ]
-    // Между 01-01 и 01-05 нет записей для 'b', значит нет промежуточных дат вообще
-    // т.к. дата появляется в allDates только если хотя бы один аккаунт имеет её
     const merged = mergeData(series)
     const day5 = merged.find(r => r.date === '2026-01-05')!
-    expect(day5.a).toBe(500) // carry-forward от 01-01
+    expect(day5.a).toBe(500) // carry-forward from 01-01
     expect(day5.b).toBe(200)
   })
 
-  it('даты отсортированы по возрастанию', () => {
+  it('output dates are sorted ascending', () => {
     const series = [
       { subAccountId: 'a', data: [
         { date: '2026-03-01', value: 300 },
@@ -149,7 +131,7 @@ describe('mergeData (BalanceLineChart)', () => {
 describe('extractBybitTransfers', () => {
   const ACC = 'acc-123'
 
-  it('TRANSFER_IN → deposit record', () => {
+  it('TRANSFER_IN maps to deposit record', () => {
     const rows = [{ type: 'TRANSFER_IN', id: 'tx1', currency: 'USDT', cashFlow: '100000', transactionTime: '1700000000000' }]
     const result = extractBybitTransfers(rows, ACC)
     expect(result).toHaveLength(1)
@@ -160,7 +142,7 @@ describe('extractBybitTransfers', () => {
     expect(result[0].account_id).toBe(ACC)
   })
 
-  it('TRANSFER_OUT → withdrawal record with positive amount', () => {
+  it('TRANSFER_OUT maps to withdrawal record with positive amount', () => {
     const rows = [{ type: 'TRANSFER_OUT', id: 'tx2', currency: 'USDT', cashFlow: '-50000', transactionTime: '1700000000000' }]
     const result = extractBybitTransfers(rows, ACC)
     expect(result).toHaveLength(1)
@@ -168,22 +150,22 @@ describe('extractBybitTransfers', () => {
     expect(result[0].amount).toBe(50000)
   })
 
-  it('TRADE entries → ignored', () => {
+  it('TRADE entries are ignored', () => {
     const rows = [{ type: 'TRADE', id: 'tx3', cashFlow: '100' }]
     expect(extractBybitTransfers(rows, ACC)).toHaveLength(0)
   })
 
-  it('FUNDING entries → ignored', () => {
+  it('FUNDING entries are ignored', () => {
     const rows = [{ type: 'FUNDING', id: 'tx4', cashFlow: '-5' }]
     expect(extractBybitTransfers(rows, ACC)).toHaveLength(0)
   })
 
-  it('missing id → skipped', () => {
+  it('missing id is skipped', () => {
     const rows = [{ type: 'TRANSFER_IN', id: '', cashFlow: '1000' }]
     expect(extractBybitTransfers(rows, ACC)).toHaveLength(0)
   })
 
-  it('cashFlow = 0 → skipped', () => {
+  it('cashFlow = 0 is skipped', () => {
     const rows = [{ type: 'TRANSFER_IN', id: 'tx5', cashFlow: '0' }]
     expect(extractBybitTransfers(rows, ACC)).toHaveLength(0)
   })
@@ -232,12 +214,12 @@ describe('extractUsdtFromSnapshot', () => {
     expect(extractUsdtFromSnapshot(data)).toBe(50000)
   })
 
-  it('no USDT in assets → 0', () => {
+  it('no USDT in assets returns 0', () => {
     const data = { userAssets: [{ asset: 'BTC', free: '1.5' }] }
     expect(extractUsdtFromSnapshot(data)).toBe(0)
   })
 
-  it('empty data → 0', () => {
+  it('empty data returns 0', () => {
     expect(extractUsdtFromSnapshot({})).toBe(0)
   })
 
@@ -255,56 +237,56 @@ describe('extractUsdtFromSnapshot', () => {
 // ---------------------------------------------------------------------------
 
 describe('mergeBinanceBalances', () => {
-  it('portfolio_margin: sums FUTURES + MARGIN per date', () => {
+  it('portfolio_margin: sums FUTURES and MARGIN per date', () => {
     const futures = { '2026-04-01': 22963 }
     const margin  = { '2026-04-01': 6494 }
     const merged  = mergeBinanceBalances(futures, margin, true)
     expect(merged['2026-04-01']).toBeCloseTo(29457)
   })
 
-  it('portfolio_margin: DFI case — FUTURES=$0, MARGIN=$50K → sum = $50K', () => {
+  it('portfolio_margin: FUTURES=$0 + MARGIN=$50K sums to $50K', () => {
     const futures = { '2026-04-20': 0 }
     const margin  = { '2026-04-20': 50000 }
     const merged  = mergeBinanceBalances(futures, margin, true)
     expect(merged['2026-04-20']).toBe(50000)
   })
 
-  it('portfolio_margin: date only in FUTURES → uses futures amount', () => {
+  it('portfolio_margin: date only in FUTURES uses futures amount', () => {
     const futures = { '2026-04-01': 1000 }
     const margin:  Record<string, number> = {}
     const merged  = mergeBinanceBalances(futures, margin, true)
     expect(merged['2026-04-01']).toBe(1000)
   })
 
-  it('portfolio_margin: date only in MARGIN → uses margin amount', () => {
+  it('portfolio_margin: date only in MARGIN uses margin amount', () => {
     const futures: Record<string, number> = {}
     const margin  = { '2026-04-01': 5000 }
     const merged  = mergeBinanceBalances(futures, margin, true)
     expect(merged['2026-04-01']).toBe(5000)
   })
 
-  it('unified: Wealthrone case — both $50K → uses FUTURES, not double-counted', () => {
+  it('unified: both maps show $50K — uses FUTURES, not double-counted', () => {
     const futures = { '2026-04-20': 50000 }
     const margin  = { '2026-04-20': 50000 }
     const merged  = mergeBinanceBalances(futures, margin, false)
     expect(merged['2026-04-20']).toBe(50000)
   })
 
-  it('unified: falls back to MARGIN when FUTURES = 0', () => {
+  it('unified: falls back to MARGIN when FUTURES is 0', () => {
     const futures = { '2026-04-01': 0 }
     const margin  = { '2026-04-01': 30000 }
     const merged  = mergeBinanceBalances(futures, margin, false)
     expect(merged['2026-04-01']).toBe(30000)
   })
 
-  it('unified: uses FUTURES when it has value', () => {
+  it('unified: uses FUTURES when it has a non-zero value', () => {
     const futures = { '2026-04-01': 45000 }
     const margin  = { '2026-04-01': 45000 }
     const merged  = mergeBinanceBalances(futures, margin, false)
     expect(merged['2026-04-01']).toBe(45000)
   })
 
-  it('all dates from both maps appear in result', () => {
+  it('union of dates from both maps appears in result', () => {
     const futures = { '2026-04-01': 1000, '2026-04-02': 1100 }
     const margin  = { '2026-04-02': 500,  '2026-04-03': 600 }
     const merged  = mergeBinanceBalances(futures, margin, true)
@@ -314,7 +296,7 @@ describe('mergeBinanceBalances', () => {
     expect(merged['2026-04-03']).toBe(600)
   })
 
-  it('empty inputs → empty result', () => {
+  it('empty inputs return empty result', () => {
     expect(mergeBinanceBalances({}, {}, true)).toEqual({})
     expect(mergeBinanceBalances({}, {}, false)).toEqual({})
   })

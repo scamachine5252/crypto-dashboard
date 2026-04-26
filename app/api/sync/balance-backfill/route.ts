@@ -2,7 +2,7 @@ import 'server-only'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/server'
 import { decrypt } from '@/lib/crypto/decrypt'
-import { mergeBinanceBalances, extractUsdtFromSnapshot } from '@/lib/backfill-utils'
+import { groupByDay, mergeBinanceBalances, extractUsdtFromSnapshot } from '@/lib/backfill-utils'
 import * as ccxt from 'ccxt'
 
 // Bybit: 7-day windows, 13 chunks = 91 days
@@ -37,21 +37,6 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-// Group Bybit transaction-log rows by date, keep last cashBalance per day
-function groupByDay(rows: Array<Record<string, string>>): Record<string, number> {
-  const map: Record<string, { time: number; balance: number }> = {}
-  for (const row of rows) {
-    const t    = Number(row['transactionTime'])
-    const date = new Date(t).toISOString().slice(0, 10)
-    if (!map[date] || t > map[date].time) {
-      map[date] = { time: t, balance: Number(row['cashBalance']) }
-    }
-  }
-  const result: Record<string, number> = {}
-  for (const [date, { balance }] of Object.entries(map)) result[date] = balance
-  return result
-}
 
 // Fetch existing balance dates for an account (to skip duplicates)
 async function existingDates(accountId: string): Promise<Set<string>> {
