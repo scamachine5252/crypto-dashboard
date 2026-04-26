@@ -32,8 +32,8 @@ export default function RiskManagementPage() {
   useEffect(() => {
     fetch('/api/accounts')
       .then(r => r.json())
-      .then((d: { accounts?: AccountRow[] }) => {
-        const accs = d.accounts ?? []
+      .then((d: AccountRow[] | { accounts?: AccountRow[] }) => {
+        const accs = Array.isArray(d) ? d : (d.accounts ?? [])
         setAccounts(accs)
         if (accs.length > 0) setSelectedId(accs[0].id)
       })
