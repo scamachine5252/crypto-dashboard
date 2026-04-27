@@ -25,6 +25,13 @@ const RULE_TYPES: { value: RuleType; label: string; unit: string; invertedAlert?
 
 const MONITOR_COLS = 2 + RULE_TYPES.length  // Account + Exchange + 9 metrics
 
+// Metrics that are meaningless (show "—") when there are no open positions
+const POSITION_ONLY_METRICS = new Set<RuleType>([
+  'position_size', 'max_unrealized_pnl_per_position',
+  'max_net_position_instrument', 'max_net_position_account',
+  'leverage', 'margin_utilization', 'min_liq_distance',
+])
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -401,7 +408,7 @@ export default function RiskManagementPage() {
         ))}
       </div>
 
-      <main className="flex-1 p-4 w-full mx-auto max-w-[1400px]">
+      <main className="flex-1 p-4 w-full mx-auto" style={{ maxWidth: 'calc(100vw - 32px)' }}>
 
         {/* ================================================================ */}
         {/* MONITOR TAB                                                       */}
@@ -462,6 +469,8 @@ export default function RiskManagementPage() {
                       ? getTopPositionsForMetric(livePositions[acc.id] ?? [], expandedRt)
                       : []
 
+                    const hasPositions = (accMetrics?.max_positions ?? 0) > 0
+
                     return (
                       <React.Fragment key={acc.id}>
                         <tr style={{ background: i % 2 === 0 ? 'var(--bg-secondary)' : 'var(--bg-elevated)' }}>
@@ -472,7 +481,9 @@ export default function RiskManagementPage() {
                             {acc.exchange}
                           </td>
                           {RULE_TYPES.map(rt => {
-                            const value = accMetrics?.[rt.value]
+                            const rawValue = accMetrics?.[rt.value]
+                            // Show "—" for position-only metrics when account has 0 open positions
+                            const value = (!hasPositions && POSITION_ONLY_METRICS.has(rt.value)) ? undefined : rawValue
                             const rule  = getRule(acc.id, rt.value)
                             const isThisExpanded = isExpanded && expandedCell?.ruleType === rt.value
                             return (
@@ -489,7 +500,7 @@ export default function RiskManagementPage() {
                                 style={{
                                   ...cellBase,
                                   textAlign: 'right',
-                                  fontFamily: 'var(--font-geist-mono, monospace)',
+                                  fontFamily: '"Geist Mono", "Cascadia Mono", ui-monospace, monospace',
                                   cursor: value !== undefined ? 'pointer' : 'default',
                                   background: isThisExpanded ? 'rgba(255,255,255,0.05)' : undefined,
                                   ...getCellStyle(value, rule, rt.invertedAlert),
@@ -687,33 +698,42 @@ export default function RiskManagementPage() {
             </div>
 
             {/* Settings table */}
-            <div style={{ border: '1px solid rgba(255,255,255,0.12)', overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+            <div style={{ border: '1px solid var(--border-subtle)', overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11, tableLayout: 'fixed' }}>
+                <colgroup>
+                  <col style={{ width: 130 }} />
+                  {RULE_TYPES.flatMap((_rt, i) => [
+                    <col key={`a${i}`} style={{ width: 54 }} />,
+                    <col key={`k${i}`} style={{ width: 54 }} />,
+                  ])}
+                  <col style={{ width: 58 }} />
+                  <col style={{ width: 68 }} />
+                </colgroup>
                 <thead>
                   <tr>
-                    <th rowSpan={2} style={{ ...headerCell, textAlign: 'left', minWidth: 140, verticalAlign: 'bottom' }}>
+                    <th rowSpan={2} style={{ ...headerCell, textAlign: 'left', verticalAlign: 'bottom' }}>
                       Account
                     </th>
                     {RULE_TYPES.map(rt => (
-                      <th key={rt.value} colSpan={2} style={{ ...headerCell, textAlign: 'center', borderLeft: '1px solid rgba(255,255,255,0.1)' }}>
+                      <th key={rt.value} colSpan={2} style={{ ...headerCell, textAlign: 'center', borderLeft: '1px solid var(--border-subtle)', fontSize: 9, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {rt.label}
-                        <span className="ml-1" style={{ color: 'var(--text-muted)', fontWeight: 400 }}>({rt.unit})</span>
+                        <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> ({rt.unit})</span>
                       </th>
                     ))}
-                    <th rowSpan={2} style={{ ...headerCell, textAlign: 'center', minWidth: 70, borderLeft: '1px solid rgba(255,255,255,0.1)', verticalAlign: 'bottom' }}>
-                      Monitor
+                    <th rowSpan={2} style={{ ...headerCell, textAlign: 'center', borderLeft: '1px solid var(--border-subtle)', verticalAlign: 'bottom', fontSize: 9 }}>
+                      Mon
                     </th>
-                    <th rowSpan={2} style={{ ...headerCell, textAlign: 'center', minWidth: 70, borderLeft: '1px solid rgba(255,255,255,0.1)', verticalAlign: 'bottom' }}>
+                    <th rowSpan={2} style={{ ...headerCell, textAlign: 'center', borderLeft: '1px solid var(--border-subtle)', verticalAlign: 'bottom', fontSize: 9 }}>
                       Kill SW
                     </th>
                   </tr>
                   <tr>
                     {RULE_TYPES.map(rt => (
                       <React.Fragment key={rt.value}>
-                        <th style={{ ...headerCell, textAlign: 'center', borderLeft: '1px solid rgba(255,255,255,0.1)', color: ALERT_COLOR, minWidth: 80 }}>
+                        <th style={{ ...headerCell, textAlign: 'center', borderLeft: '1px solid var(--border-subtle)', color: ALERT_COLOR, fontSize: 9 }}>
                           Alert
                         </th>
-                        <th style={{ ...headerCell, textAlign: 'center', color: '#FF6B6B', minWidth: 80 }}>
+                        <th style={{ ...headerCell, textAlign: 'center', color: '#FF6B6B', fontSize: 9 }}>
                           Kill
                         </th>
                       </React.Fragment>
@@ -724,18 +744,17 @@ export default function RiskManagementPage() {
                   {accounts.map((acc, i) => {
                     const toggles = accountToggles[acc.id] ?? { monitorEnabled: true, killEnabled: true }
                     const accForm = form[acc.id] ?? {}
-                    const rowOpacity = toggles.monitorEnabled ? 1 : 0.5
+                    const isDisabled = !toggles.monitorEnabled
                     return (
                       <tr
                         key={acc.id}
-                        style={{
-                          background: i % 2 === 0 ? 'var(--bg-secondary)' : '#1e1e2a',
-                          opacity: rowOpacity,
-                        }}
+                        style={{ background: i % 2 === 0 ? 'var(--bg-secondary)' : 'var(--bg-elevated)' }}
                       >
                         {/* Account name */}
-                        <td style={{ ...cellBase, color: 'var(--text-primary)', fontWeight: 600 }}>
-                          <div>{acc.account_name}</div>
+                        <td style={{ ...cellBase, fontWeight: 600 }}>
+                          <div style={{ color: isDisabled ? 'var(--text-muted)' : 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {acc.account_name}
+                          </div>
                           <div className="text-[10px] uppercase" style={{ color: 'var(--text-muted)' }}>{acc.exchange}</div>
                         </td>
 
@@ -749,37 +768,43 @@ export default function RiskManagementPage() {
                             }))
                           return (
                             <React.Fragment key={rt.value}>
-                              <td style={{ ...cellBase, borderLeft: '1px solid rgba(255,255,255,0.08)', padding: '5px 6px' }}>
+                              <td style={{ ...cellBase, borderLeft: '1px solid var(--border-subtle)', padding: '4px 3px' }}>
                                 <input
                                   type="number"
                                   placeholder="—"
                                   value={cell.alert}
                                   onChange={e => setCell({ alert: e.target.value })}
-                                  className="w-full px-1.5 py-1 text-xs font-mono text-right"
                                   style={{
-                                    background: '#252535',
-                                    border: `1px solid ${ALERT_COLOR}80`,
-                                    color: '#fff',
+                                    background: 'var(--bg-primary)',
+                                    border: `1px solid ${ALERT_COLOR}70`,
+                                    color: 'var(--text-primary)',
                                     borderRadius: 2,
-                                    width: 76,
+                                    width: '100%',
                                     outline: 'none',
+                                    fontSize: 11,
+                                    fontFamily: 'ui-monospace, monospace',
+                                    textAlign: 'right',
+                                    padding: '2px 4px',
                                   }}
                                 />
                               </td>
-                              <td style={{ ...cellBase, padding: '5px 6px' }}>
+                              <td style={{ ...cellBase, padding: '4px 3px' }}>
                                 <input
                                   type="number"
                                   placeholder="—"
                                   value={cell.kill}
                                   onChange={e => setCell({ kill: e.target.value })}
-                                  className="w-full px-1.5 py-1 text-xs font-mono text-right"
                                   style={{
-                                    background: '#252535',
-                                    border: '1px solid rgba(255,80,80,0.55)',
-                                    color: '#fff',
+                                    background: 'var(--bg-primary)',
+                                    border: '1px solid rgba(255,80,80,0.5)',
+                                    color: 'var(--text-primary)',
                                     borderRadius: 2,
-                                    width: 76,
+                                    width: '100%',
                                     outline: 'none',
+                                    fontSize: 11,
+                                    fontFamily: 'ui-monospace, monospace',
+                                    textAlign: 'right',
+                                    padding: '2px 4px',
                                   }}
                                 />
                               </td>
