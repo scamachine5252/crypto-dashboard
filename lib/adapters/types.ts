@@ -3,6 +3,7 @@ import type { DailyPnLEntry, Trade, DateRange } from '../types'
 export interface BalanceResult {
   usdt: number
   tokens: Record<string, number>
+  totalEquityUsdt?: number
 }
 
 export interface RawPosition {

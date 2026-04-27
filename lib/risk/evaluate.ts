@@ -4,7 +4,7 @@ import type { EvaluateInput, RiskViolation, RuleType } from './types'
 export function computeAllMetricValues(
   input: Omit<EvaluateInput, 'rules'>,
 ): Record<RuleType, number> {
-  const { positions, currentUsdtBalance, athUsdtBalance, peakAdjustedBalance, currentAdjustedBalance } = input
+  const { positions, currentUsdtBalance, athUsdtBalance, peakAdjustedBalance, currentAdjustedBalance, netDeposits } = input
 
   const bySymbol: Record<string, number> = {}
   for (const p of positions)
@@ -13,8 +13,14 @@ export function computeAllMetricValues(
   return {
     position_size: positions.length > 0 ? Math.max(...positions.map((p: Position) => p.notional)) : 0,
     max_drawdown: (() => {
-      if (peakAdjustedBalance !== undefined && currentAdjustedBalance !== undefined && peakAdjustedBalance > 0)
-        return Math.max((peakAdjustedBalance - currentAdjustedBalance) / peakAdjustedBalance * 100, 0)
+      if (peakAdjustedBalance !== undefined && currentAdjustedBalance !== undefined) {
+        if (peakAdjustedBalance > 0)
+          return Math.max((peakAdjustedBalance - currentAdjustedBalance) / peakAdjustedBalance * 100, 0)
+        // No organic peak: show loss relative to net deposits if balance went below deposit level
+        if (netDeposits !== undefined && netDeposits > 0 && currentAdjustedBalance < 0)
+          return Math.min(-currentAdjustedBalance / netDeposits * 100, 100)
+        return 0
+      }
       return athUsdtBalance > 0 && currentUsdtBalance < athUsdtBalance
         ? (athUsdtBalance - currentUsdtBalance) / athUsdtBalance * 100 : 0
     })(),
@@ -49,7 +55,7 @@ export function computeAllMetricValues(
 }
 
 export function evaluateRules(input: EvaluateInput): RiskViolation[] {
-  const { positions, currentUsdtBalance, athUsdtBalance, peakAdjustedBalance, currentAdjustedBalance, rules } = input
+  const { positions, currentUsdtBalance, athUsdtBalance, peakAdjustedBalance, currentAdjustedBalance, netDeposits, rules } = input
   const violations: RiskViolation[] = []
 
   for (const rule of rules) {
@@ -64,9 +70,16 @@ export function evaluateRules(input: EvaluateInput): RiskViolation[] {
         break
       }
       case 'max_drawdown': {
-        if (peakAdjustedBalance !== undefined && currentAdjustedBalance !== undefined && peakAdjustedBalance > 0) {
-          currentValue = Math.max((peakAdjustedBalance - currentAdjustedBalance) / peakAdjustedBalance * 100, 0)
-          if (currentValue <= 0) continue
+        if (peakAdjustedBalance !== undefined && currentAdjustedBalance !== undefined) {
+          if (peakAdjustedBalance > 0) {
+            currentValue = Math.max((peakAdjustedBalance - currentAdjustedBalance) / peakAdjustedBalance * 100, 0)
+            if (currentValue <= 0) continue
+          } else if (netDeposits !== undefined && netDeposits > 0 && currentAdjustedBalance < 0) {
+            currentValue = Math.min(-currentAdjustedBalance / netDeposits * 100, 100)
+            if (currentValue <= 0) continue
+          } else {
+            continue
+          }
         } else {
           if (athUsdtBalance <= 0) continue
           currentValue = (athUsdtBalance - currentUsdtBalance) / athUsdtBalance * 100

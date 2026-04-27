@@ -44,5 +44,6 @@ export interface EvaluateInput {
   athUsdtBalance: number
   peakAdjustedBalance?: number
   currentAdjustedBalance?: number
+  netDeposits?: number
   rules: RiskRule[]
 }

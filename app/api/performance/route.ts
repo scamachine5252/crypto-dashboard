@@ -29,13 +29,13 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   // ---------------------------------------------------------------------------
   const { data: allBalances } = await supabaseAdmin
     .from('balances')
-    .select('account_id, usdt_balance, recorded_at')
+    .select('account_id, usdt_balance, total_equity_usdt, recorded_at')
     .in('account_id', accountIds)
     .is('token_symbol', null)
     .lte('recorded_at', untilDate)
     .order('recorded_at', { ascending: true })
 
-  type BalRow = { account_id: string; usdt_balance: number; recorded_at: string }
+  type BalRow = { account_id: string; usdt_balance: number; total_equity_usdt: number | null; recorded_at: string }
   const bals = (allBalances ?? []) as BalRow[]
 
   type AccRow = { id: string; account_name: string; exchange: string; fund: string; initial_aum?: number | null }
@@ -47,14 +47,16 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     // Priority 1: last snapshot at or before period start (best IC proxy)
     const beforePeriod = accBals.filter((b) => b.recorded_at <= sinceDate)
     if (beforePeriod.length > 0) {
-      icMap[acc.id] = Number(beforePeriod[beforePeriod.length - 1].usdt_balance)
+      const r = beforePeriod[beforePeriod.length - 1]
+      icMap[acc.id] = Number(r.total_equity_usdt ?? r.usdt_balance)
       continue
     }
 
     // Priority 2: first snapshot within period (sync happened after period start)
     const inPeriod = accBals.filter((b) => b.recorded_at > sinceDate)
     if (inPeriod.length > 0) {
-      icMap[acc.id] = Number(inPeriod[0].usdt_balance)
+      const r = inPeriod[0]
+      icMap[acc.id] = Number(r.total_equity_usdt ?? r.usdt_balance)
       continue
     }
 

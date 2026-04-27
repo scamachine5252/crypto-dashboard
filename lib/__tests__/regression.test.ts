@@ -15,7 +15,7 @@ import {
   normalizeEquityCurve,
   buildPerAccountMetrics,
 } from '../calculations'
-import { evaluateRules } from '../risk/evaluate'
+import { evaluateRules, computeAllMetricValues } from '../risk/evaluate'
 import { formatAlertMessage } from '../telegram'
 import type { EvaluateInput, RiskRule } from '../risk/types'
 import type { Position } from '../types'
@@ -793,5 +793,39 @@ describe('Risk evaluation — formatAlertMessage prefix regression', () => {
   it('warning message does NOT contain SUSPENDED', () => {
     const msg = formatAlertMessage({ ...base, severity: 'warning', suspended: false })
     expect(msg).not.toContain('SUSPENDED')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// A29 · Drawdown timestamp bug — Ryan / Leonardo (Bybit backfill)
+//
+// Root cause: Bybit transactionTime = settlement time (hours after credit).
+// Backfill stored this as recorded_at. Algorithm saw the first balance snapshot
+// BEFORE the deposit → adj(snapshot) = balance (not 0) → false peak → 94–97% DD.
+//
+// After migration 021: deposit recorded_at = first_snapshot - 1min.
+// adj(snapshot) = 0 → organic peak = organic gains only → DD ≈ 0%.
+// ---------------------------------------------------------------------------
+describe('A29 · Drawdown timestamp bug — Ryan / Leonardo regression', () => {
+  it('shows inflated drawdown when deposit recorded_at is AFTER the balance snapshot (pre-fix)', () => {
+    // Ryan: deposit at 17:08, snapshot at 12:00 → algorithm sees snapshot before deposit
+    // adj(12:00) = $50K (balance before deposit is "credited") → peak = $50K
+    // current adjusted = $52,658 - $50,000 = $2,658 → drawdown = (50K-2.658K)/50K ≈ 94.7%
+    const r = computeAllMetricValues({
+      positions: [], currentUsdtBalance: 52658, athUsdtBalance: 52658,
+      peakAdjustedBalance: 50000, currentAdjustedBalance: 2658, netDeposits: 50000,
+    })
+    expect(r.max_drawdown).toBeGreaterThan(90)
+  })
+
+  it('shows ~0% drawdown after timestamp fix (deposit before snapshot)', () => {
+    // After migration 021: deposit at 11:59, snapshot at 12:00
+    // adj(12:00) = 0 → organic peak = organic growth = $2,658
+    // drawdown = ($2,658 - $2,658) / $2,658 = 0%
+    const r = computeAllMetricValues({
+      positions: [], currentUsdtBalance: 52658, athUsdtBalance: 52658,
+      peakAdjustedBalance: 2658, currentAdjustedBalance: 2658, netDeposits: 50000,
+    })
+    expect(r.max_drawdown).toBeCloseTo(0, 1)
   })
 })

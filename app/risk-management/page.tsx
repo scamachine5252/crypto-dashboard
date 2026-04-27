@@ -583,6 +583,12 @@ export default function RiskManagementPage() {
               </table>
             </div>
 
+            {/* PM footnote — only when any position has liquidationPrice === 0 */}
+            {Object.values(livePositions).some(ps => ps.some(p => p.liquidationPrice === 0)) && (
+              <p style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 4 }}>
+                * Binance Portfolio Margin does not provide liquidation prices for long positions via PAPI.
+              </p>
+            )}
             {/* Legend */}
             <div className="flex items-center gap-4 text-[10px]" style={{ color: 'var(--text-muted)' }}>
               <span><span style={{ color: 'var(--accent-profit)' }}>●</span> OK</span>

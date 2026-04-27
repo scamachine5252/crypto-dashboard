@@ -79,9 +79,10 @@ async function runSync(): Promise<NextResponse> {
 
       // One row for USDT
       await supabaseAdmin.from('balances').insert({
-        account_id:   row.id,
-        usdt_balance: balance.usdt,
-        recorded_at:  recordedAt,
+        account_id:        row.id,
+        usdt_balance:      balance.usdt,
+        total_equity_usdt: balance.totalEquityUsdt ?? null,
+        recorded_at:       recordedAt,
       })
 
       // One row per non-USDT token

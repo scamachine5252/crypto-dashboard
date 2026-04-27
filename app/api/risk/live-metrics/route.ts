@@ -23,12 +23,14 @@ type DbAccount = {
 }
 
 type TxnRow = { type: string; amount: number; recorded_at: string }
+type BalRow = { usdt_balance: number; total_equity_usdt: number | null; recorded_at: string }
 
 async function fetchAdjustedBalances(accountId: string): Promise<{
   currentUsdtBalance: number
   athUsdtBalance: number
   peakAdjustedBalance: number
   currentAdjustedBalance: number
+  netDeposits: number
 }> {
   const [
     { data: latestBal },
@@ -38,14 +40,14 @@ async function fetchAdjustedBalances(accountId: string): Promise<{
   ] = await Promise.all([
     supabaseAdmin
       .from('balances')
-      .select('usdt_balance')
+      .select('usdt_balance, total_equity_usdt')
       .eq('account_id', accountId)
       .is('token_symbol', null)
       .order('recorded_at', { ascending: false })
       .limit(1),
     supabaseAdmin
       .from('balances')
-      .select('usdt_balance')
+      .select('usdt_balance, total_equity_usdt')
       .eq('account_id', accountId)
       .is('token_symbol', null)
       .order('usdt_balance', { ascending: false })
@@ -58,34 +60,38 @@ async function fetchAdjustedBalances(accountId: string): Promise<{
       .order('recorded_at', { ascending: true }),
     supabaseAdmin
       .from('balances')
-      .select('usdt_balance, recorded_at')
+      .select('usdt_balance, total_equity_usdt, recorded_at')
       .eq('account_id', accountId)
       .is('token_symbol', null)
       .order('recorded_at', { ascending: true }),
   ])
 
-  const currentUsdtBalance = Number(latestBal?.[0]?.usdt_balance ?? 0)
-  const athUsdtBalance = Number(athBal?.[0]?.usdt_balance ?? currentUsdtBalance)
+  const latestRow = (latestBal?.[0] as BalRow | undefined)
+  const athRow    = (athBal?.[0]    as BalRow | undefined)
+  const currentUsdtBalance = Number(latestRow?.total_equity_usdt ?? latestRow?.usdt_balance ?? 0)
+  const athUsdtBalance     = Number(athRow?.total_equity_usdt    ?? athRow?.usdt_balance    ?? currentUsdtBalance)
 
   const txList = (txns ?? []) as TxnRow[]
   let peakAdjustedBalance = 0
   let cumDeps = 0, cumWith = 0, txIdx = 0
 
-  for (const bal of (allBals ?? [])) {
+  for (const bal of ((allBals ?? []) as BalRow[])) {
     while (txIdx < txList.length && txList[txIdx].recorded_at <= bal.recorded_at) {
       if (txList[txIdx].type === 'deposit')    cumDeps += Number(txList[txIdx].amount)
       if (txList[txIdx].type === 'withdrawal') cumWith += Number(txList[txIdx].amount)
       txIdx++
     }
-    const adj = Number(bal.usdt_balance) - cumDeps + cumWith
+    const balValue = Number(bal.total_equity_usdt ?? bal.usdt_balance)
+    const adj = balValue - cumDeps + cumWith
     if (adj > peakAdjustedBalance) peakAdjustedBalance = adj
   }
 
   const totalDeps = txList.filter(t => t.type === 'deposit').reduce((s, t) => s + Number(t.amount), 0)
   const totalWith = txList.filter(t => t.type === 'withdrawal').reduce((s, t) => s + Number(t.amount), 0)
   const currentAdjustedBalance = currentUsdtBalance - totalDeps + totalWith
+  const netDeposits = totalDeps - totalWith
 
-  return { currentUsdtBalance, athUsdtBalance, peakAdjustedBalance, currentAdjustedBalance }
+  return { currentUsdtBalance, athUsdtBalance, peakAdjustedBalance, currentAdjustedBalance, netDeposits }
 }
 
 export async function GET(): Promise<NextResponse> {
@@ -132,7 +138,7 @@ export async function GET(): Promise<NextResponse> {
         exchange:    acc.exchange,
       }))
 
-      const { currentUsdtBalance, athUsdtBalance, peakAdjustedBalance, currentAdjustedBalance } =
+      const { currentUsdtBalance, athUsdtBalance, peakAdjustedBalance, currentAdjustedBalance, netDeposits } =
         await fetchAdjustedBalances(acc.id)
 
       const metrics = computeAllMetricValues({
@@ -141,6 +147,7 @@ export async function GET(): Promise<NextResponse> {
         athUsdtBalance,
         peakAdjustedBalance,
         currentAdjustedBalance,
+        netDeposits,
       })
 
       return {

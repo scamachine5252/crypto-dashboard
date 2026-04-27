@@ -46,6 +46,7 @@ type FapiEx = {
   papiGetCmUserTrades:      (p: Record<string, unknown>) => Promise<RawFapiTrade[]>
   papiGetUmPositionRisk:    (p: Record<string, unknown>) => Promise<RawPmPosition[]>
   papiGetCmPositionRisk:    (p: Record<string, unknown>) => Promise<RawPmPosition[]>
+  papiGetAccount:           (p: Record<string, unknown>) => Promise<{ actualEquity?: string; accountEquity?: string }>
 }
 
 export interface DiscoveredSymbol {
@@ -237,7 +238,17 @@ export class BinanceAdapter implements ExchangeAdapter {
           tokens[asset] = equity
         }
       }
-      return { usdt, tokens }
+      // Fetch total margin balance (all collateral in USDT) from PAPI /papi/v1/account
+      let totalEquityUsdt: number | undefined
+      try {
+        const fapi = this.exchange as unknown as FapiEx
+        const acct = await fapi.papiGetAccount({})
+        // Binance PAPI returns actualEquity (total equity incl. unrealized PnL in USDT)
+        const raw2 = parseFloat(String(acct?.actualEquity ?? acct?.accountEquity ?? ''))
+        if (Number.isFinite(raw2) && raw2 > 0) totalEquityUsdt = raw2
+      } catch (e) { console.error('[BinancePM] papiGetAccount failed:', e) }
+
+      return { usdt, tokens, ...(totalEquityUsdt !== undefined ? { totalEquityUsdt } : {}) }
     }
 
     // Fallback: CCXT normalised total (UM-only accounts if raw.info unavailable)

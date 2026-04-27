@@ -43,20 +43,20 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const { data: balances, error: balError } = await supabaseAdmin
     .from('balances')
-    .select('account_id, usdt_balance, recorded_at')
+    .select('account_id, usdt_balance, total_equity_usdt, recorded_at')
     .in('account_id', accountIds)
     .is('token_symbol', null)
     .order('recorded_at', { ascending: true })
 
   if (balError) return NextResponse.json({ error: balError.message }, { status: 500 })
 
-  type BalRow = { account_id: string; usdt_balance: number; recorded_at: string }
+  type BalRow = { account_id: string; usdt_balance: number; total_equity_usdt: number | null; recorded_at: string }
   const bals = (balances ?? []) as BalRow[]
 
-  // Latest balance per account (last entry since sorted ascending)
+  // Latest balance per account (last entry since sorted ascending); equity-first
   const latestBalance: Record<string, number> = {}
   for (const row of bals) {
-    latestBalance[row.account_id] = Number(row.usdt_balance)
+    latestBalance[row.account_id] = Number(row.total_equity_usdt ?? row.usdt_balance)
   }
 
   const sinceDate = new Date(since).toISOString()
@@ -167,12 +167,14 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
     const beforePeriod = accBals.filter((b) => b.recorded_at <= sinceDate)
     if (beforePeriod.length > 0) {
-      icMap[acc.id] = Number(beforePeriod[beforePeriod.length - 1].usdt_balance)
+      const r = beforePeriod[beforePeriod.length - 1]
+      icMap[acc.id] = Number(r.total_equity_usdt ?? r.usdt_balance)
       continue
     }
     const inPeriod = accBals.filter((b) => b.recorded_at > sinceDate)
     if (inPeriod.length > 0) {
-      icMap[acc.id] = Number(inPeriod[0].usdt_balance)
+      const r = inPeriod[0]
+      icMap[acc.id] = Number(r.total_equity_usdt ?? r.usdt_balance)
       continue
     }
     const aum = Number(acc.initial_aum ?? 0)
