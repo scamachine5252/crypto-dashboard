@@ -495,8 +495,8 @@ export default function RiskManagementPage() {
                                 style={{
                                   ...cellBase,
                                   textAlign: 'right',
-                                  fontFamily: '"Geist Mono", "Cascadia Mono", ui-monospace, monospace',
-                                  fontWeight: 400,
+                                  fontFamily: 'var(--font-rajdhani)',
+                                  fontWeight: 500,
                                   cursor: value !== undefined ? 'pointer' : 'default',
                                   background: isThisExpanded ? 'rgba(255,255,255,0.05)' : undefined,
                                   ...getCellStyle(value, rule, rt.invertedAlert),
