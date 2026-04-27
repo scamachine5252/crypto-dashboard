@@ -7,7 +7,7 @@ import { OkxAdapter }     from '@/lib/adapters/okx'
 import { MexcAdapter }    from '@/lib/adapters/mexc'
 import type { ExchangeAdapter } from '@/lib/adapters/types'
 import { evaluateRules, computeAllMetricValues } from './evaluate'
-import { sendTelegramAlert, formatAlertMessage } from '@/lib/telegram'
+import { sendTelegramAlert, formatAlertMessage, formatEvaluationErrorMessage } from '@/lib/telegram'
 import type { RiskRule } from './types'
 
 type AccountRow = {
@@ -22,9 +22,12 @@ type AccountRow = {
   kill_switch_enabled: boolean
 }
 
+type BalRow = { usdt_balance: number; total_equity_usdt: number | null; recorded_at: string }
+
 async function computeAdjustedBalances(accountId: string, currentUsdtBalance: number): Promise<{
   peakAdjustedBalance: number
   currentAdjustedBalance: number
+  netDeposits: number
 }> {
   const [{ data: txns }, { data: allBals }] = await Promise.all([
     supabaseAdmin
@@ -35,7 +38,7 @@ async function computeAdjustedBalances(accountId: string, currentUsdtBalance: nu
       .order('recorded_at', { ascending: true }),
     supabaseAdmin
       .from('balances')
-      .select('usdt_balance, recorded_at')
+      .select('usdt_balance, total_equity_usdt, recorded_at')
       .eq('account_id', accountId)
       .is('token_symbol', null)
       .order('recorded_at', { ascending: true }),
@@ -45,33 +48,38 @@ async function computeAdjustedBalances(accountId: string, currentUsdtBalance: nu
   let peakAdjustedBalance = 0
   let cumDeps = 0, cumWith = 0, txIdx = 0
 
-  for (const bal of (allBals ?? [])) {
+  for (const bal of ((allBals ?? []) as BalRow[])) {
     while (txIdx < txList.length && txList[txIdx].recorded_at <= bal.recorded_at) {
       if (txList[txIdx].type === 'deposit')    cumDeps += Number(txList[txIdx].amount)
       if (txList[txIdx].type === 'withdrawal') cumWith += Number(txList[txIdx].amount)
       txIdx++
     }
-    const adj = Number(bal.usdt_balance) - cumDeps + cumWith
+    const balValue = Number(bal.total_equity_usdt ?? bal.usdt_balance)
+    const adj = balValue - cumDeps + cumWith
     if (adj > peakAdjustedBalance) peakAdjustedBalance = adj
   }
 
   const totalDeps = txList.filter(t => t.type === 'deposit').reduce((s, t) => s + Number(t.amount), 0)
   const totalWith = txList.filter(t => t.type === 'withdrawal').reduce((s, t) => s + Number(t.amount), 0)
   const currentAdjustedBalance = currentUsdtBalance - totalDeps + totalWith
+  const netDeposits = totalDeps - totalWith
 
-  return { peakAdjustedBalance, currentAdjustedBalance }
+  return { peakAdjustedBalance, currentAdjustedBalance, netDeposits }
 }
 
-export async function runRiskEvaluation(): Promise<{ evaluated: number; violations: number }> {
+type EvaluationError = { account_name: string; exchange: string; error: string }
+
+export async function runRiskEvaluation(): Promise<{ evaluated: number; violations: number; errors: number }> {
   const { data: accounts, error: accErr } = await supabaseAdmin
     .from('accounts')
     .select('id, account_name, exchange, api_key, api_secret, passphrase, instrument, is_suspended, kill_switch_enabled')
     .eq('is_suspended', false)
 
-  if (accErr || !accounts) return { evaluated: 0, violations: 0 }
+  if (accErr || !accounts) return { evaluated: 0, violations: 0, errors: 0 }
 
   let evaluated = 0
   let totalViolations = 0
+  const evalErrors: EvaluationError[] = []
 
   for (const row of accounts as AccountRow[]) {
     try {
@@ -114,27 +122,29 @@ export async function runRiskEvaluation(): Promise<{ evaluated: number; violatio
       const [{ data: latestBal }, { data: athBal }] = await Promise.all([
         supabaseAdmin
           .from('balances')
-          .select('usdt_balance')
+          .select('usdt_balance, total_equity_usdt')
           .eq('account_id', row.id)
           .is('token_symbol', null)
           .order('recorded_at', { ascending: false })
           .limit(1),
         supabaseAdmin
           .from('balances')
-          .select('usdt_balance')
+          .select('usdt_balance, total_equity_usdt')
           .eq('account_id', row.id)
           .is('token_symbol', null)
           .order('usdt_balance', { ascending: false })
           .limit(1),
       ])
 
-      const currentUsdtBalance = Number(latestBal?.[0]?.usdt_balance ?? 0)
-      const athUsdtBalance = Number(athBal?.[0]?.usdt_balance ?? currentUsdtBalance)
+      const latestRow = (latestBal?.[0] as BalRow | undefined)
+      const athRow    = (athBal?.[0]    as BalRow | undefined)
+      const currentUsdtBalance = Number(latestRow?.total_equity_usdt ?? latestRow?.usdt_balance ?? 0)
+      const athUsdtBalance     = Number(athRow?.total_equity_usdt    ?? athRow?.usdt_balance    ?? currentUsdtBalance)
 
-      const { peakAdjustedBalance, currentAdjustedBalance } = await computeAdjustedBalances(row.id, currentUsdtBalance)
+      const { peakAdjustedBalance, currentAdjustedBalance, netDeposits } = await computeAdjustedBalances(row.id, currentUsdtBalance)
 
       const evaluatedAt = new Date().toISOString()
-      const allValues = computeAllMetricValues({ positions, currentUsdtBalance, athUsdtBalance, peakAdjustedBalance, currentAdjustedBalance })
+      const allValues = computeAllMetricValues({ positions, currentUsdtBalance, athUsdtBalance, peakAdjustedBalance, currentAdjustedBalance, netDeposits })
       await supabaseAdmin
         .from('risk_metric_snapshots')
         .upsert(
@@ -144,7 +154,7 @@ export async function runRiskEvaluation(): Promise<{ evaluated: number; violatio
           { onConflict: 'account_id,rule_type' },
         )
 
-      const violations = evaluateRules({ positions, currentUsdtBalance, athUsdtBalance, peakAdjustedBalance, currentAdjustedBalance, rules })
+      const violations = evaluateRules({ positions, currentUsdtBalance, athUsdtBalance, peakAdjustedBalance, currentAdjustedBalance, netDeposits, rules })
       evaluated++
 
       for (const v of violations) {
@@ -193,10 +203,40 @@ export async function runRiskEvaluation(): Promise<{ evaluated: number; violatio
 
         totalViolations++
       }
-    } catch {
-      // Skip failed accounts silently
+    } catch (e) {
+      const errorMessage = e instanceof Error ? e.message : String(e)
+      evalErrors.push({ account_name: row.account_name, exchange: row.exchange, error: errorMessage })
+
+      try {
+        const today = new Date().toISOString().slice(0, 10)
+        const { count } = await supabaseAdmin
+          .from('risk_alerts')
+          .select('id', { count: 'exact', head: true })
+          .eq('account_id', row.id)
+          .eq('rule_type', 'evaluation_error')
+          .eq('acknowledged', false)
+          .gte('fired_at', today + 'T00:00:00Z')
+
+        if ((count ?? 0) === 0) {
+          await supabaseAdmin.from('risk_alerts').insert({
+            account_id:      row.id,
+            rule_type:       'evaluation_error',
+            current_value:   0,
+            alert_threshold: 0,
+            kill_threshold:  null,
+            severity:        'warning',
+          })
+          await sendTelegramAlert(formatEvaluationErrorMessage({
+            accountName:  row.account_name,
+            exchange:     row.exchange,
+            errorMessage,
+          }))
+        }
+      } catch (inner) {
+        console.error('Failed to report evaluation error:', inner)
+      }
     }
   }
 
-  return { evaluated, violations: totalViolations }
+  return { evaluated, violations: totalViolations, errors: evalErrors.length }
 }

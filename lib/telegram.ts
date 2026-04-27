@@ -9,6 +9,22 @@ export async function sendTelegramAlert(message: string): Promise<void> {
   })
 }
 
+export function formatEvaluationErrorMessage(params: {
+  accountName:  string
+  exchange:     string
+  errorMessage: string
+}): string {
+  const { accountName, exchange, errorMessage } = params
+  const date     = new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC'
+  const truncated = errorMessage.length > 300 ? errorMessage.slice(0, 300) + '…' : errorMessage
+  return [
+    `⚠️ <b>EVALUATION ERROR — ${accountName} (${exchange})</b>`,
+    `Risk check failed — account may be unmonitored.`,
+    `<code>${truncated}</code>`,
+    date,
+  ].join('\n')
+}
+
 export function formatAlertMessage(params: {
   accountName:    string
   exchange:       string

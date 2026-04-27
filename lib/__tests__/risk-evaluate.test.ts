@@ -1,4 +1,5 @@
 import { evaluateRules, computeAllMetricValues } from '../risk/evaluate'
+import { formatEvaluationErrorMessage } from '../telegram'
 import type { EvaluateInput, RiskRule } from '../risk/types'
 import type { Position } from '../types'
 
@@ -338,5 +339,75 @@ describe('evaluateRules — min_liq_distance (inverted)', () => {
     const rule = makeRule({ rule_type: 'min_liq_distance', alert_threshold: 50 })
     const positions = [makePosition({ liquidationPrice: 0 })]
     expect(evaluateRules({ ...baseInput, positions, rules: [rule] })).toHaveLength(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// max_drawdown — edge cases: нулевой пик, netDeposits
+// ---------------------------------------------------------------------------
+describe('max_drawdown — edge cases (netDeposits)', () => {
+  it('returns 0 when no organic peak and balance equals deposit level', () => {
+    const r = computeAllMetricValues({
+      positions: [], currentUsdtBalance: 100000, athUsdtBalance: 100000,
+      peakAdjustedBalance: 0, currentAdjustedBalance: 0, netDeposits: 100000,
+    })
+    expect(r.max_drawdown).toBe(0)
+  })
+
+  it('returns % of deposit lost when balance is below deposit level', () => {
+    const r = computeAllMetricValues({
+      positions: [], currentUsdtBalance: 50000, athUsdtBalance: 100000,
+      peakAdjustedBalance: 0, currentAdjustedBalance: -50000, netDeposits: 100000,
+    })
+    expect(r.max_drawdown).toBeCloseTo(50, 1)
+  })
+
+  it('returns 0 when net deposits are 0 (full withdrawal — no meaningful drawdown)', () => {
+    const r = computeAllMetricValues({
+      positions: [], currentUsdtBalance: 0, athUsdtBalance: 100000,
+      peakAdjustedBalance: 0, currentAdjustedBalance: 0, netDeposits: 0,
+    })
+    expect(r.max_drawdown).toBe(0)
+  })
+
+  it('uses peakAdjustedBalance when > 0 (normal organic peak path)', () => {
+    const r = computeAllMetricValues({
+      positions: [], currentUsdtBalance: 150000, athUsdtBalance: 150000,
+      peakAdjustedBalance: 110000, currentAdjustedBalance: 105000, netDeposits: 40000,
+    })
+    expect(r.max_drawdown).toBeCloseTo(4.55, 1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// formatEvaluationErrorMessage
+// ---------------------------------------------------------------------------
+
+describe('formatEvaluationErrorMessage', () => {
+  it('includes account name, exchange, and error message', () => {
+    const msg = formatEvaluationErrorMessage({
+      accountName: 'Aniket', exchange: 'bybit', errorMessage: 'AuthenticationError: invalid key',
+    })
+    expect(msg).toContain('Aniket')
+    expect(msg).toContain('bybit')
+    expect(msg).toContain('AuthenticationError: invalid key')
+  })
+
+  it('includes EVALUATION ERROR label', () => {
+    const msg = formatEvaluationErrorMessage({ accountName: 'X', exchange: 'binance', errorMessage: 'err' })
+    expect(msg).toContain('EVALUATION ERROR')
+  })
+
+  it('truncates error messages longer than 300 characters', () => {
+    const long = 'x'.repeat(400)
+    const msg = formatEvaluationErrorMessage({ accountName: 'X', exchange: 'okx', errorMessage: long })
+    expect(msg).toContain('…')
+    expect(msg.length).toBeLessThan(long.length + 100)
+  })
+
+  it('wraps error in <code> tags for Telegram HTML formatting', () => {
+    const msg = formatEvaluationErrorMessage({ accountName: 'X', exchange: 'bybit', errorMessage: 'timeout' })
+    expect(msg).toContain('<code>')
+    expect(msg).toContain('</code>')
   })
 })
