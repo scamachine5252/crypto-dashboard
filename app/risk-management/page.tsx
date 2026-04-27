@@ -11,13 +11,13 @@ import type { Position } from '@/lib/types'
 
 const ALERT_COLOR = '#FBBF24'
 
-const RULE_TYPES: { value: RuleType; label: string; unit: string; invertedAlert?: boolean }[] = [
+const RULE_TYPES: { value: RuleType; label: string; settingsLabel?: string; unit: string; invertedAlert?: boolean }[] = [
   { value: 'max_positions',                   label: 'Open Positions',    unit: 'count' },
   { value: 'position_size',                   label: 'Position Size',     unit: 'USD'   },
   { value: 'max_drawdown',                    label: 'Max Drawdown',      unit: '%'     },
-  { value: 'max_unrealized_pnl_per_position', label: 'Unrealized Loss',   unit: 'USD'   },
-  { value: 'max_net_position_instrument',     label: 'Net Exp (Symbol)',  unit: 'USD'   },
-  { value: 'max_net_position_account',        label: 'Net Exp (Account)', unit: 'USD'   },
+  { value: 'max_unrealized_pnl_per_position', label: 'Unrealized Loss',   settingsLabel: 'Unr Loss',      unit: 'USD' },
+  { value: 'max_net_position_instrument',     label: 'Net Exp (Symbol)',  settingsLabel: 'Net Exp (Symb)', unit: 'USD' },
+  { value: 'max_net_position_account',        label: 'Net Exp (Account)', settingsLabel: 'Net Exp (Acc)',  unit: 'USD' },
   { value: 'leverage',                        label: 'Leverage',          unit: 'x'     },
   { value: 'margin_utilization',              label: 'Margin Used',       unit: '%'     },
   { value: 'min_liq_distance',                label: 'Liq Distance',      unit: '%', invertedAlert: true },
@@ -550,16 +550,16 @@ export default function RiskManagementPage() {
                                         : '—'
                                       return (
                                         <tr key={idx}>
-                                          <td style={{ padding: '3px 8px', fontFamily: 'var(--font-geist-mono)', fontWeight: 600, color: 'var(--text-primary)', textAlign: 'right' }}>{p.symbol}</td>
+                                          <td style={{ padding: '3px 8px', fontFamily: 'var(--font-rajdhani)', fontWeight: 600, color: 'var(--text-primary)', textAlign: 'right' }}>{p.symbol}</td>
                                           <td style={{ padding: '3px 8px', textAlign: 'right', color: p.side === 'long' ? 'var(--accent-profit)' : 'var(--accent-loss)', fontWeight: 600, textTransform: 'uppercase', fontSize: 10 }}>{p.side}</td>
-                                          <td style={{ padding: '3px 8px', textAlign: 'right', fontFamily: 'var(--font-geist-mono)', color: 'var(--text-primary)' }}>{formatValue(p.notional, 'USD')}</td>
-                                          <td style={{ padding: '3px 8px', textAlign: 'right', fontFamily: 'var(--font-geist-mono)', color: 'var(--text-muted)' }}>{p.entryPrice?.toFixed(4) ?? '—'}</td>
-                                          <td style={{ padding: '3px 8px', textAlign: 'right', fontFamily: 'var(--font-geist-mono)', color: 'var(--text-primary)' }}>{p.markPrice?.toFixed(4) ?? '—'}</td>
-                                          <td style={{ padding: '3px 8px', textAlign: 'right', fontFamily: 'var(--font-geist-mono)', color: p.unrealizedPnl >= 0 ? 'var(--accent-profit)' : 'var(--accent-loss)' }}>
+                                          <td style={{ padding: '3px 8px', textAlign: 'right', fontFamily: 'var(--font-rajdhani)', color: 'var(--text-primary)' }}>{formatValue(p.notional, 'USD')}</td>
+                                          <td style={{ padding: '3px 8px', textAlign: 'right', fontFamily: 'var(--font-rajdhani)', color: 'var(--text-muted)' }}>{p.entryPrice?.toFixed(4) ?? '—'}</td>
+                                          <td style={{ padding: '3px 8px', textAlign: 'right', fontFamily: 'var(--font-rajdhani)', color: 'var(--text-primary)' }}>{p.markPrice?.toFixed(4) ?? '—'}</td>
+                                          <td style={{ padding: '3px 8px', textAlign: 'right', fontFamily: 'var(--font-rajdhani)', color: p.unrealizedPnl >= 0 ? 'var(--accent-profit)' : 'var(--accent-loss)' }}>
                                             {p.unrealizedPnl >= 0 ? '+' : ''}{p.unrealizedPnl.toFixed(2)}
                                           </td>
-                                          <td style={{ padding: '3px 8px', textAlign: 'right', fontFamily: 'var(--font-geist-mono)', color: 'var(--text-muted)' }}>{p.liquidationPrice > 0 ? p.liquidationPrice.toFixed(4) : '—'}</td>
-                                          <td style={{ padding: '3px 8px', textAlign: 'right', fontFamily: 'var(--font-geist-mono)', color: 'var(--text-primary)' }}>{liqDist}</td>
+                                          <td style={{ padding: '3px 8px', textAlign: 'right', fontFamily: 'var(--font-rajdhani)', color: 'var(--text-muted)' }}>{p.liquidationPrice > 0 ? p.liquidationPrice.toFixed(4) : '—'}</td>
+                                          <td style={{ padding: '3px 8px', textAlign: 'right', fontFamily: 'var(--font-rajdhani)', color: 'var(--text-primary)' }}>{liqDist}</td>
                                         </tr>
                                       )
                                     })}
@@ -712,12 +712,12 @@ export default function RiskManagementPage() {
                     </th>
                     {RULE_TYPES.map(rt => (
                       <th key={rt.value} colSpan={2} style={{ ...headerCell, textAlign: 'center', borderLeft: '1px solid var(--border-subtle)', fontSize: 9, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {rt.label}
+                        {rt.settingsLabel ?? rt.label}
                         <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> ({rt.unit})</span>
                       </th>
                     ))}
                     <th rowSpan={2} style={{ ...headerCell, textAlign: 'center', borderLeft: '1px solid var(--border-subtle)', verticalAlign: 'bottom', fontSize: 9 }}>
-                      Mon
+                      Monitor
                     </th>
                     <th rowSpan={2} style={{ ...headerCell, textAlign: 'center', borderLeft: '1px solid var(--border-subtle)', verticalAlign: 'bottom', fontSize: 9 }}>
                       Kill SW
@@ -778,7 +778,7 @@ export default function RiskManagementPage() {
                                     width: '100%',
                                     outline: 'none',
                                     fontSize: 11,
-                                    fontFamily: 'ui-monospace, monospace',
+                                    fontFamily: 'var(--font-rajdhani)',
                                     textAlign: 'right',
                                     padding: '2px 4px',
                                   }}
@@ -798,7 +798,7 @@ export default function RiskManagementPage() {
                                     width: '100%',
                                     outline: 'none',
                                     fontSize: 11,
-                                    fontFamily: 'ui-monospace, monospace',
+                                    fontFamily: 'var(--font-rajdhani)',
                                     textAlign: 'right',
                                     padding: '2px 4px',
                                   }}
