@@ -9,7 +9,7 @@ import type { Position } from '@/lib/types'
 // Constants
 // ---------------------------------------------------------------------------
 
-const ALERT_COLOR = '#F97316'
+const ALERT_COLOR = '#FBBF24'
 
 const RULE_TYPES: { value: RuleType; label: string; unit: string; invertedAlert?: boolean }[] = [
   { value: 'max_positions',                   label: 'Open Positions',    unit: 'count' },
@@ -25,12 +25,7 @@ const RULE_TYPES: { value: RuleType; label: string; unit: string; invertedAlert?
 
 const MONITOR_COLS = 2 + RULE_TYPES.length  // Account + Exchange + 9 metrics
 
-// Metrics that are meaningless (show "—") when there are no open positions
-const POSITION_ONLY_METRICS = new Set<RuleType>([
-  'position_size', 'max_unrealized_pnl_per_position',
-  'max_net_position_instrument', 'max_net_position_account',
-  'leverage', 'margin_utilization', 'min_liq_distance',
-])
+// (position-only metrics are now handled inline — show "—" for all except max_positions when 0 open)
 
 // ---------------------------------------------------------------------------
 // Types
@@ -482,8 +477,8 @@ export default function RiskManagementPage() {
                           </td>
                           {RULE_TYPES.map(rt => {
                             const rawValue = accMetrics?.[rt.value]
-                            // Show "—" for position-only metrics when account has 0 open positions
-                            const value = (!hasPositions && POSITION_ONLY_METRICS.has(rt.value)) ? undefined : rawValue
+                            // When 0 open positions, show "—" for every metric except the count itself
+                            const value = (!hasPositions && rt.value !== 'max_positions') ? undefined : rawValue
                             const rule  = getRule(acc.id, rt.value)
                             const isThisExpanded = isExpanded && expandedCell?.ruleType === rt.value
                             return (
@@ -501,6 +496,7 @@ export default function RiskManagementPage() {
                                   ...cellBase,
                                   textAlign: 'right',
                                   fontFamily: '"Geist Mono", "Cascadia Mono", ui-monospace, monospace',
+                                  fontWeight: 400,
                                   cursor: value !== undefined ? 'pointer' : 'default',
                                   background: isThisExpanded ? 'rgba(255,255,255,0.05)' : undefined,
                                   ...getCellStyle(value, rule, rt.invertedAlert),
