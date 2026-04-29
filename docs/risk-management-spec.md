@@ -1,7 +1,7 @@
 # Risk Management System — Technical Specification
 
 **Project:** Cicada Foundation Dashboard  
-**Version:** 1.0  
+**Version:** 1.1  
 **Date:** 2026-04-28
 
 ---
@@ -36,19 +36,21 @@ Unique constraint: `(account_id, rule_type)` — one threshold set per rule per 
 
 ---
 
-### `risk_alerts` — violation history
+### `risk_alerts` — violation and error history
 
 | Column | Type | Notes |
 |--------|------|-------|
 | `id` | uuid PK | — |
 | `account_id` | uuid → `accounts.id` | — |
-| `rule_type` | text | — |
-| `current_value` | numeric | metric value at time of violation |
-| `alert_threshold` | numeric | threshold that was breached |
+| `rule_type` | text | one of 9 rule types, or `'evaluation_error'` for exchange failures |
+| `current_value` | numeric | metric value at time of violation; `0` for evaluation errors |
+| `alert_threshold` | numeric | threshold that was breached; `0` for evaluation errors |
 | `kill_threshold` | numeric? | kill threshold at time of violation |
 | `severity` | text | `'warning'` or `'critical'` |
 | `acknowledged` | boolean | DEFAULT false |
 | `fired_at` | timestamptz | DEFAULT now() |
+
+**Special `rule_type` value:** `'evaluation_error'` is written when an account fails during evaluation (exchange unreachable, API keys expired, rate limit, etc.). These appear in the Alerts section of the Monitor tab alongside regular rule violations and use the same deduplication logic (max 1 per account per day).
 
 ---
 
@@ -145,8 +147,16 @@ For each account where is_suspended = false:
        → UPDATE accounts SET is_suspended = true
     d. Send Telegram message (errors are caught and logged — do not break the loop)
 
-  Failed accounts are silently skipped — one exchange being unavailable
-  does not interrupt evaluation of other accounts.
+  If the account throws at any point (exchange down, keys expired, rate limit):
+    a. Capture the full error message from the exception
+    b. Check: is there already an unacknowledged 'evaluation_error' alert today for this account?
+       → If yes, skip (same deduplication as rule violations)
+    c. INSERT into risk_alerts with rule_type = 'evaluation_error', severity = 'warning'
+    d. Send Telegram message with the error reason (truncated to 300 chars)
+    e. Continue to the next account — one failure does not interrupt others
+
+runRiskEvaluation() returns { evaluated, violations, errors } where errors is the count
+of accounts that failed during the run.
 ```
 
 ---
@@ -177,6 +187,18 @@ Current: 2.10 | Kill: 2.00
 Account SUSPENDED — revoke API key manually on exchange.
 2026-04-28 14:32 UTC
 ```
+
+### Evaluation error message format
+Sent when an account cannot be evaluated (exchange unreachable, API keys expired, rate limit, etc.).
+
+```
+⚠️ EVALUATION ERROR — Aniket (bybit)
+Risk check failed — account may be unmonitored.
+`bybit {"retCode":10004,"retMsg":"error sign! origin_string..."}`
+2026-04-28 14:32 UTC
+```
+
+The error reason is taken directly from the exception message and truncated to 300 characters. Formatted with `<code>` tags for Telegram HTML mode. Deduplication: max 1 message per account per day.
 
 ---
 
@@ -260,13 +282,14 @@ On save, for every account:
 
 | Area | Status |
 |------|--------|
+| Evaluation failure visibility | **Implemented** — error captured, written to `risk_alerts` as `evaluation_error`, Telegram sent with full error reason; deduped 1 per account per day |
+| Alert deduplication | **Implemented** — max 1 alert per rule (or per evaluation error) per account per day |
 | Scheduled automatic evaluation (cron) | **Not implemented** — evaluate only runs on manual Refresh or during sync |
 | True API key revocation via exchange | **Not implemented** — only `is_suspended = true` + manual operator instruction |
 | Alert pagination beyond 200 | **Not implemented** — hard limit of 200 alerts |
 | Unsuspending an account via UI | **Not implemented** — no UI or API route to clear `is_suspended` |
 | Recovery alert (notify when violation clears) | **Not implemented** |
 | Multiple Telegram recipients (per-fund chat IDs) | **Not implemented** — single global `TELEGRAM_CHAT_ID` |
-| Alert deduplication | **Implemented** — max 1 alert per rule per account per day |
 
 ---
 
@@ -277,7 +300,7 @@ On save, for every account:
 | `lib/risk/types.ts` | TypeScript interfaces: `RiskRule`, `RiskAlert`, `RiskViolation`, `EvaluateInput` |
 | `lib/risk/evaluate.ts` | Pure functions: `computeAllMetricValues()`, `evaluateRules()` |
 | `lib/risk/run-evaluation.ts` | Orchestration: fetch positions, compute, write to DB, trigger Telegram |
-| `lib/telegram.ts` | `sendTelegramAlert()`, `formatAlertMessage()` |
+| `lib/telegram.ts` | `sendTelegramAlert()`, `formatAlertMessage()`, `formatEvaluationErrorMessage()` |
 | `app/api/risk/rules/route.ts` | `GET` / `POST` rules |
 | `app/api/risk/rules/[id]/route.ts` | `DELETE` rule |
 | `app/api/risk/alerts/route.ts` | `GET` alerts |

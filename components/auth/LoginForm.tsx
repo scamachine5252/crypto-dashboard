@@ -6,7 +6,7 @@ import { useAuth } from '@/lib/auth-context'
 import { Eye, EyeOff, TrendingUp, AlertCircle } from 'lucide-react'
 
 export default function LoginForm() {
-  const [username, setUsername] = useState('')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
@@ -19,13 +19,12 @@ export default function LoginForm() {
     setError('')
     setLoading(true)
 
-    await new Promise((r) => setTimeout(r, 500))
-
-    if (login(username.trim(), password)) {
-      router.push('/dashboard')
-    } else {
-      setError('Invalid credentials. Please try again.')
+    const { error } = await login(email.trim(), password)
+    if (error) {
+      setError('Invalid email or password.')
       setLoading(false)
+    } else {
+      router.push('/dashboard')
     }
   }
 
@@ -61,17 +60,17 @@ export default function LoginForm() {
           <p className="text-[#8ba3c7] text-sm mb-8">Sign in to your trading dashboard</p>
 
           <form onSubmit={handleSubmit} className="space-y-5">
-            {/* Username */}
+            {/* Email */}
             <div>
               <label className="block text-[#8ba3c7] text-xs font-medium mb-2 uppercase tracking-wider">
-                Username
+                Email
               </label>
               <input
-                type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="Enter username"
-                autoComplete="username"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                autoComplete="email"
                 required
                 className="w-full bg-[#0f1e32] border border-[#1a2d45] text-[#e8f0fe] placeholder-[#4d6b8e] rounded-lg px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30 transition-colors"
               />
@@ -126,20 +125,6 @@ export default function LoginForm() {
               )}
             </button>
           </form>
-
-          {/* Demo credentials */}
-          <div className="mt-6 pt-5 border-t border-[#152035]">
-            <p className="text-[#4d6b8e] text-xs text-center">
-              Demo credentials:{' '}
-              <button
-                type="button"
-                onClick={() => { setUsername('admin'); setPassword('admin123') }}
-                className="text-blue-400 hover:text-blue-300 transition-colors font-mono"
-              >
-                admin / admin123
-              </button>
-            </p>
-          </div>
         </div>
       </div>
     </div>

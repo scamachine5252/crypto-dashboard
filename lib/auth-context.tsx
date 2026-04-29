@@ -1,54 +1,43 @@
 'use client'
 
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
-
-interface AuthUser {
-  username: string
-}
+import { supabase } from '@/lib/supabase/client'
+import type { User } from '@supabase/supabase-js'
 
 interface AuthContextType {
-  user: AuthUser | null
+  user: User | null
   isAuthenticated: boolean
   isLoading: boolean
-  login: (username: string, password: string) => boolean
-  logout: () => void
+  login: (email: string, password: string) => Promise<{ error: string | null }>
+  logout: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | null>(null)
 
-const CREDENTIALS: Record<string, string> = {
-  admin: 'admin123',
-}
-
-const STORAGE_KEY = 'fund_auth_user'
-
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(null)
+  const [user, setUser] = useState<User | null>(null)
   const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY)
-      if (stored) setUser(JSON.parse(stored))
-    } catch {
-      // ignore
-    }
-    setIsLoading(false)
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null)
+      setIsLoading(false)
+    })
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null)
+    })
+
+    return () => subscription.unsubscribe()
   }, [])
 
-  const login = (username: string, password: string): boolean => {
-    if (CREDENTIALS[username] === password) {
-      const u = { username }
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(u))
-      setUser(u)
-      return true
-    }
-    return false
+  const login = async (email: string, password: string): Promise<{ error: string | null }> => {
+    const { error } = await supabase.auth.signInWithPassword({ email, password })
+    return { error: error?.message ?? null }
   }
 
-  const logout = () => {
-    localStorage.removeItem(STORAGE_KEY)
-    setUser(null)
+  const logout = async () => {
+    await supabase.auth.signOut()
   }
 
   return (

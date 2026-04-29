@@ -34,8 +34,8 @@ export default function Header() {
     closeTimer.current = setTimeout(() => setNavOpen(false), 300)
   }, [])
 
-  const handleLogout = () => {
-    logout()
+  const handleLogout = async () => {
+    await logout()
     router.push('/login')
   }
 
@@ -160,7 +160,7 @@ export default function Header() {
           }}
         >
           <User className="w-3 h-3" />
-          <span className="text-xs font-medium">{user?.username}</span>
+          <span className="text-xs font-medium">{user?.email}</span>
         </div>
 
         {/* Theme toggle */}
