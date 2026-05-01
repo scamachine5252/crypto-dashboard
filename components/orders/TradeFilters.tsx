@@ -11,7 +11,9 @@ const EXCHANGE_COLORS: Record<string, string> = {
 }
 
 function addDays(dateStr: string, days: number): string {
+  if (!dateStr) return dateStr
   const d = new Date(dateStr + 'T00:00:00Z')
+  if (isNaN(d.getTime())) return dateStr
   d.setUTCDate(d.getUTCDate() + days)
   return d.toISOString().slice(0, 10)
 }

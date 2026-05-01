@@ -48,6 +48,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       .not('closed_at', 'is', null)
       .neq('pnl', 0)
       .order('closed_at', { ascending: false })
+      .order('id', { ascending: true })
       .range(from, from + PAGE - 1)
     if (pageErr) return NextResponse.json({ error: pageErr.message }, { status: 500 })
     if (!data || data.length === 0) break

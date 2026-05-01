@@ -37,6 +37,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       .gte('recorded_at', sinceDate)
       .lte('recorded_at', untilDate)
       .order('recorded_at', { ascending: true })
+      .order('account_id', { ascending: true })
       .range(balFrom, balFrom + PAGE - 1)
     if (balErr) return NextResponse.json({ error: balErr.message }, { status: 500 })
     if (!data || data.length === 0) break
@@ -71,6 +72,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       .gte('closed_at', sinceDate)
       .lte('closed_at', untilDate)
       .not('closed_at', 'is', null)
+      .order('closed_at', { ascending: true })
+      .order('id', { ascending: true })
       .range(trFrom, trFrom + PAGE - 1)
     if (tradeErr) return NextResponse.json({ error: tradeErr.message }, { status: 500 })
     if (!data || data.length === 0) break
