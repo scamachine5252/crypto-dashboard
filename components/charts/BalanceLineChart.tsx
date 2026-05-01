@@ -140,7 +140,7 @@ export default function BalanceLineChart({ series, height = 240, colorMap, nameM
       {/* Chart */}
       <div style={{ background: 'var(--bg-secondary)', padding: '12px 8px' }}>
         <ResponsiveContainer width="100%" height={height}>
-          <LineChart data={data} margin={{ top: 6, right: 8, left: 8, bottom: 0 }}>
+          <LineChart data={data} margin={{ top: 20, right: 8, left: 8, bottom: 0 }} style={{ overflow: 'visible' }}>
             <CartesianGrid strokeDasharray="2 4" stroke="var(--border-subtle)" vertical={false} />
             <XAxis
               dataKey="date"
