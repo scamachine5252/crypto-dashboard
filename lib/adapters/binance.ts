@@ -182,14 +182,29 @@ export class BinanceAdapter implements ExchangeAdapter {
     )
 
     let usdt = 0
+    let equityUsdt = 0
     const tokens: Record<string, number> = {}
     let anySucceeded = false
 
-    for (const result of results) {
+    for (let i = 0; i < results.length; i++) {
+      const result = results[i]
       if (result.status !== 'fulfilled') continue
       anySucceeded = true
+      const type = walletTypes[i]
       const total = (result.value.total ?? {}) as unknown as Record<string, number>
-      usdt += total['USDT'] ?? 0
+      const walletUsdt = total['USDT'] ?? 0
+      usdt += walletUsdt
+
+      if (type === 'spot') {
+        // Spot: no unrealized PnL, wallet = equity
+        equityUsdt += walletUsdt
+      } else {
+        // Futures / delivery: totalMarginBalance = wallet + unrealized PnL
+        const info = (result.value as any).info ?? {}
+        const marginBal = parseFloat(String(info.totalMarginBalance ?? ''))
+        equityUsdt += Number.isFinite(marginBal) && marginBal >= 0 ? marginBal : walletUsdt
+      }
+
       for (const [symbol, amount] of Object.entries(total)) {
         if (symbol !== 'USDT' && typeof amount === 'number' && amount > 0) {
           tokens[symbol] = (tokens[symbol] ?? 0) + amount
@@ -203,7 +218,8 @@ export class BinanceAdapter implements ExchangeAdapter {
       throw new Error('fetchBalance: all wallet types failed')
     }
 
-    return { usdt, tokens }
+    const totalEquityUsdt = Number.isFinite(equityUsdt) && equityUsdt > 0 ? equityUsdt : undefined
+    return { usdt, tokens, ...(totalEquityUsdt !== undefined ? { totalEquityUsdt } : {}) }
   }
 
   // Portfolio Margin: total equity per asset via PAPI /papi/v1/balance.

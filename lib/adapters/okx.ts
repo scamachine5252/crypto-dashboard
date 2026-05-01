@@ -41,7 +41,14 @@ export class OkxAdapter implements ExchangeAdapter {
         tokens[symbol] = amount
       }
     }
-    return { usdt, tokens }
+
+    // OKX: totalEq = total account equity in USD (wallet + unrealized PnL across all instruments).
+    // raw.total['USDT'] only reflects wallet balance from the trading account.
+    const rawData = (raw as any).info?.data as Array<Record<string, string>> | undefined
+    const rawEquity = Number(rawData?.[0]?.totalEq)
+    const totalEquityUsdt = Number.isFinite(rawEquity) && rawEquity > 0 ? rawEquity : undefined
+
+    return { usdt, tokens, ...(totalEquityUsdt !== undefined ? { totalEquityUsdt } : {}) }
   }
 
   async fetchPositions(): Promise<RawPosition[]> {

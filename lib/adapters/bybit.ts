@@ -286,7 +286,14 @@ export class BybitAdapter implements ExchangeAdapter {
         tokens[symbol] = amount
       }
     }
-    return { usdt, tokens }
+
+    // Bybit UTA: totalEquityValue = wallet balance + unrealized PnL across all coins in USD.
+    // raw.total['USDT'] only reflects wallet (cashBalance), not equity.
+    const utaList = (raw as any).info?.result?.list as Array<Record<string, string>> | undefined
+    const rawEquity = Number(utaList?.[0]?.totalEquityValue)
+    const totalEquityUsdt = Number.isFinite(rawEquity) && rawEquity > 0 ? rawEquity : undefined
+
+    return { usdt, tokens, ...(totalEquityUsdt !== undefined ? { totalEquityUsdt } : {}) }
   }
 
   async fetchPositions(): Promise<RawPosition[]> {
