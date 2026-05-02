@@ -149,9 +149,10 @@ describe('POST /api/sync', () => {
   it('saves balances to Supabase balances table using usdt_balance column', async () => {
     const { POST } = await import('../route')
     await POST(makePost())
-    // 2 accounts × (1 USDT row + 1 BTC token row) = 4 inserts
-    expect(mockBalancesInsert).toHaveBeenCalledTimes(4)
-    const usdtRow = mockBalancesInsert.mock.calls[0][0]
+    // 2 accounts × 1 batched insert call (array of [usdt row, token rows...]) = 2 calls
+    expect(mockBalancesInsert).toHaveBeenCalledTimes(2)
+    const rows = mockBalancesInsert.mock.calls[0][0]
+    const usdtRow = Array.isArray(rows) ? rows[0] : rows
     expect(usdtRow.account_id).toBe('uuid-1')
     expect(usdtRow.usdt_balance).toBe(1000)
     expect(usdtRow.usdt).toBeUndefined()
@@ -162,7 +163,9 @@ describe('POST /api/sync', () => {
   it('inserts separate row per token with token_symbol and token_balance', async () => {
     const { POST } = await import('../route')
     await POST(makePost())
-    const tokenRow = mockBalancesInsert.mock.calls[1][0]
+    // Token row is second element in the batched array
+    const rows = mockBalancesInsert.mock.calls[0][0]
+    const tokenRow = Array.isArray(rows) ? rows[1] : rows
     expect(tokenRow.account_id).toBe('uuid-1')
     expect(tokenRow.usdt_balance).toBe(0)
     expect(tokenRow.token_symbol).toBe('BTC')

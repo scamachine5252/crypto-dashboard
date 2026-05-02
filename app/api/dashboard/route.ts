@@ -47,6 +47,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     .in('account_id', accountIds)
     .is('token_symbol', null)
     .order('recorded_at', { ascending: true })
+    .order('account_id', { ascending: true })
 
   if (balError) return NextResponse.json({ error: balError.message }, { status: 500 })
 
@@ -74,6 +75,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       .gte('closed_at', sinceDate)
       .lte('closed_at', untilDate)
       .not('closed_at', 'is', null)
+      .neq('pnl', 0)
+      .order('closed_at', { ascending: true })
+      .order('id', { ascending: true })
       .range(from, from + PAGE - 1)
     if (pageErr) return NextResponse.json({ error: pageErr.message }, { status: 500 })
     if (!data || data.length === 0) break
