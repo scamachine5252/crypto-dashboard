@@ -37,7 +37,7 @@ export default function DashboardPage() {
     exchangeId: 'all',
     subAccountId: 'all',
     timeframe: 'daily',
-    period: '1M',
+    period: 'inception',
   })
   const [customRange, setCustomRange] = useState<DateRange | undefined>()
 

@@ -207,7 +207,7 @@ function buildDailyPnlEntries(
 }
 
 export default function PerformancePage() {
-  const [period, setPeriod]           = useState<Period>('1M')
+  const [period, setPeriod]           = useState<Period>('inception')
   const [customRange, setCustomRange] = useState<DateRange | undefined>()
   const [l1, setL1]                   = useState<L1Tab>('futures')
   const [spotL2, setSpotL2]           = useState<SpotL2>('overview')

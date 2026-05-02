@@ -75,7 +75,7 @@ type AccountSummary = {
 type AccountInfo = { id: string; account_name: string; exchange: string; fund: string }
 
 export default function ResultsPage() {
-  const [period, setPeriod]           = useState<Period>('1M')
+  const [period, setPeriod]           = useState<Period>('inception')
   const [customRange, setCustomRange] = useState<DateRange | undefined>()
   const [pnlTimeframe, setPnlTimeframe] = useState<Timeframe>('daily')
 
@@ -245,40 +245,9 @@ export default function ResultsPage() {
       </div>
 
       <main className="flex-1 pb-6">
-        {/* Charts row */}
-        <div className="px-4 pt-3 pb-2 grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* USDT Balance chart */}
-          <BalanceLineChart series={usdtSeries} height={220} colorMap={colorMap} nameMap={nameMap} transactions={txMarkers} />
-
-          {/* PnL histogram */}
-          <div style={{ border: '1px solid var(--border-subtle)' }}>
-            <div className="px-4 py-2 flex items-center gap-3" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-              <p className="text-xs font-semibold tracking-wide font-heading" style={{ color: 'var(--text-primary)' }}>P&L</p>
-              <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>All checked accounts combined</p>
-              <div className="ml-auto flex items-center gap-px" style={{ border: '1px solid var(--border-subtle)' }}>
-                {TIMEFRAME_OPTIONS.map((tf) => {
-                  const active = pnlTimeframe === tf.value
-                  return (
-                    <button
-                      key={tf.value}
-                      onClick={() => setPnlTimeframe(tf.value)}
-                      className="px-3 py-1 text-[10px] font-semibold tracking-wider uppercase transition-colors"
-                      style={{
-                        background: active ? 'var(--bg-elevated)' : 'transparent',
-                        color: active ? 'var(--text-primary)' : 'var(--text-muted)',
-                        borderRight: tf.value !== 'monthly' ? '1px solid var(--border-subtle)' : 'none',
-                      }}
-                    >
-                      {tf.label}
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-            <div className="px-3 py-3" style={{ background: 'var(--bg-secondary)' }}>
-              <PnlHistogramChart data={histogramData} height={220} />
-            </div>
-          </div>
+        {/* USDT Balance chart — full width */}
+        <div className="px-4 pt-3 pb-2">
+          <BalanceLineChart series={usdtSeries} height={240} colorMap={colorMap} nameMap={nameMap} transactions={txMarkers} />
         </div>
 
         {/* Account table */}
@@ -403,7 +372,37 @@ export default function ResultsPage() {
             </table>
           </div>
         </div>
-        {/* Deposits & Withdrawals table */}
+
+        {/* P&L histogram — full width, below table */}
+        <div style={{ border: '1px solid var(--border-subtle)', margin: '16px 16px 0' }}>
+          <div className="px-4 py-2 flex items-center gap-3" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+            <p className="text-xs font-semibold tracking-wide font-heading" style={{ color: 'var(--text-primary)' }}>P&amp;L</p>
+            <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>All checked accounts combined</p>
+            <div className="ml-auto flex items-center gap-px" style={{ border: '1px solid var(--border-subtle)' }}>
+              {TIMEFRAME_OPTIONS.map((tf) => {
+                const active = pnlTimeframe === tf.value
+                return (
+                  <button
+                    key={tf.value}
+                    onClick={() => setPnlTimeframe(tf.value)}
+                    className="px-3 py-1 text-[10px] font-semibold tracking-wider uppercase transition-colors"
+                    style={{
+                      background: active ? 'var(--bg-elevated)' : 'transparent',
+                      color: active ? 'var(--text-primary)' : 'var(--text-muted)',
+                      borderRight: tf.value !== 'monthly' ? '1px solid var(--border-subtle)' : 'none',
+                    }}
+                  >
+                    {tf.label}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+          <div className="px-3 py-3" style={{ background: 'var(--bg-secondary)' }}>
+            <PnlHistogramChart data={histogramData} height={220} />
+          </div>
+        </div>
+
         {visibleTx.length > 0 && (
           <div className="px-4 pt-4">
             <div style={{ border: '1px solid var(--border-subtle)', overflowX: 'auto' }}>

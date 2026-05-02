@@ -8,18 +8,24 @@ interface PeriodSelectorProps {
   customRange?: DateRange
   /** Resolved date range for the current period — used to seed Manual inputs on first click */
   defaultRange?: DateRange
-  /** Earliest trade date in DB — when provided, shows the Inception button */
+  /** Earliest trade date in DB — when provided, shows the All Time button */
   inceptionDate?: string
   onChange: (period: Period, customRange?: DateRange) => void
 }
 
-const BASE_PERIODS: { value: Period; label: string }[] = [
-  { value: '1D',        label: '1D' },
-  { value: '1W',        label: 'Week' },
-  { value: '1M',        label: 'Month' },
-  { value: '1Y',        label: 'Year' },
-  { value: 'inception', label: 'Inception' },
-  { value: 'manual',    label: 'Manual' },
+const PERIOD_GROUPS: { value: Period; label: string }[][] = [
+  [
+    { value: 'inception', label: 'All Time' },
+  ],
+  [
+    { value: '1D',  label: '1D' },
+    { value: '1W',  label: 'Week' },
+    { value: '1M',  label: 'Month' },
+    { value: '1Y',  label: 'Year' },
+  ],
+  [
+    { value: 'manual', label: 'Manual' },
+  ],
 ]
 
 export default function PeriodSelector({ value, customRange, defaultRange, inceptionDate, onChange }: PeriodSelectorProps) {
@@ -30,7 +36,6 @@ export default function PeriodSelector({ value, customRange, defaultRange, incep
 
   const handlePeriodClick = (period: Period) => {
     if (period === 'manual') {
-      // Seed from previous custom range or from the current period's resolved range
       const start = customRange?.start ?? defaultRange?.start ?? manualStart
       const end   = customRange?.end   ?? defaultRange?.end   ?? manualEnd
       setManualStart(start)
@@ -49,28 +54,38 @@ export default function PeriodSelector({ value, customRange, defaultRange, incep
 
   return (
     <div className="flex items-center gap-2 flex-wrap">
-      {/* Period tabs */}
+      {/* Period tabs — 3 groups separated by dividers */}
       <div
-        className="flex items-center rounded-lg p-0.5 gap-0.5"
+        className="flex items-center rounded-lg p-0.5"
         style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}
       >
-        {BASE_PERIODS.filter((p) => p.value !== 'inception' || !!inceptionDate).map((p) => {
-          const isActive = value === p.value
-          return (
-            <button
-              key={p.value}
-              onClick={() => handlePeriodClick(p.value)}
-              className="px-3 py-1 rounded-md text-xs font-medium transition-all duration-150"
-              style={{
-                background: isActive ? 'var(--bg-elevated)' : 'transparent',
-                color: isActive ? 'var(--text-primary)' : 'var(--text-muted)',
-                border: isActive ? '1px solid var(--border-medium)' : '1px solid transparent',
-              }}
-            >
-              {p.label}
-            </button>
-          )
-        })}
+        {PERIOD_GROUPS.map((group, gi) => (
+          <div key={gi} className="flex items-center">
+            {/* Divider between groups */}
+            {gi > 0 && (
+              <div className="mx-1 h-3.5 w-px" style={{ background: 'var(--border-medium)' }} />
+            )}
+            {group
+              .filter((p) => p.value !== 'inception' || !!inceptionDate || value === 'inception')
+              .map((p) => {
+                const isActive = value === p.value
+                return (
+                  <button
+                    key={p.value}
+                    onClick={() => handlePeriodClick(p.value)}
+                    className="px-3 py-1 rounded-md text-xs font-medium transition-all duration-150"
+                    style={{
+                      background: isActive ? 'var(--bg-elevated)' : 'transparent',
+                      color: isActive ? 'var(--text-primary)' : 'var(--text-muted)',
+                      border: isActive ? '1px solid var(--border-medium)' : '1px solid transparent',
+                    }}
+                  >
+                    {p.label}
+                  </button>
+                )
+              })}
+          </div>
+        ))}
       </div>
 
       {/* Manual date inputs — only visible when manual is selected */}
