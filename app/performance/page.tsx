@@ -229,6 +229,15 @@ export default function PerformancePage() {
   const [posDropOpen, setPosDropOpen]       = useState(false)
   const posDropRef                          = useRef<HTMLDivElement>(null)
   const [posSort, setPosSort]               = useState<{ col: string; dir: 'asc' | 'desc' } | null>(null)
+  const [inceptionDate, setInceptionDate]   = useState<string | undefined>()
+
+  // Fetch inception date once on mount
+  useEffect(() => {
+    fetch('/api/inception')
+      .then((r) => r.json())
+      .then((d: { date?: string }) => { if (d.date) setInceptionDate(d.date) })
+      .catch(() => {})
+  }, [])
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -243,8 +252,8 @@ export default function PerformancePage() {
 
   const dateRange = useMemo<DateRange>(() => {
     if (period === 'manual' && customRange) return customRange
-    return resolveDateRange(period, new Date().toISOString().slice(0, 10))
-  }, [period, customRange])
+    return resolveDateRange(period, new Date().toISOString().slice(0, 10), inceptionDate)
+  }, [period, customRange, inceptionDate])
 
   useEffect(() => {
     const since = new Date(dateRange.start).getTime()
@@ -553,7 +562,7 @@ export default function PerformancePage() {
         className="px-4 py-2 flex items-center gap-3 flex-wrap"
         style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-subtle)' }}
       >
-        <PeriodSelector value={period} customRange={customRange} defaultRange={dateRange} onChange={handlePeriodChange} />
+        <PeriodSelector value={period} customRange={customRange} defaultRange={dateRange} inceptionDate={inceptionDate} onChange={handlePeriodChange} />
 
         <div style={{ width: 1, height: 16, background: 'var(--border-subtle)' }} />
 

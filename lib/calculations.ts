@@ -196,10 +196,13 @@ function getWeekNumber(d: Date): number {
 // ---------------------------------------------------------------------------
 // Period → DateRange
 // ---------------------------------------------------------------------------
-export function resolveDateRange(period: Period, today?: string): DateRange {
+export function resolveDateRange(period: Period, today?: string, inceptionDate?: string): DateRange {
   const end = today ?? new Date().toISOString().slice(0, 10)
   const endDate = new Date(end + 'T00:00:00Z')
 
+  if (period === 'inception') {
+    return { start: inceptionDate ?? '2020-01-01', end }
+  }
   if (period === '1D') {
     return { start: end, end }
   }

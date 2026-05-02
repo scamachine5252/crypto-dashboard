@@ -25,6 +25,7 @@ interface PnLChartProps {
   period: Period
   customRange: DateRange | undefined
   onPeriodChange: (p: Period, range?: DateRange) => void
+  inceptionDate?: string
 }
 
 interface TooltipProps {
@@ -71,9 +72,9 @@ const TIMEFRAMES: { label: string; value: Timeframe }[] = [
   { label: 'Monthly', value: 'monthly' },
 ]
 
-export default function PnLChart({ data, timeframe, onTimeframeChange, totalPnl, period, customRange, onPeriodChange }: PnLChartProps) {
+export default function PnLChart({ data, timeframe, onTimeframeChange, totalPnl, period, customRange, onPeriodChange, inceptionDate }: PnLChartProps) {
   const today = new Date().toISOString().slice(0, 10)
-  const defaultRange = period !== 'manual' ? resolveDateRange(period, today) : customRange
+  const defaultRange = period !== 'manual' ? resolveDateRange(period, today, inceptionDate) : customRange
   const isPositive = totalPnl >= 0
   const GREEN = 'var(--accent-profit)'
   const RED   = 'var(--accent-loss)'
@@ -111,7 +112,7 @@ export default function PnLChart({ data, timeframe, onTimeframeChange, totalPnl,
 
         <div className="flex items-center gap-3">
           {/* Period selector */}
-          <PeriodSelector value={period} customRange={customRange} defaultRange={defaultRange} onChange={onPeriodChange} />
+          <PeriodSelector value={period} customRange={customRange} defaultRange={defaultRange} inceptionDate={inceptionDate} onChange={onPeriodChange} />
 
           {/* Divider */}
           <div className="h-4 w-px" style={{ background: 'var(--border-subtle)' }} />

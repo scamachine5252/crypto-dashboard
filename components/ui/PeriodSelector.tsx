@@ -8,18 +8,21 @@ interface PeriodSelectorProps {
   customRange?: DateRange
   /** Resolved date range for the current period — used to seed Manual inputs on first click */
   defaultRange?: DateRange
+  /** Earliest trade date in DB — when provided, shows the Inception button */
+  inceptionDate?: string
   onChange: (period: Period, customRange?: DateRange) => void
 }
 
-const PERIODS: { value: Period; label: string }[] = [
-  { value: '1D',     label: '1D' },
-  { value: '1W',     label: 'Week' },
-  { value: '1M',     label: 'Month' },
-  { value: '1Y',     label: 'Year' },
-  { value: 'manual', label: 'Manual' },
+const BASE_PERIODS: { value: Period; label: string }[] = [
+  { value: '1D',        label: '1D' },
+  { value: '1W',        label: 'Week' },
+  { value: '1M',        label: 'Month' },
+  { value: '1Y',        label: 'Year' },
+  { value: 'inception', label: 'Inception' },
+  { value: 'manual',    label: 'Manual' },
 ]
 
-export default function PeriodSelector({ value, customRange, defaultRange, onChange }: PeriodSelectorProps) {
+export default function PeriodSelector({ value, customRange, defaultRange, inceptionDate, onChange }: PeriodSelectorProps) {
   const today = new Date().toISOString().slice(0, 10)
   const oneYearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
   const [manualStart, setManualStart] = useState(customRange?.start ?? defaultRange?.start ?? oneYearAgo)
@@ -51,7 +54,7 @@ export default function PeriodSelector({ value, customRange, defaultRange, onCha
         className="flex items-center rounded-lg p-0.5 gap-0.5"
         style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}
       >
-        {PERIODS.map((p) => {
+        {BASE_PERIODS.filter((p) => p.value !== 'inception' || !!inceptionDate).map((p) => {
           const isActive = value === p.value
           return (
             <button

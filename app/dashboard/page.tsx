@@ -50,16 +50,25 @@ export default function DashboardPage() {
   // Open positions state
   const [positions, setPositions]   = useState<Position[]>([])
   const [posLoading, setPosLoading] = useState(true)
+  const [inceptionDate, setInceptionDate] = useState<string | undefined>()
+
+  // Fetch inception date once on mount
+  useEffect(() => {
+    fetch('/api/inception')
+      .then((r) => r.json())
+      .then((d: { date?: string }) => { if (d.date) setInceptionDate(d.date) })
+      .catch(() => {})
+  }, [])
 
   const dateRange = useMemo<DateRange>(() => {
     if (filter.period === 'manual' && customRange) return customRange
-    return resolveDateRange(filter.period, new Date().toISOString().slice(0, 10))
-  }, [filter.period, customRange])
+    return resolveDateRange(filter.period, new Date().toISOString().slice(0, 10), inceptionDate)
+  }, [filter.period, customRange, inceptionDate])
 
   // Fetch dashboard data when period changes
   useEffect(() => {
     const today = new Date().toISOString().slice(0, 10)
-    const resolved = resolveDateRange(filter.period, today)
+    const resolved = resolveDateRange(filter.period, today, inceptionDate)
     const startStr = filter.period === 'manual' ? (customRange?.start ?? '') : (resolved.start ?? '')
     const endStr   = filter.period === 'manual' ? (customRange?.end   ?? today) : (resolved.end ?? today)
     const since = startStr ? new Date(startStr).getTime() : 0
@@ -75,7 +84,7 @@ export default function DashboardPage() {
       })
       .catch(() => { /* keep previous data */ })
       .finally(() => setDataLoading(false))
-  }, [filter.period, customRange])
+  }, [filter.period, customRange, inceptionDate])
 
   // Fetch positions on mount
   useEffect(() => {
@@ -180,6 +189,7 @@ export default function DashboardPage() {
           period={filter.period}
           customRange={customRange}
           onPeriodChange={handlePeriodChange}
+          inceptionDate={inceptionDate}
         />
 
         {/* ── Open Positions per account ── */}

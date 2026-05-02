@@ -2,7 +2,7 @@ export type ExchangeId = 'binance' | 'bybit' | 'okx' | 'mexc'
 export type Timeframe = 'daily' | 'weekly' | 'monthly'
 export type TradeSide = 'long' | 'short'
 export type TradeType = 'spot' | 'futures'
-export type Period = '1D' | '1W' | '1M' | '1Y' | 'manual'
+export type Period = '1D' | '1W' | '1M' | '1Y' | 'inception' | 'manual'
 export type ConnectionStatus = 'connected' | 'error' | 'not_configured'
 
 export interface SubAccount {

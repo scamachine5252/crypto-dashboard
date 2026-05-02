@@ -90,6 +90,15 @@ export default function ResultsPage() {
     asset: string; amount: number; fee: number|null; status: string|null
     tx_id: string|null; recorded_at: string
   }>>([])
+  const [inceptionDate, setInceptionDate] = useState<string | undefined>()
+
+  // Fetch inception date once on mount
+  useEffect(() => {
+    fetch('/api/inception')
+      .then((r) => r.json())
+      .then((d: { date?: string }) => { if (d.date) setInceptionDate(d.date) })
+      .catch(() => {})
+  }, [])
 
   const handlePeriodChange = (p: Period, range?: DateRange) => {
     setPeriod(p)
@@ -99,8 +108,8 @@ export default function ResultsPage() {
   const dateRange = useMemo<DateRange>(() => {
     if (period === 'manual' && customRange) return customRange
     const today = new Date().toISOString().slice(0, 10)
-    return resolveDateRange(period, today)
-  }, [period, customRange])
+    return resolveDateRange(period, today, inceptionDate)
+  }, [period, customRange, inceptionDate])
 
   const toggleId = (id: string) => {
     setCheckedIds((prev) => {
@@ -123,7 +132,7 @@ export default function ResultsPage() {
   // Fetch real data when period changes
   useEffect(() => {
     const today = new Date().toISOString().slice(0, 10)
-    const range = period === 'manual' && customRange ? customRange : resolveDateRange(period, today)
+    const range = period === 'manual' && customRange ? customRange : resolveDateRange(period, today, inceptionDate)
     const since = new Date(range.start).getTime()
     const until = new Date(range.end + 'T23:59:59Z').getTime()
 
@@ -154,7 +163,7 @@ export default function ResultsPage() {
       })
       .catch(() => { /* keep previous */ })
       .finally(() => setLoading(false))
-  }, [period, customRange])
+  }, [period, customRange, inceptionDate])
 
   const colorMap = useMemo(
     () => Object.fromEntries(accounts.map((a, i) => [a.id, ACCOUNT_PALETTE[i % ACCOUNT_PALETTE.length]])),
@@ -232,7 +241,7 @@ export default function ResultsPage() {
         style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-subtle)' }}
       >
         <span className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>Period</span>
-        <PeriodSelector value={period} customRange={customRange} defaultRange={dateRange} onChange={handlePeriodChange} />
+        <PeriodSelector value={period} customRange={customRange} defaultRange={dateRange} inceptionDate={inceptionDate} onChange={handlePeriodChange} />
       </div>
 
       <main className="flex-1 pb-6">
