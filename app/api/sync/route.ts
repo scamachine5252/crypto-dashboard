@@ -256,7 +256,8 @@ async function syncAccount(row: AccountRow, dateRange: DateRange): Promise<Accou
           if (!tranId) continue
           txRows.push({
             account_id: row.id, exchange: 'binance',
-            type: amount > 0 ? 'deposit' : 'withdrawal',
+            // PM income distributions (Flexible Earn / BTC lending yield) are not capital inflows
+            type: isPortfolioMargin ? 'income' : (amount > 0 ? 'deposit' : 'withdrawal'),
             asset: item['asset'] ?? 'USDT', amount: Math.abs(amount),
             fee: null, status: 'completed',
             tx_id: `income_${tranId}`,

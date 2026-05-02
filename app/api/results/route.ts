@@ -5,7 +5,7 @@ import { supabaseAdmin } from '@/lib/supabase/server'
 type BalRow   = { account_id: string; usdt_balance: number; total_equity_usdt: number | null; recorded_at: string }
 type TradeRow = { account_id: string; pnl: number | null; fee: number | null; closed_at: string }
 type TxRow    = { account_id: string; type: string; amount: number }
-type AccRow   = { id: string; account_name: string; exchange: string; fund: string }
+type AccRow   = { id: string; account_name: string; exchange: string; fund: string; instrument: string; initial_aum?: number | null }
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const since = Number(req.nextUrl.searchParams.get('since') ?? '0')
@@ -13,7 +13,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const { data: accounts, error: accErr } = await supabaseAdmin
     .from('accounts')
-    .select('id, account_name, exchange, fund')
+    .select('id, account_name, exchange, fund, instrument, initial_aum')
 
   if (accErr) return NextResponse.json({ error: accErr.message }, { status: 500 })
   if (!accounts || accounts.length === 0) {
@@ -21,6 +21,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   const accountIds = (accounts as AccRow[]).map((a) => a.id)
+  const pmAccountIds = new Set((accounts as AccRow[]).filter((a) => a.instrument === 'portfolio_margin').map((a) => a.id))
   const sinceDate = new Date(since).toISOString()
   const untilDate = new Date(until).toISOString()
 
@@ -51,7 +52,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   for (const row of allBalances) {
     const date = row.recorded_at.slice(0, 10)
     if (!dayMap[row.account_id]) dayMap[row.account_id] = {}
-    dayMap[row.account_id][date] = Number(row.total_equity_usdt ?? row.usdt_balance)
+    // PM accounts: use usdt_balance only — BTC collateral is tracked separately via token rows
+    dayMap[row.account_id][date] = pmAccountIds.has(row.account_id)
+      ? Number(row.usdt_balance)
+      : Number(row.total_equity_usdt ?? row.usdt_balance)
   }
 
   const balanceHistory: { accountId: string; date: string; usdt: number }[] = []
@@ -107,6 +111,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const netDepositsMap: Record<string, number> = {}
   for (const tx of (txData ?? []) as TxRow[]) {
+    if (tx.type === 'income') continue  // internal yield; not a capital inflow
     const sign = tx.type === 'deposit' ? 1 : -1
     netDepositsMap[tx.account_id] = (netDepositsMap[tx.account_id] ?? 0) + sign * Number(tx.amount)
   }
@@ -125,7 +130,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const seenPrior = new Set<string>()
   for (const row of (priorBals ?? []) as PriorBalRow[]) {
     if (!seenPrior.has(row.account_id)) {
-      startBalMap[row.account_id] = Number(row.total_equity_usdt ?? row.usdt_balance)
+      startBalMap[row.account_id] = pmAccountIds.has(row.account_id)
+        ? Number(row.usdt_balance)
+        : Number(row.total_equity_usdt ?? row.usdt_balance)
       seenPrior.add(row.account_id)
     }
   }
@@ -133,7 +140,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   // Account summaries: first/last balance + total fees/pnl in range
   const accountSummaries = (accounts as AccRow[]).map((acc) => {
     const accDates = Object.keys(dayMap[acc.id] ?? {}).sort()
-    const startUsdt = startBalMap[acc.id] ?? 0
+    const startUsdt = startBalMap[acc.id] ?? (acc.initial_aum != null ? Number(acc.initial_aum) : 0)
     const endUsdt   = accDates.length > 0 ? dayMap[acc.id][accDates[accDates.length - 1]] : 0
     const accTrades = tradeRows.filter((t) => t.account_id === acc.id)
     const totalFees = accTrades.reduce((s, t) => s + Number(t.fee ?? 0), 0)

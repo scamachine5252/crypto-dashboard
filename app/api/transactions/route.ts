@@ -25,6 +25,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       .from('transactions')
       .select('id, account_id, exchange, type, asset, amount, fee, status, tx_id, recorded_at')
       .in('account_id', accountIds)
+      .neq('type', 'income')
       .order('recorded_at', { ascending: false })
       .range(from, from + PAGE - 1)
 

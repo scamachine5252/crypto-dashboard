@@ -9,7 +9,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const { data: accounts, error: accErr } = await supabaseAdmin
     .from('accounts')
-    .select('id, account_name, exchange, fund, initial_aum')
+    .select('id, account_name, exchange, fund, initial_aum, instrument')
 
   if (accErr) return NextResponse.json({ error: accErr.message }, { status: 500 })
   if (!accounts || accounts.length === 0) {
@@ -38,25 +38,26 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   type BalRow = { account_id: string; usdt_balance: number; total_equity_usdt: number | null; recorded_at: string }
   const bals = (allBalances ?? []) as BalRow[]
 
-  type AccRow = { id: string; account_name: string; exchange: string; fund: string; initial_aum?: number | null }
+  type AccRow = { id: string; account_name: string; exchange: string; fund: string; initial_aum?: number | null; instrument?: string }
+  const pmAccountIds = new Set((accounts as AccRow[]).filter((a) => a.instrument === 'portfolio_margin').map((a) => a.id))
   const icMap: Record<string, number | null> = {}
 
   for (const acc of accounts as AccRow[]) {
     const accBals = bals.filter((b) => b.account_id === acc.id)
+    const isPm = pmAccountIds.has(acc.id)
+    const balVal = (r: BalRow) => isPm ? Number(r.usdt_balance) : Number(r.total_equity_usdt ?? r.usdt_balance)
 
     // Priority 1: last snapshot at or before period start (best IC proxy)
     const beforePeriod = accBals.filter((b) => b.recorded_at <= sinceDate)
     if (beforePeriod.length > 0) {
-      const r = beforePeriod[beforePeriod.length - 1]
-      icMap[acc.id] = Number(r.total_equity_usdt ?? r.usdt_balance)
+      icMap[acc.id] = balVal(beforePeriod[beforePeriod.length - 1])
       continue
     }
 
     // Priority 2: first snapshot within period (sync happened after period start)
     const inPeriod = accBals.filter((b) => b.recorded_at > sinceDate)
     if (inPeriod.length > 0) {
-      const r = inPeriod[0]
-      icMap[acc.id] = Number(r.total_equity_usdt ?? r.usdt_balance)
+      icMap[acc.id] = balVal(inPeriod[0])
       continue
     }
 

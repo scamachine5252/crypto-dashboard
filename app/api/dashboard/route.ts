@@ -21,7 +21,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   // eslint-disable-next-line prefer-const
   let { data: accounts, error: accError } = await supabaseAdmin
     .from('accounts')
-    .select('id, fund, exchange, account_name, initial_aum')
+    .select('id, fund, exchange, account_name, initial_aum, instrument')
 
   if (accError?.message.includes('initial_aum')) {
     const retry = await supabaseAdmin
@@ -40,6 +40,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   const accountIds = (accounts as Array<{ id: string }>).map((a) => a.id)
+  const pmAccountIds = new Set(
+    (accounts as Array<{ id: string; instrument?: string }>)
+      .filter((a) => a.instrument === 'portfolio_margin').map((a) => a.id)
+  )
 
   const { data: balances, error: balError } = await supabaseAdmin
     .from('balances')
@@ -54,10 +58,13 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   type BalRow = { account_id: string; usdt_balance: number; total_equity_usdt: number | null; recorded_at: string }
   const bals = (balances ?? []) as BalRow[]
 
-  // Latest balance per account (last entry since sorted ascending); equity-first
+  // Latest balance per account (last entry since sorted ascending)
+  // PM accounts: usdt_balance only — BTC collateral tracked separately via token rows
   const latestBalance: Record<string, number> = {}
   for (const row of bals) {
-    latestBalance[row.account_id] = Number(row.total_equity_usdt ?? row.usdt_balance)
+    latestBalance[row.account_id] = pmAccountIds.has(row.account_id)
+      ? Number(row.usdt_balance)
+      : Number(row.total_equity_usdt ?? row.usdt_balance)
   }
 
   const sinceDate = new Date(since).toISOString()
@@ -169,16 +176,17 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   for (const acc of (accounts as Array<{ id: string; initial_aum?: number | null }>)) {
     const accBals = bals.filter((b) => b.account_id === acc.id)
 
+    const isPm = pmAccountIds.has(acc.id)
+    const balVal = (r: BalRow) => isPm ? Number(r.usdt_balance) : Number(r.total_equity_usdt ?? r.usdt_balance)
+
     const beforePeriod = accBals.filter((b) => b.recorded_at <= sinceDate)
     if (beforePeriod.length > 0) {
-      const r = beforePeriod[beforePeriod.length - 1]
-      icMap[acc.id] = Number(r.total_equity_usdt ?? r.usdt_balance)
+      icMap[acc.id] = balVal(beforePeriod[beforePeriod.length - 1])
       continue
     }
     const inPeriod = accBals.filter((b) => b.recorded_at > sinceDate)
     if (inPeriod.length > 0) {
-      const r = inPeriod[0]
-      icMap[acc.id] = Number(r.total_equity_usdt ?? r.usdt_balance)
+      icMap[acc.id] = balVal(inPeriod[0])
       continue
     }
     const aum = Number(acc.initial_aum ?? 0)
