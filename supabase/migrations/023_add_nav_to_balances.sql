@@ -1,0 +1,1 @@
+ALTER TABLE balances ADD COLUMN IF NOT EXISTS nav numeric;

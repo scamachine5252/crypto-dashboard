@@ -67,6 +67,16 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     allDayMap[row.account_id][date] = effectiveBal(row)
   }
 
+  // Balance history for the requested range (for the USDT balance line chart)
+  const balanceHistory: { accountId: string; date: string; usdt: number }[] = []
+  for (const [accountId, dateMap] of Object.entries(allDayMap)) {
+    for (const [date, usdt] of Object.entries(dateMap)) {
+      if (date >= sinceDate.slice(0, 10) && date <= untilDate.slice(0, 10)) {
+        balanceHistory.push({ accountId, date, usdt })
+      }
+    }
+  }
+
   // Fetch ALL transactions (no date filter) for cumulative deposit/withdrawal tracking
   const allTx: TxRow[] = []
   let txFrom = 0
@@ -246,5 +256,5 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     }
   })
 
-  return NextResponse.json({ accounts, navHistory, accountSummaries })
+  return NextResponse.json({ accounts, balanceHistory, navHistory, accountSummaries })
 }

@@ -72,6 +72,7 @@ export default function ResultsPage() {
   const [customRange, setCustomRange] = useState<DateRange | undefined>()
 
   const [accountSummaries, setAccountSummaries] = useState<AccountSummary[]>([])
+  const [balanceHistory, setBalanceHistory]     = useState<{ accountId: string; date: string; usdt: number }[]>([])
   const [navHistory, setNavHistory]             = useState<{ accountId: string; date: string; nav: number }[]>([])
   const [accounts, setAccounts]                 = useState<AccountInfo[]>([])
   const [checkedIds, setCheckedIds]             = useState<Set<string>>(new Set())
@@ -132,11 +133,13 @@ export default function ResultsPage() {
       .then((r) => r.json())
       .then((data: {
         accounts?: AccountInfo[]
+        balanceHistory?: { accountId: string; date: string; usdt: number }[]
         navHistory?: { accountId: string; date: string; nav: number }[]
         accountSummaries?: AccountSummary[]
       }) => {
         const accs = data.accounts ?? []
         setAccounts(accs)
+        setBalanceHistory(data.balanceHistory ?? [])
         setNavHistory(data.navHistory ?? [])
         setAccountSummaries(data.accountSummaries ?? [])
         setCheckedIds(new Set(accs.map((a) => a.id)))
@@ -162,6 +165,18 @@ export default function ResultsPage() {
   const nameMap = useMemo(
     () => Object.fromEntries(accounts.map((a) => [a.id, a.account_name])),
     [accounts],
+  )
+
+  // USDT balance chart series — checked accounts only
+  const usdtSeries = useMemo(
+    () => [...checkedIds].map((id) => ({
+      subAccountId: id,
+      data: balanceHistory
+        .filter((b) => b.accountId === id)
+        .sort((a, b) => a.date.localeCompare(b.date))
+        .map((b) => ({ date: b.date, value: b.usdt })),
+    })),
+    [checkedIds, balanceHistory]
   )
 
   // NAV chart series — checked accounts only
@@ -226,9 +241,9 @@ export default function ResultsPage() {
       </div>
 
       <main className="flex-1 pb-6">
-        {/* NAV chart — full width */}
+        {/* USDT Balance chart — full width */}
         <div className="px-4 pt-3 pb-2">
-          <BalanceLineChart series={navSeries} height={240} colorMap={colorMap} nameMap={nameMap} mode="nav" />
+          <BalanceLineChart series={usdtSeries} height={240} colorMap={colorMap} nameMap={nameMap} transactions={txMarkers} />
         </div>
 
         {/* Account table */}
@@ -352,6 +367,11 @@ export default function ResultsPage() {
               </tbody>
             </table>
           </div>
+        </div>
+
+        {/* NAV chart — below table, replaces P&L histogram */}
+        <div className="px-4 pt-4">
+          <BalanceLineChart series={navSeries} height={220} colorMap={colorMap} nameMap={nameMap} mode="nav" />
         </div>
 
         {visibleTx.length > 0 && (
