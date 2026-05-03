@@ -506,7 +506,7 @@ describe('BinanceAdapter', () => {
       mockFapiGetIncome.mockReset()
     })
 
-    it('calls fapiPrivateGetIncome for full 180-day window', async () => {
+    it('calls fapiPrivateGetIncome 6 times (one per 30-day window) for full 180-day scan', async () => {
       mockFapiGetIncome.mockResolvedValue([{ symbol: 'BTCUSDT', time: Date.now() - 1000 }])
 
       const { BinanceAdapter } = await import('../binance')
@@ -514,7 +514,8 @@ describe('BinanceAdapter', () => {
       const before = Date.now()
       await adapter.discoverTradedSymbols()
 
-      expect(mockFapiGetIncome).toHaveBeenCalledTimes(1)
+      // 6 × 30-day windows replace the old single 180-day call
+      expect(mockFapiGetIncome).toHaveBeenCalledTimes(6)
       const arg = mockFapiGetIncome.mock.calls[0][0] as Record<string, unknown>
       expect(arg.incomeType).toBe('REALIZED_PNL')
       const expectedStart = before - 180 * 24 * 3600_000
@@ -613,8 +614,10 @@ describe('BinanceAdapter', () => {
     })
 
     it('maps positionSide LONG → side long with correct entryPrice derivation', async () => {
+      // reconstructBinanceTrades needs a complete position (open + close)
       mockFapiGetUserTrades.mockResolvedValueOnce([
-        { ...sampleRawFapiTrade, price: '51000', realizedPnl: '100', qty: '0.1', positionSide: 'LONG' },
+        { ...sampleRawFapiTrade, side: 'BUY',  price: '50000', qty: '0.1', realizedPnl: '0',   positionSide: 'LONG', time: 1704067100000 },
+        { ...sampleRawFapiTrade, side: 'SELL', price: '51000', qty: '0.1', realizedPnl: '100', positionSide: 'LONG', time: 1704067200000 },
       ])
 
       const { BinanceAdapter } = await import('../binance')
@@ -623,12 +626,14 @@ describe('BinanceAdapter', () => {
 
       expect(result.trades[0].side).toBe('long')
       expect(result.trades[0].exitPrice).toBe(51000)
-      expect(result.trades[0].entryPrice).toBeCloseTo(51000 - 100 / 0.1)  // = 50000
+      expect(result.trades[0].entryPrice).toBeCloseTo(50000)  // from opening fill price
     })
 
     it('maps positionSide SHORT → side short with correct entryPrice derivation', async () => {
+      // reconstructBinanceTrades needs a complete position (open + close)
       mockFapiGetUserTrades.mockResolvedValueOnce([
-        { ...sampleRawFapiTrade, price: '49000', realizedPnl: '100', qty: '0.1', positionSide: 'SHORT' },
+        { ...sampleRawFapiTrade, side: 'SELL', price: '50000', qty: '0.1', realizedPnl: '0',   positionSide: 'SHORT', time: 1704067100000 },
+        { ...sampleRawFapiTrade, side: 'BUY',  price: '49000', qty: '0.1', realizedPnl: '100', positionSide: 'SHORT', time: 1704067200000 },
       ])
 
       const { BinanceAdapter } = await import('../binance')
@@ -637,7 +642,7 @@ describe('BinanceAdapter', () => {
 
       expect(result.trades[0].side).toBe('short')
       expect(result.trades[0].exitPrice).toBe(49000)
-      expect(result.trades[0].entryPrice).toBeCloseTo(49000 + 100 / 0.1)  // = 50000
+      expect(result.trades[0].entryPrice).toBeCloseTo(50000)  // from opening fill price
     })
 
     it('marks symbol as failed and stops if fapiPrivateGetUserTrades throws', async () => {
@@ -655,8 +660,11 @@ describe('BinanceAdapter', () => {
     })
 
     it('maps pnl and fee from raw Binance fields', async () => {
+      // Complete position: opening (commission=0) + closing (commission=0.99)
+      // fee convention: negative = cost; opening fee=0 so openFeeShare=0
       mockFapiGetUserTrades.mockResolvedValueOnce([
-        { ...sampleRawFapiTrade, realizedPnl: '123.45', commission: '0.99' },
+        { ...sampleRawFapiTrade, side: 'BUY',  positionSide: 'LONG', realizedPnl: '0',      commission: '0',    time: 1704067100000 },
+        { ...sampleRawFapiTrade, side: 'SELL', positionSide: 'LONG', realizedPnl: '123.45', commission: '0.99', time: 1704067200000 },
       ])
 
       const { BinanceAdapter } = await import('../binance')
@@ -664,12 +672,19 @@ describe('BinanceAdapter', () => {
       const result = await adapter.getFullTrades('BTCUSDT', [0])
 
       expect(result.trades[0].pnl).toBe(123.45)
-      expect(result.trades[0].fee).toBe(0.99)
+      expect(result.trades[0].fee).toBeCloseTo(-0.99)  // negative = cost convention
     })
 
     it('accumulates trades from multiple windows', async () => {
-      mockFapiGetUserTrades.mockResolvedValueOnce([sampleRawFapiTrade])
-      mockFapiGetUserTrades.mockResolvedValueOnce([sampleRawFapiTrade])
+      // Each window contributes a complete position (open + close)
+      mockFapiGetUserTrades.mockResolvedValueOnce([
+        { ...sampleRawFapiTrade, side: 'BUY',  positionSide: 'LONG', realizedPnl: '0',   time: 1704000000000 },
+        { ...sampleRawFapiTrade, side: 'SELL', positionSide: 'LONG', realizedPnl: '100', time: 1704000001000 },
+      ])
+      mockFapiGetUserTrades.mockResolvedValueOnce([
+        { ...sampleRawFapiTrade, side: 'BUY',  positionSide: 'LONG', realizedPnl: '0',   time: 1704100000000 },
+        { ...sampleRawFapiTrade, side: 'SELL', positionSide: 'LONG', realizedPnl: '200', time: 1704100001000 },
+      ])
 
       const { BinanceAdapter } = await import('../binance')
       const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })

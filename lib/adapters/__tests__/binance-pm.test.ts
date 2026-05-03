@@ -84,7 +84,8 @@ describe('BinanceAdapter.discoverTradedSymbols()', () => {
 
     const result = await adapter.discoverTradedSymbols()
 
-    expect(fns.fapiPrivateGetIncome).toHaveBeenCalledTimes(1)
+    // 6 × 30-day windows replace the old single 180-day call
+    expect(fns.fapiPrivateGetIncome).toHaveBeenCalledTimes(6)
     expect(fns.papiGetUmIncome).not.toHaveBeenCalled()
     expect(fns.papiGetCmIncome).not.toHaveBeenCalled()
     expect(result[0].rawSymbol).toBe('ETHUSDT')
@@ -105,7 +106,11 @@ describe('BinanceAdapter.discoverTradedSymbols()', () => {
 describe('BinanceAdapter.getFullTrades()', () => {
   it('uses papiGetUmUserTrades for USDT-M symbol when PM=true', async () => {
     const { adapter, fns } = buildAdapter(true)
-    fns.papiGetUmUserTrades.mockResolvedValue([makeFill({ symbol: 'BTCUSDT', id: 1 })])
+    // Complete position (open + close) required for reconstructBinanceTrades to emit a trade
+    fns.papiGetUmUserTrades.mockResolvedValue([
+      makeFill({ symbol: 'BTCUSDT', id: 0, side: 'BUY',  realizedPnl: '0',   time: Date.now() - 2000 }),
+      makeFill({ symbol: 'BTCUSDT', id: 1, side: 'SELL', realizedPnl: '100', time: Date.now() - 1000 }),
+    ])
 
     const result = await adapter.getFullTrades('BTCUSDT', [0])
 
@@ -192,7 +197,8 @@ describe('BinanceAdapter.getTrades() quick sync', () => {
     const { adapter, fns } = buildAdapter(true)
     fns.papiGetUmIncome.mockResolvedValue([makeIncome('BTCUSDT')])
     fns.papiGetCmIncome.mockResolvedValue([])
-    fns.papiGetUmUserTrades.mockResolvedValue([makeFill({ id: 10 })])
+    // Quick sync uses mapRawFapiTrade; pnl must be non-zero to emit a trade
+    fns.papiGetUmUserTrades.mockResolvedValue([makeFill({ id: 10, realizedPnl: '100' })])
 
     const trades = await adapter.getTrades('acc', { start: '', end: '' }, Date.now() - 48 * 3600 * 1000)
 
@@ -206,7 +212,8 @@ describe('BinanceAdapter.getTrades() quick sync', () => {
   it('uses FAPI income + FAPI userTrades when PM=false', async () => {
     const { adapter, fns } = buildAdapter(false)
     fns.fapiPrivateGetIncome.mockResolvedValue([makeIncome('ETHUSDT')])
-    fns.fapiPrivateGetUserTrades.mockResolvedValue([makeFill({ symbol: 'ETHUSDT', id: 20 })])
+    // Quick sync uses mapRawFapiTrade; pnl must be non-zero to emit a trade
+    fns.fapiPrivateGetUserTrades.mockResolvedValue([makeFill({ symbol: 'ETHUSDT', id: 20, realizedPnl: '100' })])
 
     const trades = await adapter.getTrades('acc', { start: '', end: '' })
 

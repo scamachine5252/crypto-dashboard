@@ -31,6 +31,8 @@ interface BalanceLineChartProps {
   colorMap?: Record<string, string>
   nameMap?: Record<string, string>
   transactions?: TransactionMarker[]
+  /** 'balance' shows USDT values; 'nav' shows NAV multiplier (1.0x, 1.5x…) */
+  mode?: 'balance' | 'nav'
 }
 
 interface TooltipPayloadItem {
@@ -44,9 +46,10 @@ interface CustomTooltipProps {
   label?: string
   payload?: TooltipPayloadItem[]
   nameMap?: Record<string, string>
+  mode?: 'balance' | 'nav'
 }
 
-function CustomTooltip({ active, label, payload, nameMap }: CustomTooltipProps) {
+function CustomTooltip({ active, label, payload, nameMap, mode }: CustomTooltipProps) {
   if (!active || !payload?.length) return null
   return (
     <div
@@ -65,7 +68,7 @@ function CustomTooltip({ active, label, payload, nameMap }: CustomTooltipProps) 
         <div key={p.dataKey} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 3 }}>
           <span style={{ color: p.color, fontSize: 10 }}>{nameMap?.[p.dataKey] ?? p.dataKey}</span>
           <span style={{ color: 'var(--text-primary)', fontSize: 11, fontWeight: 700, fontFamily: 'var(--font-geist-mono)', fontVariantNumeric: 'tabular-nums' }}>
-            {formatMoney(p.value)}
+            {mode === 'nav' ? `${p.value.toFixed(3)}×` : formatMoney(p.value)}
           </span>
         </div>
       ))}
@@ -92,14 +95,17 @@ export function mergeData(series: BalanceSeries[]): Record<string, number | stri
   })
 }
 
-export default function BalanceLineChart({ series, height = 240, colorMap, nameMap, transactions }: BalanceLineChartProps) {
+export default function BalanceLineChart({ series, height = 240, colorMap, nameMap, transactions, mode = 'balance' }: BalanceLineChartProps) {
   const data = mergeData(series)
+  const isNav = mode === 'nav'
 
-  const formatY = (v: number) => {
-    if (Math.abs(v) >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`
-    if (Math.abs(v) >= 1_000)     return `$${(v / 1_000).toFixed(0)}K`
-    return `$${v}`
-  }
+  const formatY = isNav
+    ? (v: number) => `${v.toFixed(2)}×`
+    : (v: number) => {
+        if (Math.abs(v) >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`
+        if (Math.abs(v) >= 1_000)     return `$${(v / 1_000).toFixed(0)}K`
+        return `$${v}`
+      }
 
   const tickInterval = Math.max(1, Math.floor((data.length) / 8))
 
@@ -125,8 +131,13 @@ export default function BalanceLineChart({ series, height = 240, colorMap, nameM
           className="text-xs font-semibold tracking-wide uppercase font-heading"
           style={{ color: 'var(--text-primary)' }}
         >
-          USDT Balance
+          {isNav ? 'NAV' : 'USDT Balance'}
         </p>
+        {isNav && (
+          <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+            Net asset value — deposit-adjusted multiplier
+          </p>
+        )}
         <div className="ml-auto flex items-center gap-4 flex-wrap">
           {series.map((s) => (
             <span key={s.subAccountId} className="flex items-center gap-1.5 text-[11px] font-medium" style={{ color: 'var(--text-primary)' }}>
@@ -156,7 +167,13 @@ export default function BalanceLineChart({ series, height = 240, colorMap, nameM
               tickLine={false}
               width={60}
             />
-            <Tooltip content={<CustomTooltip nameMap={nameMap} />} cursor={{ stroke: 'var(--border-medium)', strokeWidth: 1 }} />
+            <Tooltip content={<CustomTooltip nameMap={nameMap} mode={mode} />} cursor={{ stroke: 'var(--border-medium)', strokeWidth: 1 }} />
+
+            {/* NAV baseline reference at 1.0 */}
+            {isNav && (
+              <ReferenceLine y={1} stroke="var(--border-medium)" strokeDasharray="3 3" strokeWidth={1} />
+            )}
+
             {series.map((s) => (
               <Line
                 key={s.subAccountId}
@@ -168,7 +185,8 @@ export default function BalanceLineChart({ series, height = 240, colorMap, nameM
                 activeDot={{ r: 3, stroke: 'var(--bg-secondary)', strokeWidth: 2 }}
               />
             ))}
-            {transactions?.map((tx, i) => (
+
+            {!isNav && transactions?.map((tx, i) => (
               <ReferenceLine
                 key={`tx-${i}`}
                 x={tx.date}

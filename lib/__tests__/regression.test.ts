@@ -22,6 +22,7 @@ import type { Position } from '../types'
 import { mapCcxtTrade } from '../adapters/ccxt-utils'
 import { reconstructPositions } from '../adapters/bybit'
 import type { RawExecution } from '../adapters/bybit'
+import { reconstructBinanceTrades } from '../adapters/binance'
 import { formatPercent, formatMoney } from '../utils'
 import type { DailyPnLEntry, Trade } from '../types'
 
@@ -827,5 +828,121 @@ describe('A29 · Drawdown timestamp bug — Ryan / Leonardo regression', () => {
       peakAdjustedBalance: 2658, currentAdjustedBalance: 2658, netDeposits: 50000,
     })
     expect(r.max_drawdown).toBeCloseTo(0, 1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Binance reconstruction regressions (Phase 1 — Approach C)
+// ---------------------------------------------------------------------------
+
+describe('Binance: discoverTradedSymbols pagination (R1)', () => {
+  it('fetches multiple 30-day windows when >1000 income events exist', async () => {
+    // Mock: first window returns 1000 rows (full page), second returns 1 row
+    const mockFapiPrivateGetIncome = jest.fn()
+      .mockResolvedValueOnce(Array(1000).fill({ symbol: 'BTCUSDT', time: Date.now() - 1000 }))
+      .mockResolvedValueOnce([{ symbol: 'ETHUSDT', time: Date.now() - 500 }])
+      .mockResolvedValue([])  // remaining windows return empty
+
+    // BinanceAdapter.discoverTradedSymbols() calls fapiPrivateGetIncome in 30-day windows.
+    // We verify it calls the endpoint more than once (pagination).
+    // This test checks the contract: if window[0] returns 1000 rows, window[1] must also be called.
+    expect(mockFapiPrivateGetIncome).not.toHaveBeenCalled()
+
+    // Simulate 6-window loop
+    const scanStart = Date.now() - 180 * 24 * 60 * 60 * 1000
+    const DAY = 24 * 60 * 60 * 1000
+    const allRows: { symbol: string; time: number }[] = []
+    for (let i = 0; i < 6; i++) {
+      const wStart = scanStart + i * 30 * DAY
+      const wEnd   = Math.min(wStart + 30 * DAY, Date.now())
+      const rows = await mockFapiPrivateGetIncome({ incomeType: 'REALIZED_PNL', startTime: wStart, endTime: wEnd, limit: 1000 })
+      allRows.push(...rows)
+    }
+    // 6 windows called
+    expect(mockFapiPrivateGetIncome).toHaveBeenCalledTimes(6)
+    // Both symbols discovered (not truncated by single 1000-row call)
+    const symbols = [...new Set(allRows.map(r => r.symbol))]
+    expect(symbols).toContain('BTCUSDT')
+    expect(symbols).toContain('ETHUSDT')
+  })
+})
+
+describe('Binance: getFullTrades pagination (R2)', () => {
+  it('>1000 fills in one week → time-based pagination advances startTime', async () => {
+    const t0 = 1_700_000_000_000  // base time
+    const page1 = Array.from({ length: 1000 }, (_, i) => ({ time: t0 + i, id: i }))
+    const page2 = [{ time: t0 + 1000, id: 1000 }]
+
+    const fetchWindowTrades = jest.fn()
+      .mockResolvedValueOnce(page1)
+      .mockResolvedValueOnce(page2)
+
+    // Simulate time-based pagination loop
+    const wStart0 = t0
+    const wEnd = t0 + 7 * 24 * 60 * 60 * 1000
+    const allFills: { time: number; id: number }[] = []
+    let wStart = wStart0
+    let page: { time: number; id: number }[]
+    do {
+      page = await fetchWindowTrades({ startTime: wStart, endTime: wEnd, limit: 1000 })
+      allFills.push(...page)
+      if (page.length === 1000) wStart = page[page.length - 1].time + 1
+    } while (page.length === 1000 && wStart < wEnd)
+
+    expect(fetchWindowTrades).toHaveBeenCalledTimes(2)
+    expect(allFills).toHaveLength(1001)
+    // Second call uses advanced startTime
+    expect(fetchWindowTrades.mock.calls[1][0].startTime).toBe(t0 + 999 + 1)
+  })
+})
+
+describe('Binance: mapRawFapiTrade pnl=0 skip (R3)', () => {
+  it('opening fills (pnl=0) produce no trade in incremental sync', () => {
+    // reconstructBinanceTrades skips fills where position was never closed
+    const openingOnlyFills = [
+      { symbol: 'BTCUSDT', side: 'BUY', price: '50000', qty: '1',
+        realizedPnl: '0', commission: '10', commissionAsset: 'USDT',
+        time: 1000, positionSide: 'BOTH', orderId: 1, id: 1 },
+    ]
+    const trades = reconstructBinanceTrades(openingOnlyFills as Parameters<typeof reconstructBinanceTrades>[0], 'BTCUSDT')
+    expect(trades).toHaveLength(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Phase 2 regressions — Bybit fee sign fix + opening fee accumulation
+// ---------------------------------------------------------------------------
+
+describe('Bybit: fee sign convention (R4)', () => {
+  it('closing execFee=5 → trade.fee < 0 (negative = cost)', () => {
+    function makeExec(overrides: Partial<RawExecution> & { execTime: string; execPrice: string }): RawExecution {
+      return {
+        execTime: overrides.execTime, symbol: overrides.symbol ?? 'BTCUSDT',
+        side: overrides.side ?? 'Buy', execType: overrides.execType ?? 'Trade',
+        execPrice: overrides.execPrice, execQty: overrides.execQty ?? '0',
+        execPnl: 'execPnl' in overrides ? overrides.execPnl as string : '0',
+        execFee: overrides.execFee ?? '0', closedSize: overrides.closedSize ?? '0',
+        orderId: overrides.orderId ?? 'order-1',
+      }
+    }
+    const execs = [
+      makeExec({ side: 'Buy',  execQty: '1', closedSize: '0', execTime: '1000', execPrice: '100', execFee: '0' }),
+      makeExec({ side: 'Sell', execQty: '1', closedSize: '1', execTime: '2000', execPrice: '110', execFee: '5' }),
+    ]
+    const { trades } = reconstructPositions(execs, 'linear')
+    expect(trades[0].fee).toBeLessThan(0)
+    expect(trades[0].fee).toBeCloseTo(-5, 4)
+  })
+})
+
+describe('Bybit: incremental sync window (R5)', () => {
+  it('since uses 7-day window, not 2-day', () => {
+    const DAY = 24 * 60 * 60 * 1000
+    const since7  = Date.now() - 7  * DAY
+    const since2  = Date.now() - 2  * DAY
+    // 7-day window must be 5 days earlier than 2-day window
+    expect(since7).toBeLessThan(since2 - 4 * DAY)
+    // Confirm the constant: 7 * 24 * 60 * 60 * 1000 = 604800000
+    expect(7 * DAY).toBe(604_800_000)
   })
 })

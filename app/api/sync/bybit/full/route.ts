@@ -16,6 +16,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const chunkIndex     = body.chunk_index     as number | undefined
   const inheritedState = body.inherited_state as ReconstructionStateJson | undefined
 
+  const referenceTimestamp = typeof body.reference_timestamp === 'number' ? body.reference_timestamp : undefined
+
   if (!accountId)               return NextResponse.json({ error: 'account_id required' }, { status: 400 })
   if (chunkIndex === undefined) return NextResponse.json({ error: 'chunk_index required' }, { status: 400 })
   if (typeof chunkIndex !== 'number' || !Number.isInteger(chunkIndex) || chunkIndex < 0) {
@@ -32,11 +34,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'Account not found' }, { status: 404 })
   }
 
-  // Compute time window from chunk_index
+  // Compute time window from chunk_index.
+  // Use reference_timestamp if provided so all 26 chunks share the same anchor point —
+  // prevents window drift when chunks are called sequentially over many seconds.
   // chunk 0 = oldest (182d–175d ago), chunk 25 = newest (7d–0d ago)
-  const now     = Date.now()
+  const refTs   = referenceTimestamp ?? Date.now()
   const chunkMs = CHUNK_DAYS * 24 * 60 * 60 * 1000
-  const since   = now - (TOTAL_CHUNKS - chunkIndex) * chunkMs
+  const since   = refTs - (TOTAL_CHUNKS - chunkIndex) * chunkMs
   const until   = since + chunkMs
 
   const adapter = new BybitAdapter({
@@ -106,12 +110,17 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     synced = rows.length
   }
 
+  const warnings: string[] = trades
+    .filter((t: Trade) => !t.openedAt)
+    .map((t: Trade) => `no openedAt: ${t.symbol} closed=${t.closedAt}`)
+
   console.log(`[bybit/full] chunk=${chunkIndex} synced=${synced} skippedNoOpenTime=${skippedNoOpenTime}`)
   return NextResponse.json({
     synced,
-    failedCategories:    [],
+    failedCategories:     [],
     skipped_no_open_time: skippedNoOpenTime,
-    final_state:         finalState,  // pass to next chunk as inherited_state
+    warnings,
+    final_state:          finalState,  // pass to next chunk as inherited_state
   })
 }
 

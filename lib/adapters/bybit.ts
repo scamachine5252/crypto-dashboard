@@ -10,44 +10,48 @@ import { mapCcxtTrade } from './ccxt-utils'
 //       Use closedSize > 0 as the closing-fill signal, not execPnl.
 // ---------------------------------------------------------------------------
 export interface RawExecution {
-  execTime:   string  // ms timestamp
-  symbol:     string  // e.g. 'BTCUSDT'
-  side:       string  // 'Buy' | 'Sell'
-  execType:   string  // 'Trade' | 'Funding' | 'AdlTrade' | 'BustTrade'
-  execPrice:  string
-  execQty:    string
-  execPnl:    string  // absent in REST responses; present in some account types
-  execFee:    string  // commission (positive = cost, negative = income for rebates)
-  closedSize: string  // qty closed by this fill; '0' for pure opening fills
-  orderId:    string
+  execTime:    string  // ms timestamp
+  symbol:      string  // e.g. 'BTCUSDT'
+  side:        string  // 'Buy' | 'Sell'
+  execType:    string  // 'Trade' | 'Funding' | 'AdlTrade' | 'BustTrade'
+  execPrice:   string
+  execQty:     string
+  execPnl:     string  // absent in REST responses; present in some account types
+  execFee:     string  // commission (positive = cost, negative = income for rebates)
+  closedSize:  string  // qty closed by this fill; '0' for pure opening fills
+  orderId:     string
+  positionIdx?: string  // '0'=one-way, '1'=hedge-long, '2'=hedge-short; absent = one-way
 }
 
 // ---------------------------------------------------------------------------
 // Stateful position tracking — serializable so it can be passed between chunks
 // ---------------------------------------------------------------------------
 export interface SymbolState {
-  size:     number    // current open size (positive = long, treated as unsigned here)
-  avgEntry: number    // weighted-average entry price
-  openTime: string    // ISO timestamp of the first opening fill
-  openSide: TradeSide // 'long' | 'short'
+  size:           number    // current open size (positive = long, treated as unsigned here)
+  avgEntry:       number    // weighted-average entry price
+  openTime:       string    // ISO timestamp of the first opening fill
+  openSide:       TradeSide // 'long' | 'short'
+  accumulatedFee: number    // sum of opening fill fees (negative = cost); distributed on close
 }
 
 // Plain JSON — safe to pass in HTTP request/response bodies between chunks
 export type ReconstructionStateJson = Record<string, {
-  size:     number
-  avgEntry: number
-  openTime: string
-  openSide: string
+  size:            number
+  avgEntry:        number
+  openTime:        string
+  openSide:        string
+  accumulatedFee?: number  // optional for backward-compat with old serialized state
 }>
 
 function stateFromJson(json: ReconstructionStateJson): Map<string, SymbolState> {
   const map = new Map<string, SymbolState>()
   for (const [sym, s] of Object.entries(json)) {
     map.set(sym, {
-      size:     s.size,
-      avgEntry: s.avgEntry,
-      openTime: s.openTime,
-      openSide: s.openSide as TradeSide,
+      size:           s.size,
+      avgEntry:       s.avgEntry,
+      openTime:       s.openTime,
+      openSide:       s.openSide as TradeSide,
+      accumulatedFee: s.accumulatedFee ?? 0,
     })
   }
   return map
@@ -57,7 +61,7 @@ function stateToJson(map: Map<string, SymbolState>): ReconstructionStateJson {
   const json: ReconstructionStateJson = {}
   for (const [sym, s] of map.entries()) {
     if (s.size > 0) {  // only persist open positions; closed ones are not needed next chunk
-      json[sym] = { size: s.size, avgEntry: s.avgEntry, openTime: s.openTime, openSide: s.openSide }
+      json[sym] = { size: s.size, avgEntry: s.avgEntry, openTime: s.openTime, openSide: s.openSide, accumulatedFee: s.accumulatedFee }
     }
   }
   return json
@@ -94,15 +98,21 @@ export function reconstructPositions(
   tradeFills.sort((a, b) => Number(a.execTime) - Number(b.execTime))
 
   // Per-symbol funding accumulation (distributed proportionally at the end)
+  // Bybit API: positive execFee = cost paid; negate to match "negative = cost" convention.
   const fundingBySymbol: Record<string, number> = {}
   for (const f of fundingFills) {
-    fundingBySymbol[f.symbol] = (fundingBySymbol[f.symbol] ?? 0) + Number(f.execFee)
+    fundingBySymbol[f.symbol] = (fundingBySymbol[f.symbol] ?? 0) + (-Number(f.execFee))
   }
 
   // Initialize per-symbol state from previous chunk (or empty for first chunk)
   const stateMap: Map<string, SymbolState> = initialState
     ? stateFromJson(initialState)
     : new Map()
+
+  // Compound state key: hedge mode uses slot-aware key; one-way falls back to symbol only.
+  // positionIdx: '0' or absent = one-way; '1' = hedge-long slot; '2' = hedge-short slot.
+  const slotKey = (symbol: string, positionIdx?: string): string =>
+    positionIdx && positionIdx !== '0' ? `${symbol}_${positionIdx}` : symbol
 
   const trades: Trade[] = []
   // Track emitted trade indices per symbol for post-processing funding distribution
@@ -111,9 +121,10 @@ export function reconstructPositions(
   for (const exec of tradeFills) {
     const qty   = Number(exec.execQty)
     const price = Number(exec.execPrice)
+    const key   = slotKey(exec.symbol, exec.positionIdx)
 
-    let state = stateMap.get(exec.symbol) ?? {
-      size: 0, avgEntry: 0, openTime: '', openSide: 'long' as TradeSide,
+    let state = stateMap.get(key) ?? {
+      size: 0, avgEntry: 0, openTime: '', openSide: 'long' as TradeSide, accumulatedFee: 0,
     }
 
     // Direction-based closing detection: does this fill reduce an open position?
@@ -160,7 +171,7 @@ export function reconstructPositions(
         quantity:     closedQty,
         pnl,
         pnlPercent:   0,
-        fee:          Number(exec.execFee),  // funding added in post-processing below
+        fee:          -Number(exec.execFee),  // negative = cost; funding added in post-processing
         durationMin:  0,
         leverage:     1,
         fundingCost:  0,
@@ -169,33 +180,42 @@ export function reconstructPositions(
         closedAt:     new Date(Number(exec.execTime)).toISOString(),
       })
 
+      // Distribute proportional share of opening fees to this closing trade
+      const openFeeShare = state.size > 0
+        ? state.accumulatedFee * (closedQty / state.size)
+        : 0
+      trades[tradeIndex] = { ...trades[tradeIndex], fee: trades[tradeIndex].fee + openFeeShare }
+
       if (!tradeRefsBySymbol[exec.symbol]) tradeRefsBySymbol[exec.symbol] = []
       tradeRefsBySymbol[exec.symbol].push({ index: tradeIndex, qty: closedQty })
 
-      state = { ...state, size: state.size - closedQty }
+      state = { ...state, size: state.size - closedQty, accumulatedFee: state.accumulatedFee - openFeeShare }
     }
 
     // ── Opening fill (or the opened portion of a flip/partial-close fill) ────
     if (openedQty > 0) {
+      const openingFee = -Number(exec.execFee)  // negative = cost
       if (state.size === 0) {
         // New position cycle — record start time and direction
         state = {
-          size:     openedQty,
-          avgEntry: price,
-          openTime: new Date(Number(exec.execTime)).toISOString(),
-          openSide: exec.side === 'Buy' ? 'long' : 'short',
+          size:           openedQty,
+          avgEntry:       price,
+          openTime:       new Date(Number(exec.execTime)).toISOString(),
+          openSide:       exec.side === 'Buy' ? 'long' : 'short',
+          accumulatedFee: openingFee,
         }
       } else {
-        // Scale-in: update weighted-average entry price
+        // Scale-in: update weighted-average entry price and accumulate opening fees
         state = {
           ...state,
-          avgEntry: (state.avgEntry * state.size + price * openedQty) / (state.size + openedQty),
-          size:     state.size + openedQty,
+          avgEntry:       (state.avgEntry * state.size + price * openedQty) / (state.size + openedQty),
+          size:           state.size + openedQty,
+          accumulatedFee: state.accumulatedFee + openingFee,
         }
       }
     }
 
-    stateMap.set(exec.symbol, state)
+    stateMap.set(key, state)
   }
 
   // Post-process: distribute funding proportionally by closedQty across each symbol's trades

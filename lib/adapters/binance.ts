@@ -14,10 +14,143 @@ export interface FullTradesResult {
   failedSymbols: { symbol: string; error: string }[]
 }
 
-type RawFapiTrade = {
+export type RawFapiTrade = {
   symbol: string; side: string; price: string; qty: string
   realizedPnl: string; commission: string; commissionAsset: string
   time: number; positionSide: string; orderId: number; id: number
+}
+
+// ---------------------------------------------------------------------------
+// Stateful position reconstruction from FAPI fills (Full History path).
+//
+// One Trade emitted per CLOSED POSITION (or partial close), with:
+//   openedAt = time of first opening fill for this position cycle
+//   closedAt = time of this closing fill
+//
+// Supports hedge mode (positionSide='LONG'|'SHORT') and one-way mode
+// (positionSide='BOTH'). Commission stored as negative (cost convention).
+// Opening fill commissions are distributed proportionally across closing trades.
+// ---------------------------------------------------------------------------
+type BinancePositionState = {
+  size:           number
+  avgEntry:       number
+  openTime:       string
+  openSide:       'long' | 'short'
+  accumulatedFee: number   // sum of negated commissions from all opening fills
+}
+
+function normalizeBinanceSymbol(rawSymbol: string): string {
+  if (rawSymbol.endsWith('USDT')) return `${rawSymbol.slice(0, -4)}/USDT:USDT`
+  const base = rawSymbol.replace(/USD.*$/, '')
+  return `${base}/USD:${base}`
+}
+
+export function reconstructBinanceTrades(fills: RawFapiTrade[], rawSymbol: string): Trade[] {
+  if (fills.length === 0) return []
+
+  const sorted  = [...fills].sort((a, b) => Number(a.time) - Number(b.time))
+  const isHedge = sorted.some(f => f.positionSide === 'LONG' || f.positionSide === 'SHORT')
+  const symbol  = normalizeBinanceSymbol(rawSymbol)
+
+  const stateMap = new Map<string, BinancePositionState>()
+  const trades: Trade[] = []
+
+  for (const fill of sorted) {
+    const qty        = Number(fill.qty)
+    const price      = Number(fill.price)
+    const pnl        = Number(fill.realizedPnl)
+    const commission = -Number(fill.commission)  // positive API value → negative (cost)
+
+    const posKey = isHedge ? `${rawSymbol}_${fill.positionSide}` : `${rawSymbol}_BOTH`
+
+    // ── Closing detection ─────────────────────────────────────────────────────
+    const isClosing = isHedge
+      ? (fill.positionSide === 'LONG'  && fill.side === 'SELL') ||
+        (fill.positionSide === 'SHORT' && fill.side === 'BUY')
+      : pnl !== 0
+
+    const state = stateMap.get(posKey)
+
+    if (isClosing && state && state.size > 0) {
+      const closedQty    = Math.min(state.size, qty)
+      const openFeeShare = state.accumulatedFee * (closedQty / state.size)
+      const remaining    = state.size - closedQty
+
+      trades.push({
+        id:          String(fill.id),
+        symbol,
+        side:        state.openSide,
+        entryPrice:  state.avgEntry,
+        exitPrice:   price,
+        quantity:    closedQty,
+        pnl,
+        fee:         commission + openFeeShare,
+        openedAt:    state.openTime,
+        closedAt:    new Date(Number(fill.time)).toISOString(),
+        tradeType:   'futures',
+        pnlPercent:  0,
+        durationMin: 0,
+        leverage:    1,
+        fundingCost: 0,
+        isOvernight: false,
+        exchangeId:  'binance' as const,
+        subAccountId: '',
+      })
+
+      if (remaining < 0.00001) {
+        stateMap.delete(posKey)
+      } else {
+        stateMap.set(posKey, {
+          ...state,
+          size:           remaining,
+          accumulatedFee: state.accumulatedFee - openFeeShare,
+        })
+      }
+    } else {
+      // ── Opening fill ────────────────────────────────────────────────────────
+      const openSide: 'long' | 'short' = isHedge
+        ? (fill.positionSide === 'LONG' ? 'long' : 'short')
+        : (fill.side === 'BUY' ? 'long' : 'short')
+
+      if (!state || state.size < 0.00001) {
+        stateMap.set(posKey, {
+          size:           qty,
+          avgEntry:       price,
+          openTime:       new Date(Number(fill.time)).toISOString(),
+          openSide,
+          accumulatedFee: commission,
+        })
+      } else {
+        // Scale-in: update weighted-average entry
+        const newSize = state.size + qty
+        stateMap.set(posKey, {
+          ...state,
+          avgEntry:       (state.avgEntry * state.size + price * qty) / newSize,
+          size:           newSize,
+          accumulatedFee: state.accumulatedFee + commission,
+        })
+      }
+    }
+  }
+
+  // Merge trades that share (openedAt, closedAt) — same-millisecond partial fills
+  // from a single large order arrive at identical timestamps and would be collapsed
+  // by the unique DB constraint (account_id, symbol, opened_at, closed_at).
+  const merged: Trade[] = []
+  for (const trade of trades) {
+    const prev = merged.find(m => m.openedAt === trade.openedAt && m.closedAt === trade.closedAt)
+    if (prev) {
+      const totalQty  = prev.quantity + trade.quantity
+      prev.exitPrice  = (prev.exitPrice * prev.quantity + trade.exitPrice * trade.quantity) / totalQty
+      prev.pnl       += trade.pnl
+      prev.fee       += trade.fee
+      prev.quantity   = totalQty
+    } else {
+      merged.push({ ...trade })
+    }
+  }
+
+  return merged
 }
 
 type RawPmPosition = {
@@ -341,7 +474,10 @@ export class BinanceAdapter implements ExchangeAdapter {
             limit:     1000,
           })
         }
-        for (const r of rows) trades.push(this.mapRawFapiTrade(r, rawSymbol))
+        for (const r of rows) {
+          const t = this.mapRawFapiTrade(r, rawSymbol)
+          if (t) trades.push(t)
+        }
       } catch {
         // Skip symbol — not fatal
       }
@@ -374,8 +510,8 @@ export class BinanceAdapter implements ExchangeAdapter {
             const dayStart = scanStart + d * DAY
             const dayEnd   = Math.min(dayStart + DAY, Date.now())
             batchPromises.push(
-              fapi.papiGetUmIncome({ startTime: dayStart, endTime: dayEnd, limit: 1000 }).catch(() => []),
-              fapi.papiGetCmIncome({ startTime: dayStart, endTime: dayEnd, limit: 1000 }).catch(() => []),
+              fapi.papiGetUmIncome({ incomeType: 'REALIZED_PNL', startTime: dayStart, endTime: dayEnd, limit: 1000 }).catch(() => []),
+              fapi.papiGetCmIncome({ incomeType: 'REALIZED_PNL', startTime: dayStart, endTime: dayEnd, limit: 1000 }).catch(() => []),
             )
           }
           const batchResults = await Promise.all(batchPromises)
@@ -383,12 +519,22 @@ export class BinanceAdapter implements ExchangeAdapter {
         }
         rows = allRows
       } else {
-        rows = await fapi.fapiPrivateGetIncome({
-          incomeType: 'REALIZED_PNL',
-          startTime:  scanStart,
-          endTime:    Date.now(),
-          limit:      1000,
-        })
+        // Split into 6 × 30-day windows to avoid the 1000-row cap on high-volume accounts.
+        const WINDOW_30 = 30 * DAY
+        const allRows30: Array<{ symbol: string; time: number }> = []
+        for (let i = 0; i < 6; i++) {
+          const wStart = scanStart + i * WINDOW_30
+          const wEnd   = Math.min(wStart + WINDOW_30, Date.now())
+          if (wStart >= Date.now()) break
+          const chunk = await fapi.fapiPrivateGetIncome({
+            incomeType: 'REALIZED_PNL',
+            startTime:  wStart,
+            endTime:    wEnd,
+            limit:      1000,
+          }).catch(() => [] as Array<{ symbol: string; time: number }>)
+          allRows30.push(...chunk)
+        }
+        rows = allRows30
       }
 
       // Group income events by symbol, compute which week indices each symbol is active in
@@ -419,7 +565,6 @@ export class BinanceAdapter implements ExchangeAdapter {
     const WINDOW = 7 * DAY
     const scanStart = Date.now() - 180 * DAY
     const fapi = this.exchange as unknown as FapiEx
-    const trades: Trade[] = []
     const failedSymbols: { symbol: string; error: string }[] = []
     const isCoinM = this.isCoinMSymbol(rawSymbol)
 
@@ -432,17 +577,25 @@ export class BinanceAdapter implements ExchangeAdapter {
       return fapi.fapiPrivateGetUserTrades(params)
     }
 
+    // Collect ALL fills across all week windows, with time-based pagination per window.
+    // Then run stateful reconstruction once over the complete sorted fill set.
+    const allFills: RawFapiTrade[] = []
     for (const weekIndex of weekIndices) {
       const windowStart = scanStart + weekIndex * WINDOW
       const windowEnd   = Math.min(windowStart + WINDOW, Date.now())
+      let wStart = windowStart
       try {
-        const rows = await fetchWindowTrades({
-          symbol:    rawSymbol,
-          startTime: windowStart,
-          endTime:   windowEnd,
-          limit:     1000,
-        })
-        for (const r of rows) trades.push(this.mapRawFapiTrade(r, rawSymbol))
+        let page: RawFapiTrade[]
+        do {
+          page = await fetchWindowTrades({
+            symbol:    rawSymbol,
+            startTime: wStart,
+            endTime:   windowEnd,
+            limit:     1000,
+          })
+          allFills.push(...page)
+          if (page.length === 1000) wStart = page[page.length - 1].time + 1
+        } while (page.length === 1000 && wStart < windowEnd)
       } catch (err) {
         const base = rawSymbol.endsWith('USDT') ? rawSymbol.slice(0, -4) : rawSymbol
         const errMsg = err instanceof Error ? err.message : String(err)
@@ -454,6 +607,7 @@ export class BinanceAdapter implements ExchangeAdapter {
       }
     }
 
+    const trades = reconstructBinanceTrades(allFills, rawSymbol)
     return { trades, failedSymbols }
   }
 
@@ -525,39 +679,32 @@ export class BinanceAdapter implements ExchangeAdapter {
     return rawSymbol.includes('USD') && !rawSymbol.endsWith('USDT')
   }
 
-  private mapRawFapiTrade(r: RawFapiTrade, rawSymbol: string): Trade {
+  // Used only by the incremental sync path (getTrades).
+  // Returns null for opening fills (pnl=0) — they are not trades.
+  private mapRawFapiTrade(r: RawFapiTrade, rawSymbol: string): Trade | null {
     const qty      = Number(r.qty)
     const pnl      = Number(r.realizedPnl)
+    if (pnl === 0) return null  // opening fill — not a closed trade
     const exitPrice  = Number(r.price)
     // Hedge mode:   positionSide = 'LONG' | 'SHORT'
     // One-way mode: positionSide = 'BOTH' — BUY closes short, SELL closes long
     const isShort = r.positionSide === 'SHORT' ||
-      (r.positionSide === 'BOTH' && r.side === 'BUY' && pnl !== 0)
+      (r.positionSide === 'BOTH' && r.side === 'BUY')
     // entryPrice derivation: Binance calculates realizedPnl from the position's
     // average entry price, so inverting gives the mathematically exact entryPrice.
     const derived    = qty > 0 ? (isShort ? exitPrice + pnl / qty : exitPrice - pnl / qty) : exitPrice
     const entryPrice = Number.isFinite(derived) && derived > 0 ? derived : exitPrice
     const ts = new Date(Number(r.time)).toISOString()
 
-    // Symbol normalization: BTCUSDT → BTC/USDT:USDT, BTCUSD_PERP → BTC/USD:BTC
-    let symbol: string
-    if (rawSymbol.endsWith('USDT')) {
-      const base = rawSymbol.slice(0, -4)
-      symbol = `${base}/USDT:USDT`
-    } else {
-      const base = rawSymbol.replace(/USD.*$/, '')
-      symbol = `${base}/USD:${base}`
-    }
-
     return {
       id:           String(r.id),
-      symbol,
+      symbol:       normalizeBinanceSymbol(rawSymbol),
       side:         isShort ? 'short' : 'long',
       entryPrice,
       exitPrice,
       quantity:     qty,
       pnl,
-      fee:          Number(r.commission),
+      fee:          -Number(r.commission),  // positive API value → negative (cost)
       openedAt:     ts,
       closedAt:     ts,
       tradeType:    'futures',

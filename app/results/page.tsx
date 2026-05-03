@@ -1,12 +1,11 @@
 'use client'
 
 import React, { useState, useMemo, useEffect } from 'react'
-import type { Period, DateRange, Timeframe, DailyPnLEntry, ExchangeId } from '@/lib/types'
-import { resolveDateRange, aggregateChartData } from '@/lib/calculations'
+import type { Period, DateRange } from '@/lib/types'
+import { resolveDateRange } from '@/lib/calculations'
 import Header from '@/components/layout/Header'
 import PeriodSelector from '@/components/ui/PeriodSelector'
 import BalanceLineChart, { type TransactionMarker } from '@/components/charts/BalanceLineChart'
-import PnlHistogramChart from '@/components/charts/PnlHistogramChart'
 import { formatMoney } from '@/lib/utils'
 
 const ACCOUNT_PALETTE = [
@@ -52,12 +51,6 @@ function Delta({ value }: { value: number }) {
   )
 }
 
-const TIMEFRAME_OPTIONS: { label: string; value: Timeframe }[] = [
-  { label: 'Day',   value: 'daily' },
-  { label: 'Week',  value: 'weekly' },
-  { label: 'Month', value: 'monthly' },
-]
-
 type AccountSummary = {
   accountId:     string
   accountName:   string
@@ -77,11 +70,9 @@ type AccountInfo = { id: string; account_name: string; exchange: string; fund: s
 export default function ResultsPage() {
   const [period, setPeriod]           = useState<Period>('inception')
   const [customRange, setCustomRange] = useState<DateRange | undefined>()
-  const [pnlTimeframe, setPnlTimeframe] = useState<Timeframe>('daily')
 
   const [accountSummaries, setAccountSummaries] = useState<AccountSummary[]>([])
-  const [balanceHistory, setBalanceHistory]     = useState<{ accountId: string; date: string; usdt: number }[]>([])
-  const [dailyPnl, setDailyPnl]                = useState<{ accountId: string; date: string; pnl: number }[]>([])
+  const [navHistory, setNavHistory]             = useState<{ accountId: string; date: string; nav: number }[]>([])
   const [accounts, setAccounts]                 = useState<AccountInfo[]>([])
   const [checkedIds, setCheckedIds]             = useState<Set<string>>(new Set())
   const [loading, setLoading]                   = useState(true)
@@ -141,14 +132,12 @@ export default function ResultsPage() {
       .then((r) => r.json())
       .then((data: {
         accounts?: AccountInfo[]
-        balanceHistory?: { accountId: string; date: string; usdt: number }[]
-        dailyPnl?: { accountId: string; date: string; pnl: number }[]
+        navHistory?: { accountId: string; date: string; nav: number }[]
         accountSummaries?: AccountSummary[]
       }) => {
         const accs = data.accounts ?? []
         setAccounts(accs)
-        setBalanceHistory(data.balanceHistory ?? [])
-        setDailyPnl(data.dailyPnl ?? [])
+        setNavHistory(data.navHistory ?? [])
         setAccountSummaries(data.accountSummaries ?? [])
         setCheckedIds(new Set(accs.map((a) => a.id)))
 
@@ -175,25 +164,17 @@ export default function ResultsPage() {
     [accounts],
   )
 
-  // USDT balance chart series — checked accounts only
-  const usdtSeries = useMemo(
+  // NAV chart series — checked accounts only
+  const navSeries = useMemo(
     () => [...checkedIds].map((id) => ({
       subAccountId: id,
-      data: balanceHistory
-        .filter((b) => b.accountId === id)
+      data: navHistory
+        .filter((n) => n.accountId === id)
         .sort((a, b) => a.date.localeCompare(b.date))
-        .map((b) => ({ date: b.date, value: b.usdt })),
+        .map((n) => ({ date: n.date, value: n.nav })),
     })),
-    [checkedIds, balanceHistory]
+    [checkedIds, navHistory]
   )
-
-  // PnL histogram — checked accounts combined, selected timeframe
-  const histogramData = useMemo(() => {
-    const entries: DailyPnLEntry[] = dailyPnl
-      .filter((d) => checkedIds.has(d.accountId))
-      .map((d) => ({ date: d.date, subAccountId: d.accountId, exchangeId: 'binance' as ExchangeId, pnl: d.pnl, cumulativePnl: 0 }))
-    return aggregateChartData(entries, pnlTimeframe).map((d) => ({ month: d.period, pnl: d.pnl }))
-  }, [dailyPnl, checkedIds, pnlTimeframe])
 
   // Visible summaries for totals
   const visibleSummaries = useMemo(
@@ -209,7 +190,7 @@ export default function ResultsPage() {
     pnl:           visibleSummaries.reduce((s, r) => s + r.totalPnl, 0),
   }), [visibleSummaries])
 
-  // Transaction markers for balance chart (checked accounts only)
+  // Transaction markers (for potential future use on balance chart)
   const txMarkers = useMemo<TransactionMarker[]>(
     () => transactions
       .filter(t => checkedIds.has(t.account_id))
@@ -245,9 +226,9 @@ export default function ResultsPage() {
       </div>
 
       <main className="flex-1 pb-6">
-        {/* USDT Balance chart — full width */}
+        {/* NAV chart — full width */}
         <div className="px-4 pt-3 pb-2">
-          <BalanceLineChart series={usdtSeries} height={240} colorMap={colorMap} nameMap={nameMap} transactions={txMarkers} />
+          <BalanceLineChart series={navSeries} height={240} colorMap={colorMap} nameMap={nameMap} mode="nav" />
         </div>
 
         {/* Account table */}
@@ -370,36 +351,6 @@ export default function ResultsPage() {
                 )}
               </tbody>
             </table>
-          </div>
-        </div>
-
-        {/* P&L histogram — full width, below table */}
-        <div style={{ border: '1px solid var(--border-subtle)', margin: '16px 16px 0' }}>
-          <div className="px-4 py-2 flex items-center gap-3" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-            <p className="text-xs font-semibold tracking-wide font-heading" style={{ color: 'var(--text-primary)' }}>P&amp;L</p>
-            <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>All checked accounts combined</p>
-            <div className="ml-auto flex items-center gap-px" style={{ border: '1px solid var(--border-subtle)' }}>
-              {TIMEFRAME_OPTIONS.map((tf) => {
-                const active = pnlTimeframe === tf.value
-                return (
-                  <button
-                    key={tf.value}
-                    onClick={() => setPnlTimeframe(tf.value)}
-                    className="px-3 py-1 text-[10px] font-semibold tracking-wider uppercase transition-colors"
-                    style={{
-                      background: active ? 'var(--bg-elevated)' : 'transparent',
-                      color: active ? 'var(--text-primary)' : 'var(--text-muted)',
-                      borderRight: tf.value !== 'monthly' ? '1px solid var(--border-subtle)' : 'none',
-                    }}
-                  >
-                    {tf.label}
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-          <div className="px-3 py-3" style={{ background: 'var(--bg-secondary)' }}>
-            <PnlHistogramChart data={histogramData} height={220} />
           </div>
         </div>
 

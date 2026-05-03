@@ -294,6 +294,10 @@ export default function ApiSettingsPage() {
           [accountId]: { current: 0, total: totalChunks, failed: [] },
         }))
 
+        // Capture a single reference timestamp before any chunks are dispatched so
+        // all 26 chunk windows share the same anchor and don't drift over time.
+        const referenceTimestamp = Date.now()
+
         // Thread position state between chunks (oldest → newest) so positions that
         // span a 7-day boundary are reconstructed correctly.
         let inheritedState: Record<string, unknown> | undefined = undefined
@@ -303,9 +307,10 @@ export default function ApiSettingsPage() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              account_id:      accountId,
-              chunk_index:     i,
-              inherited_state: inheritedState,
+              account_id:          accountId,
+              chunk_index:         i,
+              inherited_state:     inheritedState,
+              reference_timestamp: referenceTimestamp,
             }),
           })
           if (res.ok) {
