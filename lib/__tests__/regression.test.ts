@@ -520,20 +520,21 @@ describe('detectBinanceInstrument', () => {
       binance: jest.fn().mockImplementation((config: Record<string, unknown>) => {
         const isPm = !!(config['options'] && (config['options'] as Record<string,unknown>)['portfolioMargin'])
         const isFutures = !!(config['options'] && (config['options'] as Record<string,unknown>)['defaultType'] === 'future') && !isPm
-        const isSpot = !isFutures && !isPm
         return {
+          // PM probe uses papiGetBalance(); spot/futures use fetchBalance()
+          papiGetBalance: jest.fn().mockImplementation(() =>
+            opts.pm ? Promise.resolve([]) : Promise.reject(new Error('Not PM'))
+          ),
           fetchBalance: jest.fn().mockImplementation(() => {
-            if (isPm)      return opts.pm      ? Promise.resolve({}) : Promise.reject(new Error('Not PM'))
             if (isFutures) return opts.futures ? Promise.resolve({}) : Promise.reject(new Error('No futures'))
-            if (isSpot)    return opts.spot    ? Promise.resolve({}) : Promise.reject(new Error('No spot'))
-            return Promise.reject(new Error('Unknown'))
+            return opts.spot    ? Promise.resolve({}) : Promise.reject(new Error('No spot'))
           }),
         }
       }),
     }
   }
 
-  it('returns portfolio_margin when PM fetchBalance succeeds', async () => {
+  it('returns portfolio_margin when papiGetBalance succeeds', async () => {
     const { detectBinanceInstrument } = require('../adapters/binance-detect')
     const mockCcxt = makeMockCcxt({ spot: true, futures: true, pm: true })
     const result = await detectBinanceInstrument('key', 'secret', mockCcxt)
