@@ -152,12 +152,29 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         }
       }
     } else {
-      // Mode B: no initial_aum — use first-ever snapshot as baseline, no tx adjustment
+      // Mode B: no initial_aum — use first-ever snapshot as baseline.
+      // Strip deposits/withdrawals that occurred AFTER the first snapshot date —
+      // the initial deposit on that same day is already "baked into" the baseline.
       const initialCapital = firstBalMap[acc.id] ?? 0
       if (initialCapital <= 0) continue
 
+      const firstDate = sortedDates[0]
+      const txList = (txByAccount[acc.id] ?? []).filter(
+        (tx) => tx.recorded_at.slice(0, 10) > firstDate
+      )
+      let txIdx = 0
+      let cumDeps = 0
+      let cumWith = 0
+
       for (const date of sortedDates) {
-        const nav = dateBalMap[date] / initialCapital
+        while (txIdx < txList.length && txList[txIdx].recorded_at.slice(0, 10) <= date) {
+          const tx = txList[txIdx]
+          if (tx.type === 'deposit')         cumDeps += Number(tx.amount)
+          else if (tx.type === 'withdrawal') cumWith += Number(tx.amount)
+          txIdx++
+        }
+        const bal = dateBalMap[date]
+        const nav = (bal - cumDeps + cumWith) / initialCapital
 
         if (date >= sinceDate.slice(0, 10) && date <= untilDate.slice(0, 10)) {
           navHistory.push({ accountId: acc.id, date, nav })
