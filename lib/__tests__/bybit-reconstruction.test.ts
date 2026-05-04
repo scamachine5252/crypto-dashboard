@@ -180,8 +180,8 @@ describe('reconstructPositions', () => {
     expect(trades[0].side).toBe('long')
     expect(trades[0].quantity).toBe(10)               // closedSize — not execQty
     // The remaining 10 starts a new short (not closed yet → finalState carries it)
-    expect(finalState['BTCUSDT']?.size).toBe(10)
-    expect(finalState['BTCUSDT']?.openSide).toBe('short')
+    expect(finalState['BTCUSDT_short']?.size).toBe(10)
+    expect(finalState['BTCUSDT_short']?.openSide).toBe('short')
   })
 
   it('side: Buy-to-open → trade.side = long', () => {
@@ -257,7 +257,7 @@ describe('reconstructPositions — finalState', () => {
       makeExec({ side: 'Sell', execQty: '10', closedSize: '10', execTime: '2000', execPrice: '110', execPnl: '100' }),
     ]
     const { finalState } = reconstructPositions(execs, 'linear')
-    expect(finalState['BTCUSDT']).toBeUndefined()
+    expect(finalState['BTCUSDT_long']).toBeUndefined()
   })
 
   it('open position preserved in finalState', () => {
@@ -265,10 +265,10 @@ describe('reconstructPositions — finalState', () => {
       makeExec({ side: 'Buy', execQty: '10', closedSize: '0', execTime: '1000', execPrice: '100' }),
     ]
     const { finalState } = reconstructPositions(execs, 'linear')
-    expect(finalState['BTCUSDT']).toBeDefined()
-    expect(finalState['BTCUSDT'].size).toBe(10)
-    expect(finalState['BTCUSDT'].avgEntry).toBe(100)
-    expect(finalState['BTCUSDT'].openSide).toBe('long')
+    expect(finalState['BTCUSDT_long']).toBeDefined()
+    expect(finalState['BTCUSDT_long'].size).toBe(10)
+    expect(finalState['BTCUSDT_long'].avgEntry).toBe(100)
+    expect(finalState['BTCUSDT_long'].openSide).toBe('long')
   })
 
   it('empty executions → empty finalState', () => {
@@ -289,9 +289,9 @@ describe('reconstructPositions — stateful cross-chunk', () => {
     ]
     const { trades: trades1, finalState } = reconstructPositions(chunk1, 'linear')
     expect(trades1).toHaveLength(0)
-    expect(finalState['BTCUSDT'].size).toBe(10)
-    expect(finalState['BTCUSDT'].avgEntry).toBe(100)
-    expect(finalState['BTCUSDT'].openTime).toBe(new Date(1000).toISOString())
+    expect(finalState['BTCUSDT_long'].size).toBe(10)
+    expect(finalState['BTCUSDT_long'].avgEntry).toBe(100)
+    expect(finalState['BTCUSDT_long'].openTime).toBe(new Date(1000).toISOString())
 
     // Chunk 2: closing fill, inheriting state from chunk 1
     const chunk2 = [
@@ -304,7 +304,7 @@ describe('reconstructPositions — stateful cross-chunk', () => {
     expect(trades2[0].pnl).toBeCloseTo(100)                               // (110−100) × 10
     expect(trades2[0].quantity).toBe(10)
     // Position fully closed — not in finalState
-    expect(state2['BTCUSDT']).toBeUndefined()
+    expect(state2['BTCUSDT_long']).toBeUndefined()
   })
 
   it('inherited state with no fills this chunk → state preserved unchanged', () => {
@@ -319,8 +319,8 @@ describe('reconstructPositions — stateful cross-chunk', () => {
     ]
     const { trades, finalState: state2 } = reconstructPositions(chunk2, 'linear', finalState)
     expect(trades).toHaveLength(0)
-    expect(state2['BTCUSDT']?.size).toBe(5)       // preserved from chunk 1
-    expect(state2['ETHUSDT']?.size).toBe(10)       // new from chunk 2
+    expect(state2['BTCUSDT_long']?.size).toBe(5)       // preserved from chunk 1
+    expect(state2['ETHUSDT_long']?.size).toBe(10)       // new from chunk 2
   })
 
   it('scale-in across chunks: avgEntry is cumulative weighted average', () => {
@@ -345,7 +345,7 @@ describe('reconstructPositions — stateful cross-chunk', () => {
     // Simulates a position whose opening fill is not in any chunk window.
     // finalState passed in has openTime='' (unknown).
     const inheritedState = {
-      BTCUSDT: { size: 10, avgEntry: 95, openTime: '', openSide: 'long' },
+      BTCUSDT_long: { size: 10, avgEntry: 95, openTime: '', openSide: 'long' },
     }
     const chunk = [
       makeExec({ side: 'Sell', execQty: '10', closedSize: '10', execTime: '2000', execPrice: '110' }),
@@ -439,7 +439,7 @@ describe('reconstructPositions — Phase 2 fee fixes', () => {
     ]
     const { finalState } = reconstructPositions(chunk1, 'linear')
     // accumulatedFee stored in finalState (negative = cost)
-    expect(finalState['BTCUSDT'].accumulatedFee).toBeCloseTo(-10, 4)
+    expect(finalState['BTCUSDT_long'].accumulatedFee).toBeCloseTo(-10, 4)
 
     const chunk2 = [
       makeExec({ side: 'Sell', execQty: '10', closedSize: '10', execTime: '2000', execPrice: '110', execFee: '10' }),
@@ -468,7 +468,52 @@ describe('reconstructPositions — Phase 2 fee fixes', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Phase 3: Hedge mode — positionIdx-keyed state (H1-H5)
+// C1: CRITICAL regression — ghost trade bug (real production scenario)
+//
+// positionIdx is ABSENT from all Bybit REST responses for Unified accounts.
+// The only reliable signal is closedSize from the fill itself.
+// Bug: direction-based isClosingFill treated a Sell-to-open-Short as closing the Long.
+// Fix: use closedSize directly; use side to determine the slot (Buy→long, Sell→short).
+// ---------------------------------------------------------------------------
+describe('reconstructPositions — closedSize-based slot key (C1 regression)', () => {
+
+  it('C1: simultaneous LONG+SHORT with NO positionIdx → 2 independent trades (ghost trade bug)', () => {
+    // Exactly the Leonardo production pattern: positionIdx absent from REST,
+    // an open-Short Sell fill was incorrectly treated as closing the Long.
+    const execs = [
+      // Open LONG at T=1000
+      makeExec({ side: 'Buy',  execQty: '10', closedSize: '0',  execTime: '1000', execPrice: '100' }),
+      // Open SHORT at T=1500 — NO positionIdx, closedSize=0 → must NOT close the long
+      makeExec({ side: 'Sell', execQty: '5',  closedSize: '0',  execTime: '1500', execPrice: '105' }),
+      // Close SHORT at T=2000
+      makeExec({ side: 'Buy',  execQty: '5',  closedSize: '5',  execTime: '2000', execPrice: '95',  execPnl: '50' }),
+      // Close LONG at T=3000
+      makeExec({ side: 'Sell', execQty: '10', closedSize: '10', execTime: '3000', execPrice: '130', execPnl: '300' }),
+    ]
+    const { trades } = reconstructPositions(execs, 'linear')
+
+    // Must produce exactly 2 trades (one long, one short) — not 1 (ghost) or 3
+    expect(trades).toHaveLength(2)
+
+    const longTrade  = trades.find(t => t.side === 'long')!
+    const shortTrade = trades.find(t => t.side === 'short')!
+    expect(longTrade).toBeDefined()
+    expect(shortTrade).toBeDefined()
+
+    // Long must be opened at T=1000, not clobbered by the Sell-to-open-Short at T=1500
+    expect(longTrade.openedAt).toBe(new Date(1000).toISOString())
+    expect(longTrade.closedAt).toBe(new Date(3000).toISOString())
+    expect(longTrade.pnl).toBeCloseTo(300)
+
+    // Short opened at T=1500
+    expect(shortTrade.openedAt).toBe(new Date(1500).toISOString())
+    expect(shortTrade.closedAt).toBe(new Date(2000).toISOString())
+    expect(shortTrade.pnl).toBeCloseTo(50)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Phase 3: Hedge mode — side-based slot key (H1-H6)
 // ---------------------------------------------------------------------------
 describe('reconstructPositions — hedge mode', () => {
 
@@ -570,8 +615,8 @@ describe('reconstructPositions — hedge mode', () => {
     const { finalState } = reconstructPositions(chunk1, 'linear')
 
     // Both slots must be tracked independently in finalState
-    const longKey  = Object.keys(finalState).find(k => k.includes('1'))
-    const shortKey = Object.keys(finalState).find(k => k.includes('2'))
+    const longKey  = Object.keys(finalState).find(k => k.includes('long'))
+    const shortKey = Object.keys(finalState).find(k => k.includes('short'))
     expect(longKey).toBeDefined()
     expect(shortKey).toBeDefined()
     expect(finalState[longKey!].size).toBe(5)
@@ -584,6 +629,70 @@ describe('reconstructPositions — hedge mode', () => {
     expect(trades).toHaveLength(1)
     expect(trades[0].openedAt).toBe(new Date(1000).toISOString())  // from chunk1 state
     expect(trades[0].side).toBe('long')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// C2: closedSize overflow guard — state.size must never go negative
+//
+// Real scenario: API reports closedSize > tracked state.size because the
+// position was partially opened before our 182-day scan window.
+// Without a cap, state.size goes negative → subsequent scale-in hits
+// denominator == 0 → Infinity avgEntry → astronomical PnL in downstream trades.
+// ---------------------------------------------------------------------------
+describe('reconstructPositions — closedSize overflow guard (C2)', () => {
+
+  it('C2a: closedSize > state.size clamps to state.size, state resets to 0', () => {
+    const inheritedState: import('../adapters/bybit').ReconstructionStateJson = {
+      'BTCUSDT_long': { size: 10, avgEntry: 100, openTime: new Date(1000).toISOString(), openSide: 'long', accumulatedFee: 0 },
+    }
+    const execs = [
+      // API says closedSize=15 but we only have 10 tracked
+      makeExec({ side: 'Sell', execQty: '15', closedSize: '15', execTime: '2000', execPrice: '110' }),
+    ]
+    const { trades, finalState } = reconstructPositions(execs, 'linear', inheritedState)
+    expect(trades).toHaveLength(1)
+    expect(trades[0].quantity).toBe(10)                    // capped at state.size
+    expect(finalState['BTCUSDT_long']).toBeUndefined()     // size=0 → not persisted
+  })
+
+  it('C2b: closedSize > state.size followed by opening fill → no Infinity/NaN in avgEntry', () => {
+    const inheritedState: import('../adapters/bybit').ReconstructionStateJson = {
+      'BTCUSDT_long': { size: 5, avgEntry: 100, openTime: new Date(1000).toISOString(), openSide: 'long', accumulatedFee: 0 },
+    }
+    const execs = [
+      // Over-close: closedSize=10 but state.size=5 → old code: state.size=-5
+      makeExec({ side: 'Sell', execQty: '10', closedSize: '10', execTime: '2000', execPrice: '110' }),
+      // New opening fill: without fix, denominator=-5+5=0 → Infinity avgEntry
+      makeExec({ side: 'Buy',  execQty: '5',  closedSize: '0',  execTime: '3000', execPrice: '115' }),
+      // Close the new position
+      makeExec({ side: 'Sell', execQty: '5',  closedSize: '5',  execTime: '4000', execPrice: '120', execPnl: '25' }),
+    ]
+    const { trades, finalState } = reconstructPositions(execs, 'linear', inheritedState)
+
+    // Exactly 2 trades: the over-close + the new position close
+    expect(trades).toHaveLength(2)
+
+    // Second trade must have finite, sane entry price — not Infinity or astronomical
+    const secondTrade = trades[1]
+    expect(Number.isFinite(secondTrade.entryPrice)).toBe(true)
+    expect(secondTrade.entryPrice).toBeCloseTo(115, 0)    // opened at 115
+    expect(secondTrade.pnl).toBeCloseTo(25, 0)
+    expect(Object.keys(finalState)).toHaveLength(0)
+  })
+
+  it('C2c: normal partial close (closedSize <= state.size) is unaffected by the cap', () => {
+    const execs = [
+      makeExec({ side: 'Buy',  execQty: '20', closedSize: '0',  execTime: '1000', execPrice: '100' }),
+      makeExec({ side: 'Sell', execQty: '8',  closedSize: '8',  execTime: '2000', execPrice: '110', execPnl: '80' }),
+      makeExec({ side: 'Sell', execQty: '12', closedSize: '12', execTime: '3000', execPrice: '120', execPnl: '240' }),
+    ]
+    const { trades } = reconstructPositions(execs, 'linear')
+    expect(trades).toHaveLength(2)
+    expect(trades[0].quantity).toBe(8)
+    expect(trades[1].quantity).toBe(12)
+    expect(trades[0].pnl).toBeCloseTo(80)
+    expect(trades[1].pnl).toBeCloseTo(240)
   })
 })
 

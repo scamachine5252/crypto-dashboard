@@ -20,7 +20,7 @@ export interface RawExecution {
   execFee:     string  // commission (positive = cost, negative = income for rebates)
   closedSize:  string  // qty closed by this fill; '0' for pure opening fills
   orderId:     string
-  positionIdx?: string  // '0'=one-way, '1'=hedge-long, '2'=hedge-short; absent = one-way
+  positionIdx?: string  // always absent in REST responses for Unified accounts; kept for type compat
 }
 
 // ---------------------------------------------------------------------------
@@ -70,12 +70,19 @@ function stateToJson(map: Map<string, SymbolState>): ReconstructionStateJson {
 // ---------------------------------------------------------------------------
 // Reconstruct closed positions from execution fills.
 //
-// Signal: direction-based detection — a fill is a closing fill when its side is
-// opposite to the current open position direction. This is robust against the
-// Bybit REST quirk where closedSize may be "" or "0" for some fill types.
-//   long  position + Sell fill → closing
-//   short position + Buy  fill → closing
-//   closedQty = min(state.size, execQty)   — exact, no rounding
+// Signal: closedSize from the fill itself — authoritative for how many units
+// were closed. positionIdx is absent from Bybit REST responses for Unified
+// accounts so cannot be used as a slot key.
+//
+// Slot key: Buy fills always operate on the Long slot (symbol_long);
+//           Sell fills always operate on the Short slot (symbol_short).
+// This is true for both one-way and hedge mode:
+//   one-way long  → Buy opens symbol_long,  Sell closes symbol_long
+//   one-way short → Sell opens symbol_short, Buy closes symbol_short
+//   hedge         → Long slot = Buy side; Short slot = Sell side
+//
+// A single fill may close one slot AND open the other (position flip) when
+// closedQty > 0 and openedQty = execQty − closedQty > 0.
 //
 // PnL: use execPnl when present and non-zero; otherwise calculate from avgEntry.
 // execPnl is absent (null) in Bybit REST responses for most accounts.
@@ -104,15 +111,10 @@ export function reconstructPositions(
     fundingBySymbol[f.symbol] = (fundingBySymbol[f.symbol] ?? 0) + (-Number(f.execFee))
   }
 
-  // Initialize per-symbol state from previous chunk (or empty for first chunk)
+  // Initialize per-slot state from previous chunk (or empty for first chunk)
   const stateMap: Map<string, SymbolState> = initialState
     ? stateFromJson(initialState)
     : new Map()
-
-  // Compound state key: hedge mode uses slot-aware key; one-way falls back to symbol only.
-  // positionIdx: '0' or absent = one-way; '1' = hedge-long slot; '2' = hedge-short slot.
-  const slotKey = (symbol: string, positionIdx?: string): string =>
-    positionIdx && positionIdx !== '0' ? `${symbol}_${positionIdx}` : symbol
 
   const trades: Trade[] = []
   // Track emitted trade indices per symbol for post-processing funding distribution
@@ -121,101 +123,102 @@ export function reconstructPositions(
   for (const exec of tradeFills) {
     const qty   = Number(exec.execQty)
     const price = Number(exec.execPrice)
-    const key   = slotKey(exec.symbol, exec.positionIdx)
 
-    let state = stateMap.get(key) ?? {
-      size: 0, avgEntry: 0, openTime: '', openSide: 'long' as TradeSide, accumulatedFee: 0,
-    }
-
-    // Direction-based closing detection: does this fill reduce an open position?
-    const isClosingFill = state.size > 0 && (
-      (state.openSide === 'long'  && exec.side === 'Sell') ||
-      (state.openSide === 'short' && exec.side === 'Buy')
-    )
-
-    const closedQty = isClosingFill ? Math.min(state.size, qty) : 0
+    // closedSize is the authoritative signal: how many units this fill closes.
+    // Side determines the slot: Buy ↔ Long slot; Sell ↔ Short slot.
+    const closedQty = Number(exec.closedSize)
     const openedQty = qty - closedQty
+    const cKey = exec.side === 'Sell' ? `${exec.symbol}_long`  : `${exec.symbol}_short`
+    const oKey = exec.side === 'Buy'  ? `${exec.symbol}_long`  : `${exec.symbol}_short`
 
     if (closedQty > 0) {
       // ── Closing fill ────────────────────────────────────────────────────────
-      // PnL: use execPnl when it carries a real value; otherwise reconstruct.
-      // execPnl is null in Bybit REST — Number(null)=0, treated as absent.
-      const execPnlNum = Number(exec.execPnl)
-      const hasExecPnl = exec.execPnl !== undefined && exec.execPnl !== null &&
-                         exec.execPnl !== '' && !isNaN(execPnlNum) && execPnlNum !== 0
+      const state = stateMap.get(cKey)
+      if (state && state.size > 0) {
+        // PnL: use execPnl when it carries a real value; otherwise reconstruct.
+        // execPnl is null in Bybit REST — Number(null)=0, treated as absent.
+        const execPnlNum = Number(exec.execPnl)
+        const hasExecPnl = exec.execPnl !== undefined && exec.execPnl !== null &&
+                           exec.execPnl !== '' && !isNaN(execPnlNum) && execPnlNum !== 0
 
-      let pnl: number
-      if (hasExecPnl) {
-        // execPnl present: linear = already USDT; inverse = base currency → convert
-        pnl = category === 'inverse' ? execPnlNum * price : execPnlNum
-      } else {
-        // Reconstruct from weighted-average entry price (mathematically exact for linear)
-        const dir = state.openSide === 'long' ? 1 : -1
-        if (category === 'inverse' && state.avgEntry > 0) {
-          pnl = dir * closedQty * (price / state.avgEntry - 1)
+        let pnl: number
+        if (hasExecPnl) {
+          // execPnl present: linear = already USDT; inverse = base currency → convert
+          pnl = category === 'inverse' ? execPnlNum * price : execPnlNum
         } else {
-          pnl = dir * (price - state.avgEntry) * closedQty
+          // Reconstruct from weighted-average entry price (mathematically exact for linear)
+          const dir = state.openSide === 'long' ? 1 : -1
+          if (category === 'inverse' && state.avgEntry > 0) {
+            pnl = dir * closedQty * (price / state.avgEntry - 1)
+          } else {
+            pnl = dir * (price - state.avgEntry) * closedQty
+          }
         }
+
+        // Cap at state.size: closedSize may exceed tracked size when the position was
+        // partially opened before our scan window. Without the cap, state.size goes
+        // negative, causing division-by-zero in the next scale-in weighted average,
+        // which produces Infinity/NaN entry prices and astronomical PnL.
+        const effectiveClosedQty = Math.min(closedQty, state.size)
+
+        const tradeIndex = trades.length
+        trades.push({
+          id:           exec.orderId || String(Math.random()),
+          subAccountId: 'bybit' as ExchangeId,
+          exchangeId:   'bybit' as ExchangeId,
+          symbol:       bybitIdToSymbol(exec.symbol, category),
+          side:         state.openSide,
+          tradeType:    'futures' as TradeType,
+          entryPrice:   state.avgEntry,
+          exitPrice:    price,
+          quantity:     effectiveClosedQty,
+          pnl,
+          pnlPercent:   0,
+          fee:          -Number(exec.execFee),  // negative = cost; funding added in post-processing
+          durationMin:  0,
+          leverage:     1,
+          fundingCost:  0,
+          isOvernight:  false,
+          openedAt:     state.openTime,
+          closedAt:     new Date(Number(exec.execTime)).toISOString(),
+        })
+
+        // Distribute proportional share of opening fees to this closing trade
+        const openFeeShare = state.accumulatedFee * (effectiveClosedQty / state.size)
+        trades[tradeIndex] = { ...trades[tradeIndex], fee: trades[tradeIndex].fee + openFeeShare }
+
+        if (!tradeRefsBySymbol[exec.symbol]) tradeRefsBySymbol[exec.symbol] = []
+        tradeRefsBySymbol[exec.symbol].push({ index: tradeIndex, qty: effectiveClosedQty })
+
+        stateMap.set(cKey, { ...state, size: state.size - effectiveClosedQty, accumulatedFee: state.accumulatedFee - openFeeShare })
       }
-
-      const tradeIndex = trades.length
-      trades.push({
-        id:           exec.orderId || String(Math.random()),
-        subAccountId: 'bybit' as ExchangeId,
-        exchangeId:   'bybit' as ExchangeId,
-        symbol:       bybitIdToSymbol(exec.symbol, category),
-        side:         state.openSide,
-        tradeType:    'futures' as TradeType,
-        entryPrice:   state.avgEntry,
-        exitPrice:    price,
-        quantity:     closedQty,
-        pnl,
-        pnlPercent:   0,
-        fee:          -Number(exec.execFee),  // negative = cost; funding added in post-processing
-        durationMin:  0,
-        leverage:     1,
-        fundingCost:  0,
-        isOvernight:  false,
-        openedAt:     state.openTime,
-        closedAt:     new Date(Number(exec.execTime)).toISOString(),
-      })
-
-      // Distribute proportional share of opening fees to this closing trade
-      const openFeeShare = state.size > 0
-        ? state.accumulatedFee * (closedQty / state.size)
-        : 0
-      trades[tradeIndex] = { ...trades[tradeIndex], fee: trades[tradeIndex].fee + openFeeShare }
-
-      if (!tradeRefsBySymbol[exec.symbol]) tradeRefsBySymbol[exec.symbol] = []
-      tradeRefsBySymbol[exec.symbol].push({ index: tradeIndex, qty: closedQty })
-
-      state = { ...state, size: state.size - closedQty, accumulatedFee: state.accumulatedFee - openFeeShare }
     }
 
     // ── Opening fill (or the opened portion of a flip/partial-close fill) ────
     if (openedQty > 0) {
+      const state = stateMap.get(oKey) ?? {
+        size: 0, avgEntry: 0, openTime: '', openSide: 'long' as TradeSide, accumulatedFee: 0,
+      }
       const openingFee = -Number(exec.execFee)  // negative = cost
       if (state.size === 0) {
-        // New position cycle — record start time and direction
-        state = {
+        // New position cycle — record start time and direction from side
+        stateMap.set(oKey, {
           size:           openedQty,
           avgEntry:       price,
           openTime:       new Date(Number(exec.execTime)).toISOString(),
           openSide:       exec.side === 'Buy' ? 'long' : 'short',
           accumulatedFee: openingFee,
-        }
+        })
       } else {
         // Scale-in: update weighted-average entry price and accumulate opening fees
-        state = {
+        stateMap.set(oKey, {
           ...state,
           avgEntry:       (state.avgEntry * state.size + price * openedQty) / (state.size + openedQty),
           size:           state.size + openedQty,
           accumulatedFee: state.accumulatedFee + openingFee,
-        }
+        })
       }
     }
-
-    stateMap.set(key, state)
   }
 
   // Post-process: distribute funding proportionally by closedQty across each symbol's trades
