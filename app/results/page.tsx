@@ -7,6 +7,7 @@ import Header from '@/components/layout/Header'
 import PeriodSelector from '@/components/ui/PeriodSelector'
 import BalanceLineChart, { type TransactionMarker } from '@/components/charts/BalanceLineChart'
 import { formatMoney } from '@/lib/utils'
+import { Download } from 'lucide-react'
 
 const ACCOUNT_PALETTE = [
   '#F0B90B', '#FF6B2C', '#4F8EF7', '#00FF88',
@@ -227,6 +228,24 @@ export default function ResultsPage() {
   const cellBorder = { borderRight: '1px solid var(--border-subtle)', borderBottom: '1px solid var(--border-subtle)' }
   const numCell    = 'px-3 py-2 text-center font-mono tabular text-xs'
 
+  function exportNavCsv() {
+    const rows: string[] = ['Date,Account,NAV']
+    const sorted = [...navSeries].sort((a, b) => a.subAccountId.localeCompare(b.subAccountId))
+    for (const s of sorted) {
+      const name = nameMap[s.subAccountId] ?? s.subAccountId
+      for (const { date, value } of s.data) {
+        rows.push(`${date},${name},${value.toFixed(6)}`)
+      }
+    }
+    const blob = new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `nav_${dateRange.start}_${dateRange.end}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   return (
     <div className="min-h-screen flex flex-col" style={{ background: 'var(--bg-primary)' }}>
       <Header />
@@ -371,6 +390,17 @@ export default function ResultsPage() {
 
         {/* NAV chart — below table, replaces P&L histogram */}
         <div className="px-4 pt-4">
+          <div className="flex items-center justify-end mb-1">
+            <button
+              onClick={exportNavCsv}
+              disabled={navSeries.length === 0}
+              className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest font-semibold px-2.5 py-1 disabled:opacity-30"
+              style={{ color: 'var(--text-muted)', border: '1px solid var(--border-medium)', background: 'var(--bg-elevated)' }}
+            >
+              <Download className="w-3 h-3" />
+              Export NAV CSV
+            </button>
+          </div>
           <BalanceLineChart series={navSeries} height={220} colorMap={colorMap} nameMap={nameMap} mode="nav" />
         </div>
 
