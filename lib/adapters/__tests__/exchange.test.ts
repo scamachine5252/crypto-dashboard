@@ -266,15 +266,17 @@ describe('BybitAdapter', () => {
     await expect(adapter.getTrades('all', {} as DateRange)).rejects.toThrow('Bybit execution list failed')
   })
 
-  it('passes until to privateGetV5ExecutionList as endTime', async () => {
+  it('passes until-1 to privateGetV5ExecutionList as endTime (exclusive right boundary)', async () => {
     mockFetchTrades.mockResolvedValue([])
     const until = 1700000000000
     const { BybitAdapter } = await import('../bybit')
     const adapter = new BybitAdapter({ apiKey: 'key', apiSecret: 'secret' })
     await adapter.getTrades('all', {} as DateRange, 0, 100, until)
 
+    // endTime = until - 1 so fills at exactly `until` land only in the next chunk,
+    // preventing boundary opening fills from being processed twice (inflating avgEntry).
     const anyCall = mockPrivateGetV5ExecutionList.mock.calls.find(
-      (c) => (c[0] as Record<string, unknown>)?.endTime === until,
+      (c) => (c[0] as Record<string, unknown>)?.endTime === until - 1,
     )
     expect(anyCall).toBeDefined()
   })

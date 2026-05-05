@@ -135,6 +135,15 @@ export function reconstructPositions(
       // ── Closing fill ────────────────────────────────────────────────────────
       const state = stateMap.get(cKey)
       if (state && state.size > 0) {
+        // Cap at state.size: closedSize may exceed tracked size when the position was
+        // partially opened before our scan window. Compute FIRST so pnl and fee
+        // can be scaled proportionally — otherwise execPnl (for the full closedSize)
+        // would be stored against a smaller quantity, inflating PnL.
+        const effectiveClosedQty = Math.min(closedQty, state.size)
+        // Ratio ≤ 1. When closedQty > state.size, both pnl and closing fee are scaled
+        // down to reflect only the portion we actually tracked.
+        const pnlScale = effectiveClosedQty / closedQty
+
         // PnL: use execPnl when it carries a real value; otherwise reconstruct.
         // execPnl is null in Bybit REST — Number(null)=0, treated as absent.
         const execPnlNum = Number(exec.execPnl)
@@ -143,23 +152,20 @@ export function reconstructPositions(
 
         let pnl: number
         if (hasExecPnl) {
-          // execPnl present: linear = already USDT; inverse = base currency → convert
-          pnl = category === 'inverse' ? execPnlNum * price : execPnlNum
+          // execPnl present: linear = already USDT; inverse = base currency → convert.
+          // Scale by pnlScale to get only our tracked portion.
+          const rawPnl = category === 'inverse' ? execPnlNum * price : execPnlNum
+          pnl = rawPnl * pnlScale
         } else {
-          // Reconstruct from weighted-average entry price (mathematically exact for linear)
+          // Reconstruct from weighted-average entry price using effectiveClosedQty
+          // so the result is already proportional (no separate scaling needed).
           const dir = state.openSide === 'long' ? 1 : -1
           if (category === 'inverse' && state.avgEntry > 0) {
-            pnl = dir * closedQty * (price / state.avgEntry - 1)
+            pnl = dir * effectiveClosedQty * (price / state.avgEntry - 1)
           } else {
-            pnl = dir * (price - state.avgEntry) * closedQty
+            pnl = dir * (price - state.avgEntry) * effectiveClosedQty
           }
         }
-
-        // Cap at state.size: closedSize may exceed tracked size when the position was
-        // partially opened before our scan window. Without the cap, state.size goes
-        // negative, causing division-by-zero in the next scale-in weighted average,
-        // which produces Infinity/NaN entry prices and astronomical PnL.
-        const effectiveClosedQty = Math.min(closedQty, state.size)
 
         const tradeIndex = trades.length
         trades.push({
@@ -174,7 +180,7 @@ export function reconstructPositions(
           quantity:     effectiveClosedQty,
           pnl,
           pnlPercent:   0,
-          fee:          -Number(exec.execFee),  // negative = cost; funding added in post-processing
+          fee:          -Number(exec.execFee) * pnlScale,  // scale closing fee proportionally; funding added in post-processing
           durationMin:  0,
           leverage:     1,
           fundingCost:  0,
@@ -349,7 +355,11 @@ export class BybitAdapter implements ExchangeAdapter {
     do {
       const params: Record<string, unknown> = { category, limit: 100 }
       if (since !== undefined) params['startTime'] = since
-      if (until !== undefined) params['endTime']   = until
+      // Use until-1 (exclusive right boundary) so fills at exactly `until` land only
+      // in the next chunk (startTime=until, inclusive). Without this, opening fills at
+      // the boundary are processed twice — once per chunk — inflating tracked size and
+      // distorting the weighted-average entry price used to reconstruct PnL.
+      if (until !== undefined) params['endTime']   = until - 1
       if (cursor) params['cursor'] = cursor
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -105,7 +105,7 @@ describe('BybitAdapter getTrades routing', () => {
     const calls = fns.privateGetV5ExecutionList.mock.calls as Array<[Record<string, unknown>]>
     for (const [params] of calls) {
       expect(params.startTime).toBe(1000)
-      expect(params.endTime).toBe(2000)
+      expect(params.endTime).toBe(1999)  // until-1: exclusive right boundary prevents boundary-fill double-processing
     }
   })
 })

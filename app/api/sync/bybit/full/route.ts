@@ -67,35 +67,41 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   let synced = 0
   let skippedNoOpenTime = 0
   if (trades.length > 0) {
-    const seen = new Set<string>()
-    const rows = trades
-      .filter((t: Trade) => {
-        // Skip trades where openedAt is unknown (position opened before this chunk's window
-        // and not carried via inherited_state — e.g., positions older than 182 days)
-        if (!t.openedAt) {
-          skippedNoOpenTime++
-          return false
-        }
-        const key = `${accountId}|${t.symbol}|${t.openedAt}|${t.closedAt}`
-        if (seen.has(key)) return false
-        seen.add(key)
-        return true
-      })
-      .map((t: Trade) => ({
-        account_id:  accountId,
-        exchange:    'bybit',
-        symbol:      t.symbol,
-        side:        t.side === 'long' ? 'buy' : 'sell',
-        direction:   t.side === 'long' || t.side === 'short' ? t.side : 'unknown',
-        entry_price: t.entryPrice,
-        exit_price:  t.exitPrice,
-        quantity:    t.quantity,
-        pnl:         t.pnl,
-        fee:         t.fee,
-        opened_at:   t.openedAt,
-        closed_at:   t.closedAt,
-        trade_type:  t.tradeType,
-      }))
+    // Merge fills that share (symbol, opened_at, closed_at) — same position closed by multiple
+    // simultaneous fills (same execTime ms). Drop rather than merge would silently lose PnL.
+    type DbRow = {
+      account_id: string; exchange: string; symbol: string; side: string; direction: string;
+      entry_price: number; exit_price: number; quantity: number; pnl: number; fee: number;
+      opened_at: string; closed_at: string; trade_type: string;
+    }
+    const rowMap = new Map<string, DbRow>()
+    for (const t of trades) {
+      if (!t.openedAt) { skippedNoOpenTime++; continue }
+      const key = `${accountId}|${t.symbol}|${t.openedAt}|${t.closedAt}`
+      const existing = rowMap.get(key)
+      if (existing) {
+        existing.pnl      += t.pnl      ?? 0
+        existing.fee      += t.fee      ?? 0
+        existing.quantity += t.quantity ?? 0
+      } else {
+        rowMap.set(key, {
+          account_id:  accountId,
+          exchange:    'bybit',
+          symbol:      t.symbol,
+          side:        t.side === 'long' ? 'buy' : 'sell',
+          direction:   t.side === 'long' || t.side === 'short' ? t.side : 'unknown',
+          entry_price: t.entryPrice,
+          exit_price:  t.exitPrice,
+          quantity:    t.quantity,
+          pnl:         t.pnl,
+          fee:         t.fee,
+          opened_at:   t.openedAt,
+          closed_at:   t.closedAt,
+          trade_type:  t.tradeType,
+        })
+      }
+    }
+    const rows = Array.from(rowMap.values())
 
     if (rows.length > 0) {
       const { error: upsertError } = await supabaseAdmin

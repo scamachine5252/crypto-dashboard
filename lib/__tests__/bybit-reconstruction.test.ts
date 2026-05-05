@@ -656,6 +656,22 @@ describe('reconstructPositions — closedSize overflow guard (C2)', () => {
     expect(finalState['BTCUSDT_long']).toBeUndefined()     // size=0 → not persisted
   })
 
+  it('C2d: pnl and closing fee are scaled by effectiveClosedQty/closedQty when overflow', () => {
+    // state tracks 10 BTC long, API says closedSize=25 with execPnl=500 and execFee=5
+    // scale = 10/25 = 0.4 → pnl should be 500*0.4=200, fee should be -5*0.4=-2
+    const inheritedState: import('../adapters/bybit').ReconstructionStateJson = {
+      'BTCUSDT_long': { size: 10, avgEntry: 100, openTime: new Date(1000).toISOString(), openSide: 'long', accumulatedFee: 0 },
+    }
+    const execs = [
+      makeExec({ side: 'Sell', execQty: '25', closedSize: '25', execTime: '2000', execPrice: '110', execPnl: '500', execFee: '5' }),
+    ]
+    const { trades } = reconstructPositions(execs, 'linear', inheritedState)
+    expect(trades).toHaveLength(1)
+    expect(trades[0].quantity).toBe(10)
+    expect(trades[0].pnl).toBeCloseTo(200, 4)             // 500 * (10/25) = 200
+    expect(trades[0].fee).toBeCloseTo(-2, 4)              // -5 * (10/25) = -2
+  })
+
   it('C2b: closedSize > state.size followed by opening fill → no Infinity/NaN in avgEntry', () => {
     const inheritedState: import('../adapters/bybit').ReconstructionStateJson = {
       'BTCUSDT_long': { size: 5, avgEntry: 100, openTime: new Date(1000).toISOString(), openSide: 'long', accumulatedFee: 0 },
