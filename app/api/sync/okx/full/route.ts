@@ -53,6 +53,35 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: message }, { status: 500 })
   }
 
+  // ── Store raw fills (idempotent, best-effort) ────────────────────────────────
+  // For OKX, Trade.id = CCXT trade id = fillId from OKX API — a stable unique fill ID.
+  // Trade objects from mapCcxtTrade contain all fill-level data we need for raw_fills.
+  if (trades.length > 0) {
+    const fillRows = trades.map((t: Trade) => ({
+      account_id:  accountId,
+      exchange:    'okx',
+      exec_id:     t.id,
+      symbol:      t.symbol,
+      category:    t.tradeType,  // 'spot'/'futures'
+      exec_time:   t.closedAt,   // OKX spot fills: closedAt is the fill time
+      side:        t.side === 'long' ? 'buy' : 'sell',
+      exec_qty:    t.quantity,
+      exec_price:  t.exitPrice,
+      exec_pnl:    t.pnl,
+      exec_fee:    Math.abs(t.fee),
+      closed_size: null,
+      position_idx: null,
+      raw_data:    { id: t.id, symbol: t.symbol, pnl: t.pnl },
+      source:      'rest' as const,
+    }))
+    const { error: fillsError } = await supabaseAdmin
+      .from('raw_fills')
+      .upsert(fillRows, { onConflict: 'account_id,exchange,exec_id', ignoreDuplicates: true })
+    if (fillsError) {
+      console.warn('[okx/full] raw_fills upsert warning:', fillsError.message)
+    }
+  }
+
   let synced = 0
   if (trades.length > 0) {
     const seen = new Set<string>()

@@ -12,6 +12,7 @@ interface BinanceCredentials {
 export interface FullTradesResult {
   trades: Trade[]
   failedSymbols: { symbol: string; error: string }[]
+  rawFills: RawFapiTrade[]   // raw fills before reconstruction — stored in raw_fills table
 }
 
 export type RawFapiTrade = {
@@ -608,7 +609,7 @@ export class BinanceAdapter implements ExchangeAdapter {
     }
 
     const trades = reconstructBinanceTrades(allFills, rawSymbol)
-    return { trades, failedSymbols }
+    return { trades, failedSymbols, rawFills: allFills }
   }
 
   // Open time reconstruction via trade history.

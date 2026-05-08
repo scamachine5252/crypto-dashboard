@@ -18,7 +18,7 @@ jest.mock('@/lib/supabase/server', () => ({
           update: jest.fn(() => ({ eq: mockUpdateEq })),
         }
       }
-      // trades table
+      // trades and raw_fills tables both use upsert
       return { upsert: mockUpsert }
     }),
   },
@@ -105,7 +105,7 @@ describe('POST /api/sync/binance/full', () => {
       data: { id: 'uuid-1', api_key: 'enc-key', api_secret: 'enc-sec', instrument: 'unified' },
       error: null,
     })
-    mockGetFullTrades.mockResolvedValue({ trades: [], failedSymbols: [] })
+    mockGetFullTrades.mockResolvedValue({ trades: [], failedSymbols: [], rawFills: [] })
     mockUpsert.mockResolvedValue({ error: null })
 
     const { POST } = await import('../full/route')
@@ -130,6 +130,7 @@ describe('POST /api/sync/binance/full', () => {
         subAccountId: '', exchangeId: 'binance',
       }],
       failedSymbols: [],
+      rawFills: [],
     })
     mockUpsert.mockResolvedValue({ error: null })
 
@@ -159,6 +160,7 @@ describe('POST /api/sync/binance/full', () => {
         subAccountId: '', exchangeId: 'binance',
       }],
       failedSymbols: [],
+      rawFills: [],
     })
     mockUpsert.mockResolvedValue({ error: { message: 'db write failed' } })
 
@@ -176,6 +178,7 @@ describe('POST /api/sync/binance/full', () => {
     mockGetFullTrades.mockResolvedValue({
       trades: [],
       failedSymbols: [{ symbol: 'BAD/USDT:USDT', error: 'invalid symbol' }],
+      rawFills: [],
     })
     mockUpsert.mockResolvedValue({ error: null })
 

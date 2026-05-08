@@ -15,7 +15,7 @@ jest.mock('@/lib/supabase/server', () => ({
           update: jest.fn(() => ({ eq: mockUpdateEq })),
         }
       }
-      // trades table
+      // trades and raw_fills tables both use upsert
       return { upsert: mockUpsert }
     }),
   },
@@ -101,7 +101,7 @@ describe('POST /api/sync/bybit/full', () => {
       data: { id: 'uuid-1', api_key: 'enc-key', api_secret: 'enc-sec' },
       error: null,
     })
-    mockGetTradesForChunk.mockResolvedValue({ trades: [], finalState: {} })
+    mockGetTradesForChunk.mockResolvedValue({ trades: [], finalState: {}, rawExecutions: [] })
     mockUpsert.mockResolvedValue({ error: null })
 
     const { POST } = await import('../full/route')
@@ -132,6 +132,7 @@ describe('POST /api/sync/bybit/full', () => {
         },
       ],
       finalState: {},
+      rawExecutions: [],
     })
     mockUpsert.mockResolvedValue({ error: null })
 
@@ -163,6 +164,7 @@ describe('POST /api/sync/bybit/full', () => {
         },
       ],
       finalState: {},
+      rawExecutions: [],
     })
     mockUpsert.mockResolvedValue({ error: { message: 'db write failed' } })
 
@@ -192,7 +194,7 @@ describe('POST /api/sync/bybit/full', () => {
       data: { id: 'uuid-1', api_key: 'enc-key', api_secret: 'enc-sec' },
       error: null,
     })
-    mockGetTradesForChunk.mockResolvedValue({ trades: [], finalState: {} })
+    mockGetTradesForChunk.mockResolvedValue({ trades: [], finalState: {}, rawExecutions: [] })
     mockUpsert.mockResolvedValue({ error: null })
 
     const { POST } = await import('../full/route')
@@ -211,7 +213,7 @@ describe('POST /api/sync/bybit/full', () => {
       data: { id: 'uuid-1', api_key: 'enc-key', api_secret: 'enc-sec' },
       error: null,
     })
-    mockGetTradesForChunk.mockResolvedValue({ trades: [], finalState: {} })
+    mockGetTradesForChunk.mockResolvedValue({ trades: [], finalState: {}, rawExecutions: [] })
     mockUpsert.mockResolvedValue({ error: null })
 
     const inheritedState = { BTCUSDT: { size: 10, avgEntry: 100, openTime: '2025-01-01T00:00:00.000Z', openSide: 'long' } }
@@ -229,7 +231,7 @@ describe('POST /api/sync/bybit/full', () => {
       error: null,
     })
     const finalState = { ETHUSDT: { size: 5, avgEntry: 3000, openTime: '2025-01-02T00:00:00.000Z', openSide: 'long' } }
-    mockGetTradesForChunk.mockResolvedValue({ trades: [], finalState })
+    mockGetTradesForChunk.mockResolvedValue({ trades: [], finalState, rawExecutions: [] })
     mockUpsert.mockResolvedValue({ error: null })
 
     const { POST } = await import('../full/route')
@@ -253,7 +255,7 @@ describe('POST /api/sync/bybit/full', () => {
       closedAt: '2025-01-01T00:00:00.000Z',
       subAccountId: 'bybit', exchangeId: 'bybit',
     }
-    mockGetTradesForChunk.mockResolvedValue({ trades: [dupTrade, dupTrade], finalState: {} })
+    mockGetTradesForChunk.mockResolvedValue({ trades: [dupTrade, dupTrade], finalState: {}, rawExecutions: [] })
     mockUpsert.mockResolvedValue({ error: null })
 
     const { POST } = await import('../full/route')

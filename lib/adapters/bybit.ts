@@ -399,22 +399,35 @@ export class BybitAdapter implements ExchangeAdapter {
     since: number,
     until: number,
     inheritedState?: ReconstructionStateJson,
-  ): Promise<{ trades: Trade[], finalState: ReconstructionStateJson }> {
-    const [spotResult, linearResult, inverseResult] = await Promise.allSettled([
+  ): Promise<{
+    trades: Trade[]
+    finalState: ReconstructionStateJson
+    // Raw executions per category — used by the full-sync route to populate raw_fills.
+    // Keeping them here avoids a second API call and preserves the fetch/reconstruct atomicity.
+    rawExecutions: Array<{ category: 'linear' | 'inverse'; executions: RawExecution[] }>
+  }> {
+    // Fetch raw executions first so they can be stored in raw_fills independently of reconstruction.
+    const [linearExecs, inverseExecs] = await Promise.allSettled([
+      this.fetchBybitExecutions('linear',  since, until),
+      this.fetchBybitExecutions('inverse', since, until),
+    ])
+    const [spotResult] = await Promise.allSettled([
       this.exchange.fetchMyTrades(undefined, since, 100, { category: 'spot', paginate: true }),
-      this.fetchBybitExecutions('linear',  since, until).then(e => reconstructPositions(e, 'linear',  inheritedState)),
-      this.fetchBybitExecutions('inverse', since, until).then(e => reconstructPositions(e, 'inverse', inheritedState)),
     ])
 
-    if (linearResult.status === 'rejected' && inverseResult.status === 'rejected') {
+    if (linearExecs.status === 'rejected' && inverseExecs.status === 'rejected') {
       throw new Error(
-        `Bybit execution list failed — linear: ${linearResult.reason}; inverse: ${inverseResult.reason}`
+        `Bybit execution list failed — linear: ${linearExecs.reason}; inverse: ${inverseExecs.reason}`
       )
     }
 
-    const spotTrades  = spotResult.status   === 'fulfilled' ? spotResult.value.map(t => mapCcxtTrade(t, 'bybit')) : []
-    const linearData  = linearResult.status === 'fulfilled' ? linearResult.value : { trades: [], finalState: {} as ReconstructionStateJson }
-    const inverseData = inverseResult.status === 'fulfilled' ? inverseResult.value : { trades: [], finalState: {} as ReconstructionStateJson }
+    const linearExecutions  = linearExecs.status  === 'fulfilled' ? linearExecs.value  : []
+    const inverseExecutions = inverseExecs.status === 'fulfilled' ? inverseExecs.value : []
+
+    const linearData  = reconstructPositions(linearExecutions,  'linear',  inheritedState)
+    const inverseData = reconstructPositions(inverseExecutions, 'inverse', inheritedState)
+
+    const spotTrades  = spotResult.status === 'fulfilled' ? spotResult.value.map(t => mapCcxtTrade(t, 'bybit')) : []
 
     // Merge final states: linear and inverse symbols are disjoint (BTCUSDT vs BTCUSD)
     const finalState: ReconstructionStateJson = { ...linearData.finalState, ...inverseData.finalState }
@@ -422,6 +435,10 @@ export class BybitAdapter implements ExchangeAdapter {
     return {
       trades: [...spotTrades, ...linearData.trades, ...inverseData.trades],
       finalState,
+      rawExecutions: [
+        { category: 'linear',  executions: linearExecutions },
+        { category: 'inverse', executions: inverseExecutions },
+      ],
     }
   }
 

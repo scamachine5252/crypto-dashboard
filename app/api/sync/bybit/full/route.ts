@@ -4,7 +4,7 @@ import { supabaseAdmin } from '@/lib/supabase/server'
 import { decrypt } from '@/lib/crypto/decrypt'
 import { BybitAdapter } from '@/lib/adapters/bybit'
 import type { ReconstructionStateJson } from '@/lib/adapters/bybit'
-import type { Trade, DateRange } from '@/lib/types'
+import type { Trade } from '@/lib/types'
 
 const CHUNK_DAYS   = 7    // Bybit Unified API enforces 7-day max window per request
 const TOTAL_DAYS   = 182  // 26 × 7 days
@@ -50,12 +50,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   let trades: Trade[]
   let finalState: ReconstructionStateJson
+  let rawExecutions: Awaited<ReturnType<typeof adapter.getTradesForChunk>>['rawExecutions'] = []
   try {
     // since/until are exactly 7 days apart — within Bybit's API limit.
     // inheritedState carries open positions from the previous chunk.
     const result = await adapter.getTradesForChunk(since, until, inheritedState)
-    trades     = result.trades
-    finalState = result.finalState
+    trades        = result.trades
+    finalState    = result.finalState
+    rawExecutions = result.rawExecutions
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     console.error(`[bybit/full] chunk=${chunkIndex} getTradesForChunk error:`, message)
@@ -63,6 +65,37 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
 
   console.log(`[bybit/full] chunk=${chunkIndex} trades=${trades.length} window=${new Date(since).toISOString()}..${new Date(until).toISOString()}`)
+
+  // ── Store raw fills (idempotent, best-effort) ────────────────────────────────
+  // exec_id = orderId_execTime_execQty — deterministic composite key (Bybit REST
+  // has no per-fill unique ID; see docs/architecture/approach-b-fills-store.md).
+  for (const { category, executions } of rawExecutions) {
+    if (executions.length === 0) continue
+    const fillRows = executions.map(exec => ({
+      account_id:  accountId,
+      exchange:    'bybit',
+      exec_id:     `${exec.orderId}_${exec.execTime}_${exec.execQty}`,
+      symbol:      exec.symbol,
+      category,
+      exec_time:   new Date(Number(exec.execTime)).toISOString(),
+      side:        exec.side,
+      exec_qty:    Number(exec.execQty),
+      exec_price:  Number(exec.execPrice),
+      exec_pnl:    Number(exec.execPnl) !== 0 ? Number(exec.execPnl) : null,
+      exec_fee:    Number(exec.execFee),
+      closed_size: exec.closedSize ? Number(exec.closedSize) : null,
+      position_idx: null,  // always absent in Unified REST responses
+      raw_data:    exec,
+      source:      'rest' as const,
+    }))
+    const { error: fillsError } = await supabaseAdmin
+      .from('raw_fills')
+      .upsert(fillRows, { onConflict: 'account_id,exchange,exec_id', ignoreDuplicates: true })
+    if (fillsError) {
+      // Non-fatal: raw_fills is for future reconstruction; trades upsert is authoritative now.
+      console.warn(`[bybit/full] chunk=${chunkIndex} raw_fills upsert warning (${category}):`, fillsError.message)
+    }
+  }
 
   let synced = 0
   let skippedNoOpenTime = 0

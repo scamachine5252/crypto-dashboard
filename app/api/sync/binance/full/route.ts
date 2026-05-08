@@ -43,7 +43,35 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     portfolioMargin: isPortfolioMargin,
   })
 
-  const { trades, failedSymbols } = await adapter.getFullTrades(symbol.trim(), weeks)
+  const { trades, failedSymbols, rawFills } = await adapter.getFullTrades(symbol.trim(), weeks)
+
+  // ── Store raw fills (idempotent, best-effort) ────────────────────────────────
+  // exec_id = tradeId (field 'id') — unique fill ID from Binance FAPI/PAPI.
+  if (rawFills.length > 0) {
+    const fillRows = rawFills.map(f => ({
+      account_id:  accountId,
+      exchange:    'binance',
+      exec_id:     String(f.id),
+      symbol:      f.symbol,
+      category:    f.positionSide,  // 'LONG'/'SHORT'/'BOTH' — hedge/one-way signal
+      exec_time:   new Date(f.time).toISOString(),
+      side:        f.side,
+      exec_qty:    Number(f.qty),
+      exec_price:  Number(f.price),
+      exec_pnl:    Number(f.realizedPnl),
+      exec_fee:    Math.abs(Number(f.commission)),
+      closed_size: null,
+      position_idx: null,
+      raw_data:    f,
+      source:      'rest' as const,
+    }))
+    const { error: fillsError } = await supabaseAdmin
+      .from('raw_fills')
+      .upsert(fillRows, { onConflict: 'account_id,exchange,exec_id', ignoreDuplicates: true })
+    if (fillsError) {
+      console.warn('[binance/full] raw_fills upsert warning:', fillsError.message)
+    }
+  }
 
   let synced = 0
   if (trades.length > 0) {

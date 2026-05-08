@@ -1,0 +1,41 @@
+name: Deploy to Hetzner
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HETZNER_IP }}
+          username: deploy
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -euo pipefail
+            cd /app/crypto-dashboard
+
+            echo "==> Pulling latest code"
+            git pull origin main
+
+            echo "==> Installing dependencies"
+            npm ci --production=false
+
+            echo "==> Building Next.js app"
+            npm run build
+
+            echo "==> Compiling worker"
+            npx tsc -p worker/tsconfig.json --outDir dist
+
+            echo "==> Reloading PM2 processes"
+            pm2 reload ecosystem.config.js --update-env
+
+            echo "==> Deploy complete"
+            pm2 status
