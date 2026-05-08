@@ -150,7 +150,7 @@ describe('BybitConnector — handleMessage', () => {
     const connector = makeConnector()
 
     await connector.handleMessage({ op: 'pong' })
-    await connector.handleMessage({ topic: 'order', data: [{}] })
+    await connector.handleMessage({ topic: 'order', data: [{}] as unknown[] })
 
     expect(mockFillProcessorStore).not.toHaveBeenCalled()
   })
@@ -185,7 +185,7 @@ describe('BybitConnector — handleMessage', () => {
 
     await connector.handleMessage({
       topic: 'execution.linear',
-      data: [{ execType: 'AdlTrade', orderId: 'x', execTime: '1', execQty: '0.1', symbol: 'X' }],
+      data: [{ execType: 'AdlTrade', orderId: 'x', execTime: '1', execQty: '0.1', symbol: 'X' }] as unknown[],
     })
 
     expect(mockFillProcessorStore).not.toHaveBeenCalled()

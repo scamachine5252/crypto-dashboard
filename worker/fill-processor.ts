@@ -32,7 +32,7 @@ export class FillProcessor {
 
   async store(fill: RawFill): Promise<void> {
     const redisKey = `fill:${fill.account_id}:${fill.exchange}:${fill.exec_id}`
-    const isNew = await this.redis.set(redisKey, '1', 'NX', 'EX', 86400)
+    const isNew = await this.redis.set(redisKey, '1', 'EX', 86400, 'NX')
     if (!isNew) return
 
     const row = { ...fill, exec_time: fill.exec_time.toISOString() }
@@ -47,7 +47,7 @@ export class FillProcessor {
     let inserted = 0
     for (const fill of fills) {
       const redisKey = `fill:${fill.account_id}:${fill.exchange}:${fill.exec_id}`
-      const isNew = await this.redis.set(redisKey, '1', 'NX', 'EX', 86400)
+      const isNew = await this.redis.set(redisKey, '1', 'EX', 86400, 'NX')
       if (!isNew) continue
 
       const row = { ...fill, exec_time: fill.exec_time.toISOString() }

@@ -72,7 +72,7 @@ async function pollBalances(): Promise<void> {
 
 export function startBalancePoller(): void {
   // Poll every 15 minutes
-  const task = cron.schedule('*/15 * * * *', () => void pollBalances(), { scheduled: true })
+  const task = cron.schedule('*/15 * * * *', () => void pollBalances())
   console.log('[balance-poller] started — polling every 15 min')
 
   // Initial poll on start

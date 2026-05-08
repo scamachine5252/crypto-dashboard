@@ -56,9 +56,9 @@ describe('FillProcessor', () => {
     expect(mockSet).toHaveBeenCalledWith(
       'fill:acc-1:bybit:order1_1234567890000_0.1',
       '1',
-      'NX',
       'EX',
       86400,
+      'NX',
     )
     expect(mockUpsert).toHaveBeenCalledTimes(1)
   })

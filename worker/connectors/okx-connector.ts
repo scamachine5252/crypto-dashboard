@@ -1,4 +1,5 @@
 import * as crypto from 'crypto'
+import type WebSocket from 'ws'
 import type { FillProcessor, RawFill } from '../fill-processor'
 
 const WS_URL = 'wss://ws.okx.com:8443/ws/v5/private'
@@ -34,7 +35,7 @@ export class OkxConnector {
   private fillProcessor:  FillProcessor
   private fetchGapFillsFn?: (since: number, until: number) => Promise<RawFill[]>
 
-  private ws:             import('ws') | null = null
+  private ws:             WebSocket | null = null
   private pingTimer:      ReturnType<typeof setInterval> | null = null
   private destroyed:      boolean = false
   private reconnectDelay: number = 1000
@@ -148,7 +149,7 @@ export class OkxConnector {
     this.ws?.close()
   }
 
-  private startPing(ws: import('ws')) {
+  private startPing(ws: WebSocket) {
     this.pingTimer = setInterval(() => { ws.send('ping') }, PING_INTERVAL_MS)
     this.pingTimer.unref?.()
   }

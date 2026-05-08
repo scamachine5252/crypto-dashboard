@@ -1,4 +1,5 @@
 import * as crypto from 'crypto'
+import type WebSocket from 'ws'
 import type { FillProcessor, RawFill } from '../fill-processor'
 
 const WS_URL = 'wss://stream.bybit.com/v5/private'
@@ -40,7 +41,7 @@ export class BybitConnector {
   private fillProcessor: FillProcessor
   private fetchGapFillsFn?: (since: number, until: number) => Promise<RawFill[]>
 
-  private ws:             import('ws') | null = null
+  private ws:             WebSocket | null = null
   private pingTimer:      ReturnType<typeof setInterval> | null = null
   private reconnectDelay: number = 1000
   private destroyed:      boolean = false
@@ -80,9 +81,10 @@ export class BybitConnector {
     }
   }
 
-  async handleMessage(msg: WsMessage): Promise<void> {
-    if (!msg.topic?.startsWith('execution.') || !Array.isArray(msg.data)) return
-    const category = msg.topic.split('.')[1] as 'linear' | 'inverse' | 'spot'
+  async handleMessage(msg: Record<string, unknown>): Promise<void> {
+    const topic = msg.topic as string | undefined
+    if (!topic?.startsWith('execution.') || !Array.isArray(msg.data)) return
+    const category = topic.split('.')[1] as 'linear' | 'inverse' | 'spot'
 
     for (const exec of msg.data as ExecMsg[]) {
       if (exec.execType !== 'Trade' && exec.execType !== 'Funding') continue
@@ -137,7 +139,7 @@ export class BybitConnector {
 
     ws.on('message', async (data: Buffer | string) => {
       try {
-        const msg = JSON.parse(data.toString()) as WsMessage
+        const msg = JSON.parse(data.toString()) as Record<string, unknown>
         if (msg.op === 'auth' || msg.op === 'pong') {
           if (msg.op === 'auth') ws.send(JSON.stringify(this.buildSubscribePayload()))
           return
@@ -164,9 +166,9 @@ export class BybitConnector {
     this.ws?.close()
   }
 
-  private startPing(ws: import('ws')) {
+  private startPing(ws: WebSocket) {
     this.pingTimer = setInterval(() => {
-      if (ws.readyState === (WebSocket as unknown as { OPEN: number }).OPEN) {
+      if ((ws as { readyState: number }).readyState === 1 /* OPEN */) {
         ws.send(JSON.stringify({ op: 'ping' }))
       }
     }, 20_000)

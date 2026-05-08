@@ -1,3 +1,4 @@
+import type WebSocket from 'ws'
 import type { FillProcessor, RawFill } from '../fill-processor'
 
 const FAPI_BASE = 'https://fapi.binance.com'
@@ -40,7 +41,7 @@ export class BinanceConnector {
   private fetchGapFillsFn?: (since: number, until: number) => Promise<RawFill[]>
   private lastFillTime:    number
 
-  private ws:              import('ws') | null = null
+  private ws:              WebSocket | null = null
   private keepaliveTimer:  ReturnType<typeof setInterval> | null = null
   private destroyed:       boolean = false
   private listenKey:       string = ''

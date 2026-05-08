@@ -275,60 +275,6 @@ async function syncAccount(row: AccountRow, dateRange: DateRange): Promise<Accou
     diag.transactionsError = txErr instanceof Error ? txErr.message : String(txErr)
   }
 
-  // Compute and store NAV for this snapshot using full transaction history
-  try {
-    const { data: allTxData } = await supabaseAdmin
-      .from('transactions')
-      .select('type, amount')
-      .eq('account_id', row.id)
-      .not('type', 'eq', 'income')
-
-    const effectiveBalance = balance.totalEquityUsdt ?? balance.usdt
-
-    // Resolve initial capital and compute NAV using same two-mode logic as results API:
-    // Mode A (initial_aum set): transactions are subsequent flows → NAV = (bal - deps + with) / initial_aum
-    // Mode B (no initial_aum): use first snapshot as baseline, no tx adjustment → NAV = bal / firstSnapshot
-    const { data: accMeta } = await supabaseAdmin
-      .from('accounts')
-      .select('initial_aum')
-      .eq('id', row.id)
-      .single()
-
-    let nav: number | null = null
-
-    if (accMeta?.initial_aum != null && Number(accMeta.initial_aum) > 0) {
-      // Mode A
-      const initialCapital = Number(accMeta.initial_aum)
-      const cumDeps = (allTxData ?? []).filter((t) => t.type === 'deposit').reduce((s, t) => s + Number(t.amount), 0)
-      const cumWith = (allTxData ?? []).filter((t) => t.type === 'withdrawal').reduce((s, t) => s + Number(t.amount), 0)
-      nav = (effectiveBalance - cumDeps + cumWith) / initialCapital
-    } else {
-      // Mode B: first ever snapshot for this account
-      const { data: firstBal } = await supabaseAdmin
-        .from('balances')
-        .select('usdt_balance, total_equity_usdt')
-        .eq('account_id', row.id)
-        .is('token_symbol', null)
-        .order('recorded_at', { ascending: true })
-        .limit(1)
-        .single()
-      const firstVal = firstBal
-        ? Number((firstBal as { total_equity_usdt?: number | null; usdt_balance: number }).total_equity_usdt ?? (firstBal as { usdt_balance: number }).usdt_balance)
-        : 0
-      if (firstVal > 0) nav = effectiveBalance / firstVal
-    }
-
-    if (nav !== null) {
-      await supabaseAdmin
-        .from('balances')
-        .update({ nav })
-        .eq('account_id', row.id)
-        .eq('recorded_at', recordedAt)
-        .is('token_symbol', null)
-      diag.nav = nav
-    }
-  } catch { /* non-critical — NAV stored on best-effort basis */ }
-
   await supabaseAdmin
     .from('accounts')
     .update({ last_incremental_sync_at: new Date().toISOString() })
