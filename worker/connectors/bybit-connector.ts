@@ -1,0 +1,188 @@
+import * as crypto from 'crypto'
+import type { FillProcessor, RawFill } from '../fill-processor'
+
+const WS_URL = 'wss://stream.bybit.com/v5/private'
+
+type ExecMsg = {
+  orderId:    string
+  execTime:   string
+  execQty:    string
+  symbol:     string
+  side:       string
+  execType:   string
+  execPrice:  string
+  execPnl:    string
+  execFee:    string
+  closedSize: string
+  positionIdx?: string
+}
+
+type WsMessage = {
+  topic?:  string
+  op?:     string
+  data?:   ExecMsg[]
+}
+
+export interface BybitConnectorOptions {
+  apiKey:         string
+  apiSecret:      string
+  accountId:      string
+  lastFillTime?:  number
+  fillProcessor:  FillProcessor
+  fetchGapFills?: (since: number, until: number) => Promise<RawFill[]>
+}
+
+export class BybitConnector {
+  private apiKey:        string
+  private apiSecret:     string
+  private accountId:     string
+  private lastFillTime:  number
+  private fillProcessor: FillProcessor
+  private fetchGapFillsFn?: (since: number, until: number) => Promise<RawFill[]>
+
+  private ws:             import('ws') | null = null
+  private pingTimer:      ReturnType<typeof setInterval> | null = null
+  private reconnectDelay: number = 1000
+  private destroyed:      boolean = false
+
+  constructor(opts: BybitConnectorOptions) {
+    this.apiKey        = opts.apiKey
+    this.apiSecret     = opts.apiSecret
+    this.accountId     = opts.accountId
+    this.lastFillTime  = opts.lastFillTime ?? 0
+    this.fillProcessor = opts.fillProcessor
+    this.fetchGapFillsFn = opts.fetchGapFills
+  }
+
+  // ── Public helpers (tested directly) ────────────────────────────────────
+
+  buildExecId(exec: Pick<ExecMsg, 'orderId' | 'execTime' | 'execQty'>): string {
+    return `${exec.orderId}_${exec.execTime}_${exec.execQty}`
+  }
+
+  buildFundingExecId(exec: Pick<ExecMsg, 'symbol' | 'execTime'>): string {
+    return `funding_${exec.symbol}_${exec.execTime}`
+  }
+
+  buildAuthPayload() {
+    const expires = Date.now() + 5000
+    const sign = crypto
+      .createHmac('sha256', this.apiSecret)
+      .update(`GET/realtime${expires}`)
+      .digest('hex')
+    return { op: 'auth', args: [this.apiKey, expires, sign] }
+  }
+
+  buildSubscribePayload() {
+    return {
+      op:   'subscribe',
+      args: ['execution.linear', 'execution.inverse', 'execution.spot'],
+    }
+  }
+
+  async handleMessage(msg: WsMessage): Promise<void> {
+    if (!msg.topic?.startsWith('execution.') || !Array.isArray(msg.data)) return
+    const category = msg.topic.split('.')[1] as 'linear' | 'inverse' | 'spot'
+
+    for (const exec of msg.data as ExecMsg[]) {
+      if (exec.execType !== 'Trade' && exec.execType !== 'Funding') continue
+
+      const isFunding = exec.execType === 'Funding'
+      const execId    = isFunding
+        ? this.buildFundingExecId(exec)
+        : this.buildExecId(exec)
+
+      const execPnlNum = Number(exec.execPnl)
+      const hasExecPnl = exec.execPnl !== undefined && exec.execPnl !== '' &&
+                         !isNaN(execPnlNum) && execPnlNum !== 0
+
+      const fill: RawFill = {
+        account_id:  this.accountId,
+        exchange:    'bybit',
+        exec_id:     execId,
+        symbol:      exec.symbol,
+        category,
+        exec_time:   new Date(Number(exec.execTime)),
+        side:        exec.side,
+        exec_qty:    Number(exec.execQty),
+        exec_price:  Number(exec.execPrice),
+        exec_pnl:    hasExecPnl ? execPnlNum : null,
+        exec_fee:    Number(exec.execFee),
+        closed_size: exec.closedSize ? Number(exec.closedSize) : null,
+        position_idx: null,
+        raw_data:    exec,
+        source:      'ws',
+      }
+      await this.fillProcessor.store(fill)
+    }
+  }
+
+  async runGapFill(since: number, until: number): Promise<void> {
+    if (!this.fetchGapFillsFn) return
+    const fills = await this.fetchGapFillsFn(since, until)
+    if (fills.length > 0) await this.fillProcessor.storeBatch(fills)
+  }
+
+  // ── WebSocket lifecycle ───────────────────────────────────────────────────
+
+  async connect(): Promise<void> {
+    if (this.destroyed) return
+    const WebSocket = (await import('ws')).default
+    const ws = new WebSocket(WS_URL)
+    this.ws = ws
+
+    ws.on('open', () => {
+      ws.send(JSON.stringify(this.buildAuthPayload()))
+    })
+
+    ws.on('message', async (data: Buffer | string) => {
+      try {
+        const msg = JSON.parse(data.toString()) as WsMessage
+        if (msg.op === 'auth' || msg.op === 'pong') {
+          if (msg.op === 'auth') ws.send(JSON.stringify(this.buildSubscribePayload()))
+          return
+        }
+        await this.handleMessage(msg)
+      } catch { /* malformed JSON — ignore */ }
+    })
+
+    ws.on('error', (err: Error) => {
+      console.error(`[bybit-connector] ws error: ${err.message}`)
+    })
+
+    ws.on('close', async () => {
+      this.stopPing()
+      if (!this.destroyed) await this.reconnect()
+    })
+
+    this.startPing(ws)
+  }
+
+  disconnect(): void {
+    this.destroyed = true
+    this.stopPing()
+    this.ws?.close()
+  }
+
+  private startPing(ws: import('ws')) {
+    this.pingTimer = setInterval(() => {
+      if (ws.readyState === (WebSocket as unknown as { OPEN: number }).OPEN) {
+        ws.send(JSON.stringify({ op: 'ping' }))
+      }
+    }, 20_000)
+    this.pingTimer.unref?.()
+  }
+
+  private stopPing() {
+    if (this.pingTimer) { clearInterval(this.pingTimer); this.pingTimer = null }
+  }
+
+  private async reconnect(): Promise<void> {
+    const since = this.lastFillTime
+    const until = Date.now()
+    await new Promise(r => setTimeout(r, this.reconnectDelay))
+    this.reconnectDelay = Math.min(this.reconnectDelay * 2, 60_000)
+    await this.runGapFill(since, until)
+    await this.connect()
+  }
+}
