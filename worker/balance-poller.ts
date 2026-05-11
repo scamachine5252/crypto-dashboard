@@ -49,16 +49,27 @@ async function pollBalances(): Promise<void> {
 
         if (!balance) return
 
-        const { error: upsertError } = await supabaseAdmin
+        const today = new Date().toISOString().split('T')[0]
+
+        // Delete today's record first (partial unique index on snapshot_date can't be used
+        // with onConflict in Supabase JS — delete+insert is the reliable alternative)
+        await supabaseAdmin
           .from('balances')
-          .upsert({
+          .delete()
+          .eq('account_id', acct.id)
+          .is('token_symbol', null)
+          .eq('snapshot_date', today)
+
+        const { error: insertError } = await supabaseAdmin
+          .from('balances')
+          .insert({
             account_id:   acct.id,
             usdt_balance: balance.usdt,
             recorded_at:  new Date().toISOString(),
-          }, { onConflict: 'account_id,snapshot_date' })
+          })
 
-        if (upsertError) {
-          console.warn(`[balance-poller] upsert failed for ${acct.id}:`, upsertError.message)
+        if (insertError) {
+          console.warn(`[balance-poller] insert failed for ${acct.id}:`, insertError.message)
         }
       } catch (e) {
         console.error(`[balance-poller] error for account ${acct.id}:`, (e as Error).message)

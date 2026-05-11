@@ -77,7 +77,7 @@ export class ConnectorManager {
         fillProcessor: this.processor,
       })
       this.connectors.push(connector)
-      await connector.connect()
+      void connector.connect()  // runs its own reconnect loop — do not await
       return
     }
 
@@ -88,7 +88,7 @@ export class ConnectorManager {
         fillProcessor: this.processor,
       })
       this.connectors.push(connector)
-      await connector.connect()
+      void connector.connect()  // runs its own reconnect loop — do not await
       return
     }
 
@@ -99,7 +99,7 @@ export class ConnectorManager {
         fillProcessor: this.processor,
       })
       this.connectors.push(connector)
-      await connector.connect()
+      void connector.connect()  // runs its own reconnect loop — do not await
       return
     }
 
