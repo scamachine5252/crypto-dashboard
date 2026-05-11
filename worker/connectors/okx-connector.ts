@@ -109,38 +109,53 @@ export class OkxConnector {
   // ── WebSocket lifecycle ───────────────────────────────────────────────────
 
   async connect(): Promise<void> {
-    if (this.destroyed) return
-    const WebSocket = (await import('ws')).default
-    const ws = new WebSocket(WS_URL)
-    this.ws = ws
+    while (!this.destroyed) {
+      await this.connectOnce()
+      if (this.destroyed) break
 
-    ws.on('open', () => {
-      ws.send(JSON.stringify(this.buildAuthPayload()))
+      await this.runGapFill(this.lastFillTime, Date.now())
+
+      await new Promise(r => setTimeout(r, this.reconnectDelay))
+      this.reconnectDelay = Math.min(this.reconnectDelay * 2, 60_000)
+      console.log(`[okx-connector] reconnecting in ${this.reconnectDelay}ms...`)
+    }
+  }
+
+  private connectOnce(): Promise<void> {
+    return new Promise(async (resolve) => {
+      const WebSocket = (await import('ws')).default
+      const ws = new WebSocket(WS_URL)
+      this.ws = ws
+
+      ws.on('open', () => {
+        this.reconnectDelay = 1000
+        ws.send(JSON.stringify(this.buildAuthPayload()))
+      })
+
+      ws.on('message', async (data: Buffer | string) => {
+        const raw = data.toString()
+        if (raw === 'pong') return
+        try {
+          const msg = JSON.parse(raw) as Record<string, unknown>
+          if (msg.event === 'login') {
+            ws.send(JSON.stringify(this.buildSubscribePayload()))
+            return
+          }
+          await this.handleMessage(msg)
+        } catch { /* malformed — ignore */ }
+      })
+
+      ws.on('error', (err: Error) => {
+        console.error(`[okx-connector] ws error: ${err.message}`)
+      })
+
+      ws.on('close', () => {
+        this.stopPing()
+        resolve()
+      })
+
+      this.startPing(ws)
     })
-
-    ws.on('message', async (data: Buffer | string) => {
-      const raw = data.toString()
-      if (raw === 'pong') return
-      try {
-        const msg = JSON.parse(raw) as Record<string, unknown>
-        if (msg.event === 'login') {
-          ws.send(JSON.stringify(this.buildSubscribePayload()))
-          return
-        }
-        await this.handleMessage(msg)
-      } catch { /* malformed — ignore */ }
-    })
-
-    ws.on('error', (err: Error) => {
-      console.error(`[okx-connector] ws error: ${err.message}`)
-    })
-
-    ws.on('close', async () => {
-      this.stopPing()
-      if (!this.destroyed) await this.reconnect()
-    })
-
-    this.startPing(ws)
   }
 
   disconnect(): void {
@@ -156,14 +171,5 @@ export class OkxConnector {
 
   private stopPing() {
     if (this.pingTimer) { clearInterval(this.pingTimer); this.pingTimer = null }
-  }
-
-  private async reconnect(): Promise<void> {
-    const since = this.lastFillTime
-    const until = Date.now()
-    await new Promise(r => setTimeout(r, this.reconnectDelay))
-    this.reconnectDelay = Math.min(this.reconnectDelay * 2, 60_000)
-    await this.runGapFill(since, until)
-    await this.connect()
   }
 }

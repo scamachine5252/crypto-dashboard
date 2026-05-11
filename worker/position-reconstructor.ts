@@ -76,6 +76,8 @@ async function upsertTrades(accountId: string, exchange: string, trades: Trade[]
 export class PositionReconstructor {
   async reconstruct(accountId: string, exchange: string): Promise<void> {
     if (exchange === 'bybit') {
+      // Spot fills (category='spot') are 1-fill=1-trade and written directly by the
+      // full sync route — no position reconstruction needed for spot.
       for (const category of ['linear', 'inverse'] as const) {
         const rows = await fetchAllFills(accountId, exchange, category)
         if (rows.length === 0) continue

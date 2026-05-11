@@ -24,13 +24,13 @@ export class ConnectorManager {
   private connectors:   Array<{ disconnect(): void }> = []
 
   constructor(redisUrl = 'redis://127.0.0.1:6379') {
-    this.redis     = new Redis(redisUrl)
-    this.processor = new FillProcessor(this.redis, {
+    this.redis        = new Redis(redisUrl)
+    this.reconstructor = new PositionReconstructor()
+    this.processor    = new FillProcessor(this.redis, {
       onReconstruct: (accountId, exchange) =>
         void this.reconstructor.reconstruct(accountId, exchange)
           .catch(e => console.error('[reconstructor] error:', e)),
     })
-    this.reconstructor = new PositionReconstructor()
   }
 
   async start(): Promise<void> {

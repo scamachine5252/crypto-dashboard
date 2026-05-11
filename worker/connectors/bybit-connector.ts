@@ -116,6 +116,8 @@ export class BybitConnector {
         source:      'ws',
       }
       await this.fillProcessor.store(fill)
+      const fillMs = fill.exec_time.getTime()
+      if (fillMs > this.lastFillTime) this.lastFillTime = fillMs
     }
   }
 
@@ -128,36 +130,52 @@ export class BybitConnector {
   // ── WebSocket lifecycle ───────────────────────────────────────────────────
 
   async connect(): Promise<void> {
-    if (this.destroyed) return
-    const WebSocket = (await import('ws')).default
-    const ws = new WebSocket(WS_URL)
-    this.ws = ws
+    while (!this.destroyed) {
+      await this.connectOnce()
+      if (this.destroyed) break
 
-    ws.on('open', () => {
-      ws.send(JSON.stringify(this.buildAuthPayload()))
+      // Gap-fill the window between last known fill and now before reconnecting
+      await this.runGapFill(this.lastFillTime, Date.now())
+
+      await new Promise(r => setTimeout(r, this.reconnectDelay))
+      this.reconnectDelay = Math.min(this.reconnectDelay * 2, 60_000)
+      console.log(`[bybit-connector] reconnecting in ${this.reconnectDelay}ms...`)
+    }
+  }
+
+  private connectOnce(): Promise<void> {
+    return new Promise(async (resolve) => {
+      const WebSocket = (await import('ws')).default
+      const ws = new WebSocket(WS_URL)
+      this.ws = ws
+
+      ws.on('open', () => {
+        this.reconnectDelay = 1000  // reset backoff on successful connection
+        ws.send(JSON.stringify(this.buildAuthPayload()))
+      })
+
+      ws.on('message', async (data: Buffer | string) => {
+        try {
+          const msg = JSON.parse(data.toString()) as Record<string, unknown>
+          if (msg.op === 'auth' || msg.op === 'pong') {
+            if (msg.op === 'auth') ws.send(JSON.stringify(this.buildSubscribePayload()))
+            return
+          }
+          await this.handleMessage(msg)
+        } catch { /* malformed JSON — ignore */ }
+      })
+
+      ws.on('error', (err: Error) => {
+        console.error(`[bybit-connector] ws error: ${err.message}`)
+      })
+
+      ws.on('close', () => {
+        this.stopPing()
+        resolve()
+      })
+
+      this.startPing(ws)
     })
-
-    ws.on('message', async (data: Buffer | string) => {
-      try {
-        const msg = JSON.parse(data.toString()) as Record<string, unknown>
-        if (msg.op === 'auth' || msg.op === 'pong') {
-          if (msg.op === 'auth') ws.send(JSON.stringify(this.buildSubscribePayload()))
-          return
-        }
-        await this.handleMessage(msg)
-      } catch { /* malformed JSON — ignore */ }
-    })
-
-    ws.on('error', (err: Error) => {
-      console.error(`[bybit-connector] ws error: ${err.message}`)
-    })
-
-    ws.on('close', async () => {
-      this.stopPing()
-      if (!this.destroyed) await this.reconnect()
-    })
-
-    this.startPing(ws)
   }
 
   disconnect(): void {
@@ -177,14 +195,5 @@ export class BybitConnector {
 
   private stopPing() {
     if (this.pingTimer) { clearInterval(this.pingTimer); this.pingTimer = null }
-  }
-
-  private async reconnect(): Promise<void> {
-    const since = this.lastFillTime
-    const until = Date.now()
-    await new Promise(r => setTimeout(r, this.reconnectDelay))
-    this.reconnectDelay = Math.min(this.reconnectDelay * 2, 60_000)
-    await this.runGapFill(since, until)
-    await this.connect()
   }
 }

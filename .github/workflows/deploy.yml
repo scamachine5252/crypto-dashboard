@@ -32,7 +32,7 @@ jobs:
             npm run build
 
             echo "==> Compiling worker"
-            npx tsc -p worker/tsconfig.json --outDir dist
+            npx tsc -p worker/tsconfig.json
 
             echo "==> Reloading PM2 processes"
             pm2 reload ecosystem.config.js --update-env

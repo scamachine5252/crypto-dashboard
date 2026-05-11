@@ -1,11 +1,25 @@
 // ---------------------------------------------------------------------------
 // Mocks
 // ---------------------------------------------------------------------------
-const mockSet   = jest.fn()
-const mockUpsert = jest.fn()
+const mockSet      = jest.fn()
+const mockDel      = jest.fn()
+const mockUpsert   = jest.fn()
+
+// Pipeline mock: exec() returns [[null, result], ...] per ioredis convention
+const mockPipelineSet  = jest.fn()
+const mockPipelineExec = jest.fn()
+const mockPipelineDel  = jest.fn()
 
 jest.mock('ioredis', () => {
-  return jest.fn().mockImplementation(() => ({ set: mockSet }))
+  return jest.fn().mockImplementation(() => ({
+    set:      mockSet,
+    del:      mockDel,
+    pipeline: jest.fn(() => ({
+      set:  mockPipelineSet,
+      del:  mockPipelineDel,
+      exec: mockPipelineExec,
+    })),
+  }))
 })
 
 jest.mock('@/lib/supabase/server', () => ({
@@ -93,10 +107,21 @@ describe('FillProcessor', () => {
     )
   })
 
+  it('throws and undoes Redis key when DB upsert fails', async () => {
+    mockSet.mockResolvedValue('OK')
+    mockDel.mockResolvedValue(1)
+    mockUpsert.mockResolvedValue({ error: { message: 'constraint violation' } })
+
+    await expect(processor.store(makeFill())).rejects.toThrow('constraint violation')
+    expect(mockDel).toHaveBeenCalledWith('fill:acc-1:bybit:order1_1234567890000_0.1')
+  })
+
   // ── storeBatch() ──────────────────────────────────────────────────────────
 
-  it('storeBatch: inserts all when none are duplicates', async () => {
-    mockSet.mockResolvedValue('OK')
+  it('storeBatch: uses pipeline for bulk Redis NX check', async () => {
+    // All three pass NX: pipeline exec returns [[null,'OK'],[null,'OK'],[null,'OK']]
+    mockPipelineSet.mockReturnValue({ set: mockPipelineSet, del: mockPipelineDel, exec: mockPipelineExec })
+    mockPipelineExec.mockResolvedValue([[null, 'OK'], [null, 'OK'], [null, 'OK']])
     mockUpsert.mockResolvedValue({ error: null })
 
     const fills = [
@@ -106,14 +131,18 @@ describe('FillProcessor', () => {
     ]
     const inserted = await processor.storeBatch(fills)
     expect(inserted).toBe(3)
-    expect(mockUpsert).toHaveBeenCalledTimes(3)
+    // Single batch upsert, not one per fill
+    expect(mockUpsert).toHaveBeenCalledTimes(1)
+    const upsertRows = mockUpsert.mock.calls[0][0]
+    expect(Array.isArray(upsertRows)).toBe(true)
+    expect(upsertRows).toHaveLength(3)
   })
 
-  it('storeBatch: skips duplicates (Redis returns null)', async () => {
-    mockSet
-      .mockResolvedValueOnce('OK')
-      .mockResolvedValueOnce(null)  // duplicate
-      .mockResolvedValueOnce('OK')
+  it('storeBatch: skips duplicates (pipeline NX returns null)', async () => {
+    // Middle fill is duplicate
+    mockPipelineSet.mockReturnValue({ set: mockPipelineSet, del: mockPipelineDel, exec: mockPipelineExec })
+    mockPipelineExec.mockResolvedValue([[null, 'OK'], [null, null], [null, 'OK']])
+    mockUpsert.mockResolvedValue({ error: null })
 
     const fills = [
       makeFill({ exec_id: 'id1' }),
@@ -122,28 +151,25 @@ describe('FillProcessor', () => {
     ]
     const inserted = await processor.storeBatch(fills)
     expect(inserted).toBe(2)
-    expect(mockUpsert).toHaveBeenCalledTimes(2)
+    const upsertRows = mockUpsert.mock.calls[0][0]
+    expect(upsertRows).toHaveLength(2)
+    expect(upsertRows.map((r: { exec_id: string }) => r.exec_id)).toEqual(['id1', 'id3'])
   })
 
-  it('storeBatch: returns 0 for empty input', async () => {
+  it('storeBatch: returns 0 for empty input without touching Redis', async () => {
     const inserted = await processor.storeBatch([])
     expect(inserted).toBe(0)
     expect(mockUpsert).not.toHaveBeenCalled()
+    expect(mockPipelineExec).not.toHaveBeenCalled()
   })
 
-  it('storeBatch: deduplicates within the batch itself (same exec_id twice)', async () => {
-    // First call: new; second call would also get 'OK' from Redis since it's a different key in test
-    // but same fill in the batch → processor should skip the second call if exec_id is same
-    mockSet.mockResolvedValue('OK')
-    mockUpsert.mockResolvedValue({ error: null })
-
-    const fill = makeFill({ exec_id: 'dup-id' })
-    const inserted = await processor.storeBatch([fill, fill])
-    // Redis NX will actually allow both since mockSet returns 'OK' for each call,
-    // but the second redis set for the same key in the same batch will be called.
-    // This is acceptable — the onConflict ignoreDuplicates handles it at DB level.
-    // The test verifies the count = number of successful Redis NX calls.
-    expect(inserted).toBe(2) // both get through since mockSet always returns 'OK'
+  it('storeBatch: returns 0 when all fills are duplicates', async () => {
+    mockPipelineSet.mockReturnValue({ set: mockPipelineSet, del: mockPipelineDel, exec: mockPipelineExec })
+    mockPipelineExec.mockResolvedValue([[null, null], [null, null]])
+    const fills = [makeFill({ exec_id: 'dup1' }), makeFill({ exec_id: 'dup2' })]
+    const inserted = await processor.storeBatch(fills)
+    expect(inserted).toBe(0)
+    expect(mockUpsert).not.toHaveBeenCalled()
   })
 
   // ── Redis key format ─────────────────────────────────────────────────────

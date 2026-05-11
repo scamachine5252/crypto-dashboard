@@ -21,6 +21,7 @@ systemctl enable redis-server --now
 # Bind Redis to localhost only (security)
 sed -i 's/^bind .*/bind 127.0.0.1/' /etc/redis/redis.conf
 systemctl restart redis-server
+systemctl is-active --quiet redis-server || { echo "ERROR: Redis failed to start after config change"; exit 1; }
 
 echo "==> Installing PM2"
 npm install -g pm2

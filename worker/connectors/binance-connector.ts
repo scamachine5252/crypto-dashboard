@@ -40,6 +40,8 @@ export class BinanceConnector {
   private fillProcessor:   FillProcessor
   private fetchGapFillsFn?: (since: number, until: number) => Promise<RawFill[]>
   private lastFillTime:    number
+  // apiSecret stored for future use if Binance adds HMAC-signed WS endpoints
+  private readonly _apiSecret: string
 
   private ws:              WebSocket | null = null
   private keepaliveTimer:  ReturnType<typeof setInterval> | null = null
@@ -49,6 +51,7 @@ export class BinanceConnector {
 
   constructor(opts: BinanceConnectorOptions) {
     this.apiKey          = opts.apiKey
+    this._apiSecret      = opts.apiSecret
     this.accountId       = opts.accountId
     this.portfolioMargin = opts.portfolioMargin
     this.fillProcessor   = opts.fillProcessor
@@ -78,6 +81,7 @@ export class BinanceConnector {
     const o = msg.o as OrderTradeUpdate['o']
     if (o.x !== 'TRADE') return
 
+    const rpNum = Number(o.rp)
     const fill: RawFill = {
       account_id:  this.accountId,
       exchange:    'binance',
@@ -88,7 +92,7 @@ export class BinanceConnector {
       side:        o.S,
       exec_qty:    Number(o.l),
       exec_price:  Number(o.L),
-      exec_pnl:    Number(o.rp),
+      exec_pnl:    rpNum !== 0 ? rpNum : null,  // 0 = opening fill (no realized PnL yet)
       exec_fee:    Math.abs(Number(o.n)),
       closed_size: null,
       position_idx: null,
@@ -96,6 +100,7 @@ export class BinanceConnector {
       source:      'ws',
     }
     await this.fillProcessor.store(fill)
+    if (o.T > this.lastFillTime) this.lastFillTime = o.T
   }
 
   async runGapFill(since: number, until: number): Promise<void> {
@@ -107,28 +112,54 @@ export class BinanceConnector {
   // ── WebSocket lifecycle ───────────────────────────────────────────────────
 
   async connect(): Promise<void> {
-    if (this.destroyed) return
-    this.listenKey = await this.createListenKey()
-    const WebSocket = (await import('ws')).default
-    const ws = new WebSocket(this.wsUrl(this.listenKey))
-    this.ws = ws
-
-    ws.on('message', async (data: Buffer | string) => {
+    while (!this.destroyed) {
       try {
-        await this.handleMessage(JSON.parse(data.toString()) as Record<string, unknown>)
-      } catch { /* ignore malformed */ }
-    })
+        this.listenKey = await this.createListenKey()
+      } catch (e) {
+        console.error(`[binance-connector] createListenKey failed: ${(e as Error).message}`)
+        await new Promise(r => setTimeout(r, this.reconnectDelay))
+        this.reconnectDelay = Math.min(this.reconnectDelay * 2, 60_000)
+        continue
+      }
 
-    ws.on('error', (err: Error) => {
-      console.error(`[binance-connector] ws error: ${err.message}`)
-    })
+      await this.connectOnce()
+      if (this.destroyed) break
 
-    ws.on('close', async () => {
-      this.stopKeepalive()
-      if (!this.destroyed) await this.reconnect()
-    })
+      await this.runGapFill(this.lastFillTime, Date.now())
 
-    this.startKeepalive()
+      await new Promise(r => setTimeout(r, this.reconnectDelay))
+      this.reconnectDelay = Math.min(this.reconnectDelay * 2, 60_000)
+      console.log(`[binance-connector] reconnecting in ${this.reconnectDelay}ms...`)
+    }
+  }
+
+  private connectOnce(): Promise<void> {
+    return new Promise(async (resolve) => {
+      const WebSocket = (await import('ws')).default
+      const ws = new WebSocket(this.wsUrl(this.listenKey))
+      this.ws = ws
+
+      ws.on('open', () => {
+        this.reconnectDelay = 1000
+      })
+
+      ws.on('message', async (data: Buffer | string) => {
+        try {
+          await this.handleMessage(JSON.parse(data.toString()) as Record<string, unknown>)
+        } catch { /* ignore malformed */ }
+      })
+
+      ws.on('error', (err: Error) => {
+        console.error(`[binance-connector] ws error: ${err.message}`)
+      })
+
+      ws.on('close', () => {
+        this.stopKeepalive()
+        resolve()
+      })
+
+      this.startKeepalive()
+    })
   }
 
   disconnect(): void {
@@ -142,17 +173,23 @@ export class BinanceConnector {
       method:  'POST',
       headers: { 'X-MBX-APIKEY': this.apiKey },
     })
+    if (!res.ok) {
+      const body = await res.text()
+      throw new Error(`listenKey creation failed (${res.status}): ${body}`)
+    }
     const json = await res.json() as { listenKey: string }
+    if (!json.listenKey) throw new Error('listenKey missing in Binance response')
     return json.listenKey
   }
 
   private async renewListenKey(): Promise<void> {
     try {
-      await fetch(this.listenKeyUrl(), {
+      const res = await fetch(this.listenKeyUrl(), {
         method:  'PUT',
         headers: { 'X-MBX-APIKEY': this.apiKey },
         body:    JSON.stringify({ listenKey: this.listenKey }),
       })
+      if (!res.ok) console.warn(`[binance-connector] listenKey renewal non-OK: ${res.status}`)
     } catch (e) {
       console.warn('[binance-connector] listenKey renewal failed:', e)
     }
@@ -165,14 +202,5 @@ export class BinanceConnector {
 
   private stopKeepalive() {
     if (this.keepaliveTimer) { clearInterval(this.keepaliveTimer); this.keepaliveTimer = null }
-  }
-
-  private async reconnect(): Promise<void> {
-    const since = this.lastFillTime
-    const until = Date.now()
-    await new Promise(r => setTimeout(r, this.reconnectDelay))
-    this.reconnectDelay = Math.min(this.reconnectDelay * 2, 60_000)
-    await this.runGapFill(since, until)
-    await this.connect()
   }
 }
