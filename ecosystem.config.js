@@ -14,7 +14,7 @@ module.exports = {
     },
     {
       name: 'sync-worker',
-      script: 'dist/worker/index.js',
+      script: 'dist/worker/worker/index.js',
       instances: 1,
       autorestart: true,
       max_restarts: 10,
