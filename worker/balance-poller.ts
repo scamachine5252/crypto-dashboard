@@ -24,8 +24,6 @@ async function pollBalances(): Promise<void> {
     return
   }
 
-  const today = new Date().toISOString().split('T')[0]
-
   await Promise.allSettled(
     (accounts ?? []).map(async (acct: AccountRow) => {
       try {
@@ -56,7 +54,6 @@ async function pollBalances(): Promise<void> {
           .upsert({
             account_id:   acct.id,
             usdt_balance: balance.usdt,
-            snapshot_date: today,
             recorded_at:  new Date().toISOString(),
           }, { onConflict: 'account_id,snapshot_date' })
 
