@@ -76,7 +76,9 @@ export class OkxConnector {
   }
 
   async handleMessage(msg: Record<string, unknown>): Promise<void> {
-    if (msg.event !== 'fills') return
+    // OKX data messages use { arg: { channel }, data: [...] }, not { event: 'fills' }
+    const arg = msg.arg as { channel?: string } | undefined
+    if (!arg || arg.channel !== 'fills') return
     const data = msg.data as OkxFill[] | undefined
     if (!Array.isArray(data)) return
 
