@@ -16,5 +16,5 @@
     "skipLibCheck": true
   },
   "include": ["../worker/**/*", "../lib/**/*"],
-  "exclude": ["../node_modules", "../app", "../components"]
+  "exclude": ["../node_modules", "../app", "../components", "../lib/__tests__", "../lib/auth-context.tsx", "../lib/theme-context.tsx"]
 }
