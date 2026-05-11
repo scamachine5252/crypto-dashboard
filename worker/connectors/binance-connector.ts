@@ -68,8 +68,9 @@ export class BinanceConnector {
   }
 
   wsUrl(listenKey: string): string {
-    const prefix = this.portfolioMargin ? 'pm' : 'ws'
-    return `${WS_BASE}/${prefix}/${listenKey}`
+    // PM stream path: /pm/ws/{key}  (not /pm/{key})
+    if (this.portfolioMargin) return `${WS_BASE}/pm/ws/${listenKey}`
+    return `${WS_BASE}/ws/${listenKey}`
   }
 
   buildExecId(tradeId: number): string {
