@@ -16,7 +16,7 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.HETZNER_IP }}
-          username: deploy
+          username: root
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             set -euo pipefail
@@ -33,9 +33,11 @@ jobs:
 
             echo "==> Compiling worker"
             npx tsc -p worker/tsconfig.json
+            npx tsc-alias -p worker/tsconfig.json
 
             echo "==> Reloading PM2 processes"
-            pm2 reload ecosystem.config.js --update-env
+            pm2 reload ecosystem.config.js --only next-app --update-env
+            pm2 restart sync-worker --update-env
 
             echo "==> Deploy complete"
             pm2 status
