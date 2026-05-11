@@ -28,14 +28,16 @@ if (!SUPABASE_URL || !SUPABASE_KEY || !ENC_KEY) {
   process.exit(1)
 }
 
-// ── Decrypt (mirrors lib/crypto/decrypt.ts) ───────────────────────────────────
+// ── Decrypt (mirrors lib/crypto/decrypt.ts) — format: iv:authTag:ciphertext ──
 function decrypt(ciphertext) {
-  const buf     = Buffer.from(ciphertext, 'hex')
-  const iv      = buf.subarray(0, 12)
-  const tag     = buf.subarray(12, 28)
-  const data    = buf.subarray(28)
-  const key     = Buffer.from(ENC_KEY, 'hex')
-  const cipher  = createDecipheriv('aes-256-gcm', key, iv)
+  const parts = ciphertext.split(':')
+  if (parts.length !== 3) throw new Error(`Invalid format (expected iv:tag:data, got ${parts.length} parts)`)
+  const [ivHex, tagHex, dataHex] = parts
+  const key    = Buffer.from(ENC_KEY, 'hex')
+  const iv     = Buffer.from(ivHex, 'hex')
+  const tag    = Buffer.from(tagHex, 'hex')
+  const data   = Buffer.from(dataHex, 'hex')
+  const cipher = createDecipheriv('aes-256-gcm', key, iv)
   cipher.setAuthTag(tag)
   return Buffer.concat([cipher.update(data), cipher.final()]).toString('utf8')
 }
