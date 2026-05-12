@@ -16,12 +16,39 @@ jest.mock('@/lib/supabase/server', () => ({
   },
 }))
 
-// mock 'server-only' so bybit adapter can be imported
+// mock 'server-only' so bybit/binance adapters can be imported
 jest.mock('server-only', () => ({}))
 
 import { PositionReconstructor } from '../position-reconstructor'
 
-// Minimal raw_fill DB rows that reconstructPositions() can consume
+// ---------------------------------------------------------------------------
+// Chain builder — supports any number of .eq() calls before .order().range()
+// ---------------------------------------------------------------------------
+function makeFlexibleSelectChain(pages: unknown[][]) {
+  let callCount = 0
+  const rangeFn = jest.fn().mockImplementation(() => {
+    const data = pages[callCount] ?? []
+    callCount++
+    return Promise.resolve({ data, error: null })
+  })
+  const orderFn = jest.fn().mockReturnValue({ range: rangeFn })
+
+  const makeEqResult = (): { eq: jest.Mock; order: jest.Mock } => {
+    const result: { eq: jest.Mock; order: jest.Mock } = {
+      eq:    jest.fn().mockImplementation(() => makeEqResult()),
+      order: orderFn,
+    }
+    return result
+  }
+
+  const selectFn = jest.fn().mockReturnValue(makeEqResult())
+  return { selectFn, rangeFn }
+}
+
+// ---------------------------------------------------------------------------
+// Row helpers
+// ---------------------------------------------------------------------------
+
 function makeLinearFillRow(overrides: Record<string, unknown> = {}) {
   return {
     exec_time:   '2025-01-01T00:00:00.000Z',
@@ -32,7 +59,7 @@ function makeLinearFillRow(overrides: Record<string, unknown> = {}) {
     exec_pnl:    null,
     exec_fee:    0.5,
     closed_size: 0,
-    raw_data:    {
+    raw_data: {
       execTime:   '1735689600000',
       symbol:     'BTCUSDT',
       side:       'Buy',
@@ -48,15 +75,52 @@ function makeLinearFillRow(overrides: Record<string, unknown> = {}) {
   }
 }
 
-function makeSelectChain(rows: unknown[]) {
-  // Simulate paginated Supabase chain: .select().eq().eq().order().range()
-  const rangeFn = jest.fn().mockResolvedValue({ data: rows, error: null })
-  const orderFn = jest.fn().mockReturnValue({ range: rangeFn })
-  const eq2Fn   = jest.fn().mockReturnValue({ order: orderFn })
-  const eq1Fn   = jest.fn().mockReturnValue({ eq: eq2Fn })
-  const selectFn = jest.fn().mockReturnValue({ eq: eq1Fn })
-  return { selectFn, rangeFn, orderFn, eq1Fn, eq2Fn }
+function makeBinanceFillRow(overrides: Record<string, unknown> = {}) {
+  return {
+    exec_time:  '2025-01-01T10:00:00.000Z',
+    symbol:     'BTCUSDT',
+    side:       'BUY',
+    exec_qty:   0.01,
+    exec_price: 50000,
+    exec_pnl:   0,
+    exec_fee:   0.5,
+    category:   'BOTH',
+    raw_data: {
+      symbol:          'BTCUSDT',
+      side:            'BUY',
+      price:           '50000',
+      qty:             '0.01',
+      realizedPnl:     '0',
+      commission:      '0.5',
+      commissionAsset: 'USDT',
+      time:            1735725600000,
+      positionSide:    'BOTH',
+      orderId:         123456,
+      id:              789,
+    },
+    ...overrides,
+  }
 }
+
+function makeOkxFillRow(overrides: Record<string, unknown> = {}) {
+  return {
+    exec_time:  '2025-01-01T10:00:00.000Z',
+    symbol:     'BTC-USDT-SWAP',
+    side:       'buy',
+    exec_qty:   0.01,
+    exec_price: 50000,
+    exec_pnl:   100,
+    exec_fee:   0.5,
+    category:   'futures',
+    exec_id:    'fill-okx-001',
+    raw_data:   { fillId: 'fill-okx-001', instId: 'BTC-USDT-SWAP', pnl: '100' },
+    ...overrides,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 describe('PositionReconstructor', () => {
   let reconstructor: PositionReconstructor
@@ -68,8 +132,8 @@ describe('PositionReconstructor', () => {
 
   // ── empty raw_fills ───────────────────────────────────────────────────────
 
-  it('does not upsert if raw_fills is empty', async () => {
-    const { selectFn } = makeSelectChain([])
+  it('does not upsert if raw_fills is empty (bybit)', async () => {
+    const { selectFn } = makeFlexibleSelectChain([[], []])
     mockFromSelect.mockImplementation(selectFn)
     mockUpsert.mockResolvedValue({ error: null })
 
@@ -81,52 +145,26 @@ describe('PositionReconstructor', () => {
   // ── pagination ────────────────────────────────────────────────────────────
 
   it('fetches all pages until an empty page is returned', async () => {
-    // First page: 1000 rows; second page: 0 rows (end)
     const page1 = Array.from({ length: 1000 }, (_, i) =>
-      makeLinearFillRow({ exec_time: `2025-01-01T${String(i).padStart(2, '0').slice(-2)}:00:00.000Z` })
+      makeLinearFillRow({ exec_time: `2025-01-01T${String(i % 24).padStart(2, '0')}:00:00.000Z` })
     )
-
-    // page1 for linear[0], empty for linear[1] + all inverse pages
-    const rangeFn = jest.fn()
-      .mockResolvedValueOnce({ data: page1, error: null })
-      .mockResolvedValue({ data: [], error: null })
-    const orderFn = jest.fn().mockReturnValue({ range: rangeFn })
-    const eq2Fn   = jest.fn().mockReturnValue({ order: orderFn })
-    const eq1Fn   = jest.fn().mockReturnValue({ eq: eq2Fn })
-    mockFromSelect.mockReturnValue({ eq: eq1Fn })
-
+    // linear: page0=1000 rows, page1=empty; inverse: page0=empty
+    const { selectFn, rangeFn } = makeFlexibleSelectChain([page1, [], []])
+    mockFromSelect.mockImplementation(selectFn)
     mockUpsert.mockResolvedValue({ error: null })
 
     await reconstructor.reconstruct('acc-1', 'bybit')
 
-    // rangeFn called 3 times: linear page 0 (1000 rows), linear page 1 (empty), inverse page 0 (empty)
+    // rangeFn called 3 times: linear[0]=1000, linear[1]=empty, inverse[0]=empty
     expect(rangeFn).toHaveBeenCalledTimes(3)
     expect(rangeFn.mock.calls[0]).toEqual([0, 999])
     expect(rangeFn.mock.calls[1]).toEqual([1000, 1999])
   })
 
-  // ── Binance reconstruct ───────────────────────────────────────────────────
+  // ── Bybit upsert shape ────────────────────────────────────────────────────
 
-  it('handles binance exchange without throwing', async () => {
-    const { selectFn } = makeSelectChain([])
-    mockFromSelect.mockImplementation(selectFn)
-    mockUpsert.mockResolvedValue({ error: null })
-
-    await expect(reconstructor.reconstruct('acc-1', 'binance')).resolves.not.toThrow()
-  })
-
-  // ── unsupported exchange ──────────────────────────────────────────────────
-
-  it('returns without error for an unsupported exchange', async () => {
-    await expect(reconstructor.reconstruct('acc-1', 'mexc')).resolves.not.toThrow()
-    expect(mockFromSelect).not.toHaveBeenCalled()
-  })
-
-  // ── upsert called with correct shape ─────────────────────────────────────
-
-  it('calls upsert on trades table with account_id and exchange', async () => {
-    // A buy (open) + sell (close) pair forms one complete trade
-    const openFill  = makeLinearFillRow({
+  it('calls upsert on trades table with account_id and exchange (bybit)', async () => {
+    const openFill = makeLinearFillRow({
       raw_data: {
         execTime: '1735689600000', symbol: 'BTCUSDT', side: 'Buy',
         execType: 'Trade', execPrice: '50000', execQty: '0.1',
@@ -142,14 +180,9 @@ describe('PositionReconstructor', () => {
       },
     })
 
-    const rangeFn = jest.fn()
-      .mockResolvedValueOnce({ data: [openFill, closeFill], error: null })
-      .mockResolvedValueOnce({ data: [], error: null })
-    const orderFn = jest.fn().mockReturnValue({ range: rangeFn })
-    const eq2Fn   = jest.fn().mockReturnValue({ order: orderFn })
-    const eq1Fn   = jest.fn().mockReturnValue({ eq: eq2Fn })
-    mockFromSelect.mockReturnValue({ eq: eq1Fn })
-
+    // linear: [openFill, closeFill], then empty; inverse: empty
+    const { selectFn } = makeFlexibleSelectChain([[openFill, closeFill], [], []])
+    mockFromSelect.mockImplementation(selectFn)
     mockUpsert.mockResolvedValue({ error: null })
 
     await reconstructor.reconstruct('acc-1', 'bybit')
@@ -161,8 +194,91 @@ describe('PositionReconstructor', () => {
       expect(rows[0]).toMatchObject({
         account_id: 'acc-1',
         exchange:   'bybit',
-        symbol:     'BTC/USDT:USDT',  // bybitIdToSymbol('BTCUSDT', 'linear') → 'BTC/USDT:USDT'
+        symbol:     'BTC/USDT:USDT',
       })
     }
+  })
+
+  // ── Binance reconstruction ────────────────────────────────────────────────
+
+  it('binance: reconstructs trades from raw_fills grouped by symbol', async () => {
+    const openFill = makeBinanceFillRow({
+      raw_data: {
+        symbol: 'BTCUSDT', side: 'BUY', price: '50000', qty: '0.01',
+        realizedPnl: '0', commission: '0.5', commissionAsset: 'USDT',
+        time: 1735725600000, positionSide: 'BOTH', orderId: 1, id: 1,
+      },
+    })
+    const closeFill = makeBinanceFillRow({
+      exec_time: '2025-01-01T11:00:00.000Z',
+      exec_pnl:  100,
+      raw_data: {
+        symbol: 'BTCUSDT', side: 'SELL', price: '51000', qty: '0.01',
+        realizedPnl: '100', commission: '0.5', commissionAsset: 'USDT',
+        time: 1735729200000, positionSide: 'BOTH', orderId: 2, id: 2,
+      },
+    })
+
+    const { selectFn } = makeFlexibleSelectChain([[openFill, closeFill], []])
+    mockFromSelect.mockImplementation(selectFn)
+    mockUpsert.mockResolvedValue({ error: null })
+
+    await reconstructor.reconstruct('acc-1', 'binance')
+
+    expect(mockUpsert).toHaveBeenCalled()
+    const rows = mockUpsert.mock.calls[0][0]
+    expect(Array.isArray(rows)).toBe(true)
+    expect(rows.length).toBeGreaterThan(0)
+    expect(rows[0]).toMatchObject({
+      account_id: 'acc-1',
+      exchange:   'binance',
+      pnl:        100,
+    })
+  })
+
+  it('binance: does not upsert if raw_fills is empty', async () => {
+    const { selectFn } = makeFlexibleSelectChain([[]])
+    mockFromSelect.mockImplementation(selectFn)
+    mockUpsert.mockResolvedValue({ error: null })
+
+    await reconstructor.reconstruct('acc-1', 'binance')
+
+    expect(mockUpsert).not.toHaveBeenCalled()
+  })
+
+  // ── OKX reconstruction ────────────────────────────────────────────────────
+
+  it('okx: maps each raw_fill to one trade row', async () => {
+    const fill1 = makeOkxFillRow({ exec_id: 'fill-001', exec_pnl: 50 })
+    const fill2 = makeOkxFillRow({ exec_id: 'fill-002', exec_pnl: -20, side: 'sell' })
+
+    const { selectFn } = makeFlexibleSelectChain([[fill1, fill2], []])
+    mockFromSelect.mockImplementation(selectFn)
+    mockUpsert.mockResolvedValue({ error: null })
+
+    await reconstructor.reconstruct('acc-1', 'okx')
+
+    expect(mockUpsert).toHaveBeenCalled()
+    const rows = mockUpsert.mock.calls[0][0]
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toMatchObject({ account_id: 'acc-1', exchange: 'okx' })
+    expect(rows[1].side).toBe('sell')
+  })
+
+  it('okx: does not upsert if raw_fills is empty', async () => {
+    const { selectFn } = makeFlexibleSelectChain([[]])
+    mockFromSelect.mockImplementation(selectFn)
+    mockUpsert.mockResolvedValue({ error: null })
+
+    await reconstructor.reconstruct('acc-1', 'okx')
+
+    expect(mockUpsert).not.toHaveBeenCalled()
+  })
+
+  // ── unsupported exchange ──────────────────────────────────────────────────
+
+  it('returns without error for an unsupported exchange (mexc)', async () => {
+    await expect(reconstructor.reconstruct('acc-1', 'mexc')).resolves.not.toThrow()
+    expect(mockFromSelect).not.toHaveBeenCalled()
   })
 })

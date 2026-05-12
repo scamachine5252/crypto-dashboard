@@ -1,6 +1,7 @@
 import { supabaseAdmin } from '@/lib/supabase/server'
 import { reconstructPositions, type RawExecution } from '@/lib/adapters/bybit'
-import type { Trade } from '@/lib/types'
+import { reconstructBinanceTrades, type RawFapiTrade } from '@/lib/adapters/binance'
+import type { Trade, TradeType } from '@/lib/types'
 
 const PAGE_SIZE = 1000
 
@@ -23,20 +24,44 @@ function rowToRawExecution(row: Record<string, unknown>): RawExecution {
   }
 }
 
+function rowToRawFapiTrade(row: Record<string, unknown>): RawFapiTrade {
+  const raw = (row.raw_data ?? {}) as Record<string, unknown>
+  return {
+    symbol:          String(raw.symbol          ?? row.symbol       ?? ''),
+    side:            String(raw.side            ?? row.side         ?? 'BUY'),
+    price:           String(raw.price           ?? row.exec_price   ?? '0'),
+    qty:             String(raw.qty             ?? row.exec_qty     ?? '0'),
+    realizedPnl:     String(raw.realizedPnl     ?? row.exec_pnl     ?? '0'),
+    commission:      String(raw.commission      ?? row.exec_fee     ?? '0'),
+    commissionAsset: String(raw.commissionAsset ?? 'USDT'),
+    time:            Number(raw.time            ?? new Date(String(row.exec_time ?? 0)).getTime()),
+    positionSide:    String(raw.positionSide    ?? row.category     ?? 'BOTH'),
+    orderId:         Number(raw.orderId         ?? 0),
+    id:              Number(raw.id              ?? 0),
+  }
+}
+
 async function fetchAllFills(
   accountId: string,
   exchange: string,
-  category: string,
+  category?: string,
 ): Promise<Record<string, unknown>[]> {
   const fills: Record<string, unknown>[] = []
   let offset = 0
 
   while (true) {
-    const { data, error } = await supabaseAdmin
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let query: any = supabaseAdmin
       .from('raw_fills')
       .select('*')
       .eq('account_id', accountId)
-      .eq('category', category)
+      .eq('exchange', exchange)
+
+    if (category !== undefined) {
+      query = query.eq('category', category)
+    }
+
+    const { data, error } = await query
       .order('exec_time', { ascending: true })
       .range(offset, offset + PAGE_SIZE - 1)
 
@@ -89,13 +114,64 @@ export class PositionReconstructor {
     }
 
     if (exchange === 'binance') {
-      // Binance reconstruction deferred — trades are written directly by the
-      // full sync route using reconstructBinanceTrades(). Future: read raw_fills
-      // grouped by symbol and call reconstructBinanceTrades() per symbol.
+      const rows = await fetchAllFills(accountId, exchange)
+      if (rows.length === 0) return
+
+      // Group fills by symbol, reconstruct positions per symbol
+      const bySymbol = new Map<string, Record<string, unknown>[]>()
+      for (const row of rows) {
+        const sym = String(row.symbol ?? '')
+        if (!bySymbol.has(sym)) bySymbol.set(sym, [])
+        bySymbol.get(sym)!.push(row)
+      }
+
+      for (const [rawSymbol, symbolRows] of bySymbol) {
+        const fills  = symbolRows.map(rowToRawFapiTrade)
+        const trades = reconstructBinanceTrades(fills, rawSymbol)
+        await upsertTrades(accountId, exchange, trades)
+      }
       return
     }
 
-    // OKX / MEXC: spot fills are already 1-fill = 1-trade; no reconstruction needed.
-    // Trades are written directly by full sync routes.
+    if (exchange === 'okx') {
+      const rows = await fetchAllFills(accountId, exchange)
+      if (rows.length === 0) return
+
+      const trades: Trade[] = rows.map(row => {
+        const sideRaw  = String(row.side ?? 'buy').toLowerCase()
+        const symbol   = String(row.symbol ?? '')
+        const cat      = String(row.category ?? '')
+        const tradeType: TradeType = (
+          cat === 'futures' ||
+          symbol.includes('SWAP') ||
+          symbol.includes('FUTURES')
+        ) ? 'futures' : 'spot'
+
+        return {
+          id:           String(row.exec_id ?? ''),
+          subAccountId: 'okx',
+          exchangeId:   'okx' as const,
+          symbol,
+          side:         sideRaw === 'buy' ? 'long' : 'short',
+          tradeType,
+          entryPrice:   Number(row.exec_price ?? 0),
+          exitPrice:    Number(row.exec_price ?? 0),
+          quantity:     Number(row.exec_qty   ?? 0),
+          pnl:          Number(row.exec_pnl   ?? 0),
+          pnlPercent:   0,
+          fee:          Number(row.exec_fee   ?? 0),
+          durationMin:  0,
+          leverage:     1,
+          fundingCost:  0,
+          isOvernight:  false,
+          openedAt:     String(row.exec_time ?? new Date().toISOString()),
+          closedAt:     String(row.exec_time ?? new Date().toISOString()),
+        }
+      })
+      await upsertTrades(accountId, exchange, trades)
+      return
+    }
+
+    // MEXC: REST-only, full sync route handles trades directly. No WS fills to reconstruct.
   }
 }
