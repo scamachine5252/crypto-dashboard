@@ -279,6 +279,14 @@ export default function ApiSettingsPage() {
           body: JSON.stringify({ account_id: accountId, failed_count: allFailed.length }),
         })
 
+        try {
+          await fetch('/api/sync/reconstruct', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ account_id: accountId }),
+          })
+        } catch { /* non-fatal — reconstruction will happen on next WS fill */ }
+
         setScanState((prev) => ({
           ...prev,
           [accountId]: { current: symbols.length, total: symbols.length, failed: allFailed, completed: true },
@@ -334,6 +342,14 @@ export default function ApiSettingsPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ account_id: accountId, failed_count: allFailed.length }),
         })
+
+        try {
+          await fetch('/api/sync/reconstruct', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ account_id: accountId }),
+          })
+        } catch { /* non-fatal — reconstruction will happen on next WS fill */ }
 
         setScanState((prev) => ({
           ...prev,
