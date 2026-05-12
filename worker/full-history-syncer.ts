@@ -125,13 +125,8 @@ export class FullHistorySyncer {
         .from('full_sync_jobs')
         .update({ status: 'completed', completed_at: new Date().toISOString() })
         .eq('id', jobId)
-      await supabaseAdmin
-        .from('accounts')
-        .update({
-          last_full_sync_at:      new Date().toISOString(),
-          full_sync_failed_count: syncJob.failed_items?.length ?? 0,
-        })
-        .eq('id', syncJob.account_id)
+      // accounts.last_full_sync_at and full_sync_failed_count are written by the
+      // exchange-specific PATCH routes called inside syncBinance/syncChunked.
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       console.error('[full-history-syncer] sync failed:', message)
