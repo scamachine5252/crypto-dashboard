@@ -51,6 +51,33 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: message }, { status: 500 })
   }
 
+  // ── Store raw fills (idempotent, best-effort) ────────────────────────────────
+  if (trades.length > 0) {
+    const fillRows = trades.map((t: Trade) => ({
+      account_id:  accountId,
+      exchange:    'mexc',
+      exec_id:     t.id,
+      symbol:      t.symbol,
+      category:    t.tradeType,
+      exec_time:   t.closedAt,
+      side:        t.side === 'long' ? 'buy' : 'sell',
+      exec_qty:    t.quantity,
+      exec_price:  t.exitPrice,
+      exec_pnl:    t.pnl,
+      exec_fee:    Math.abs(t.fee),
+      closed_size: null,
+      position_idx: null,
+      raw_data:    { id: t.id, symbol: t.symbol, pnl: t.pnl },
+      source:      'rest' as const,
+    }))
+    const { error: fillsError } = await supabaseAdmin
+      .from('raw_fills')
+      .upsert(fillRows, { onConflict: 'account_id,exchange,exec_id', ignoreDuplicates: true })
+    if (fillsError) {
+      console.warn('[mexc/full] raw_fills upsert warning:', fillsError.message)
+    }
+  }
+
   let synced = 0
   if (trades.length > 0) {
     const seen = new Set<string>()
