@@ -61,7 +61,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       exec_id:     String(f.id),
       symbol:      f.symbol,
       category:    f.positionSide,  // 'LONG'/'SHORT'/'BOTH' — hedge/one-way signal
-      exec_time:   new Date(f.time).toISOString(),
+      exec_time:   f.time != null ? new Date(Number(f.time)).toISOString() : new Date().toISOString(),
       side:        f.side,
       exec_qty:    Number(f.qty),
       exec_price:  Number(f.price),
