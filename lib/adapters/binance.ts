@@ -499,24 +499,43 @@ export class BinanceAdapter implements ExchangeAdapter {
     try {
       let rows: Array<{ symbol: string; time: number }>
       if (this.isPortfolioMargin) {
-        // Daily windows (180 days × UM + CM) for complete symbol discovery.
-        // Processed in batches of 10 days (20 parallel requests) to respect rate limits.
-        // Weekly windows risk capping at limit=1000 on high-volume accounts.
-        const BATCH_SIZE = 10
+        // 26 × 7-day windows (UM + CM in parallel) = 52 base requests.
+        // Time-based pagination within each window handles the 1000-row cap for
+        // high-volume accounts, keeping total requests low to avoid nginx timeouts.
+        const fetchIncomePage = (
+          fetchFn: (p: Record<string, unknown>) => Promise<Array<{ symbol: string; time: number }>>,
+          startTime: number,
+          endTime: number,
+        ): Promise<Array<{ symbol: string; time: number }>> =>
+          fetchFn({ incomeType: 'REALIZED_PNL', startTime, endTime, limit: 1000 }).catch(() => [])
+
         const allRows: Array<{ symbol: string; time: number }> = []
-        for (let batchStart = 0; batchStart < 180; batchStart += BATCH_SIZE) {
-          const batchEnd = Math.min(batchStart + BATCH_SIZE, 180)
-          const batchPromises: Promise<Array<{ symbol: string; time: number }>>[] = []
-          for (let d = batchStart; d < batchEnd; d++) {
-            const dayStart = scanStart + d * DAY
-            const dayEnd   = Math.min(dayStart + DAY, Date.now())
-            batchPromises.push(
-              fapi.papiGetUmIncome({ incomeType: 'REALIZED_PNL', startTime: dayStart, endTime: dayEnd, limit: 1000 }).catch(() => []),
-              fapi.papiGetCmIncome({ incomeType: 'REALIZED_PNL', startTime: dayStart, endTime: dayEnd, limit: 1000 }).catch(() => []),
-            )
+        for (let week = 0; week < 26; week++) {
+          const wStart = scanStart + week * WINDOW
+          const wEnd   = Math.min(wStart + WINDOW, Date.now())
+          if (wStart >= Date.now()) break
+
+          // Fetch UM + CM for this week in parallel, each with pagination if capped at 1000.
+          const fetchWindowIncome = async (
+            fetchFn: (p: Record<string, unknown>) => Promise<Array<{ symbol: string; time: number }>>,
+          ): Promise<Array<{ symbol: string; time: number }>> => {
+            const acc: Array<{ symbol: string; time: number }> = []
+            let cursor = wStart
+            while (true) {
+              const page = await fetchIncomePage(fetchFn, cursor, wEnd)
+              acc.push(...page)
+              if (page.length < 1000) break
+              cursor = page[page.length - 1].time + 1
+              if (cursor >= wEnd) break
+            }
+            return acc
           }
-          const batchResults = await Promise.all(batchPromises)
-          allRows.push(...batchResults.flat())
+
+          const [umRows, cmRows] = await Promise.all([
+            fetchWindowIncome((p) => fapi.papiGetUmIncome(p)),
+            fetchWindowIncome((p) => fapi.papiGetCmIncome(p)),
+          ])
+          allRows.push(...umRows, ...cmRows)
         }
         rows = allRows
       } else {

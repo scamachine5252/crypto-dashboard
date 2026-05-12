@@ -43,7 +43,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     portfolioMargin: isPortfolioMargin,
   })
 
-  const { trades, failedSymbols, rawFills } = await adapter.getFullTrades(symbol.trim(), weeks)
+  let trades: Trade[], failedSymbols: { symbol: string; error: string }[], rawFills: import('@/lib/adapters/binance').RawFapiTrade[]
+  try {
+    ;({ trades, failedSymbols, rawFills } = await adapter.getFullTrades(symbol.trim(), weeks))
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error('[binance/full] getFullTrades error:', message)
+    return NextResponse.json({ error: message }, { status: 500 })
+  }
 
   // ── Store raw fills (idempotent, best-effort) ────────────────────────────────
   // exec_id = tradeId (field 'id') — unique fill ID from Binance FAPI/PAPI.
