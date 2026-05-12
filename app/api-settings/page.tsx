@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import type { ExchangeId } from '@/lib/types'
 import Header from '@/components/layout/Header'
 
@@ -178,6 +178,14 @@ export default function ApiSettingsPage() {
   type BackfillEntry = { phase: 'balance' | 'transactions'; current: number; total: number; completed?: boolean; isError?: boolean; errorMsg?: string }
   const [backfillState, setBackfillState] = useState<Record<string, BackfillEntry>>({})
 
+  // Stores interval IDs per accountId — cleared on unmount to prevent memory leaks
+  const pollingIntervals = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map())
+
+  useEffect(() => {
+    return () => {
+      pollingIntervals.current.forEach((id) => clearInterval(id))
+    }
+  }, [])
 
   // ---------------------------------------------------------------------------
   // Load accounts from API on mount
@@ -200,168 +208,78 @@ export default function ApiSettingsPage() {
   useEffect(() => { fetchAccounts() }, [fetchAccounts])
 
   // ---------------------------------------------------------------------------
-  // Full history scan — exchange-aware chunked sync
-  // Binance: iterates symbol chunks (shows symbol progress)
-  // Bybit/OKX: iterates 30-day time chunks (shows chunk progress)
+  // Poll job status every 2s until completed/failed
   // ---------------------------------------------------------------------------
-  const handleFullScan = useCallback(async (accountId: string, exchange: string) => {
+  const startPolling = useCallback((accountId: string, jobId: string) => {
+    const existing = pollingIntervals.current.get(accountId)
+    if (existing) clearInterval(existing)
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/sync/job/${jobId}`)
+        if (!res.ok) return
+        const job = await res.json() as {
+          status:        string
+          current_step:  number
+          total_steps:   number
+          failed_items:  Array<{ symbol: string; error: string }>
+          error_message: string | null
+        }
+
+        setScanState((prev) => ({
+          ...prev,
+          [accountId]: {
+            current:   job.current_step,
+            total:     job.total_steps,
+            failed:    job.failed_items,
+            completed: job.status === 'completed',
+            isError:   job.status === 'failed',
+            errorMsg:  job.error_message ?? undefined,
+          },
+        }))
+
+        if (job.status === 'completed' || job.status === 'failed') {
+          clearInterval(interval)
+          pollingIntervals.current.delete(accountId)
+          await fetchAccounts()
+        }
+      } catch { /* transient network error — next poll will retry */ }
+    }, 2000)
+
+    pollingIntervals.current.set(accountId, interval)
+  }, [fetchAccounts])
+
+  // ---------------------------------------------------------------------------
+  // Full history scan — enqueues job in worker, polls status
+  // ---------------------------------------------------------------------------
+  const handleFullScan = useCallback(async (accountId: string) => {
     setScanState((prev) => ({ ...prev, [accountId]: { current: 0, total: 0, failed: [] } }))
 
     try {
-      const allFailed: { symbol: string; error: string }[] = []
+      const enqueueRes = await fetch('/api/sync/enqueue', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ account_id: accountId }),
+      })
 
-      if (exchange === 'binance') {
-        // Auto-detect instrument before scanning — ensures PM accounts use the
-        // correct adapter regardless of what was stored at account creation time.
-        // This is silent: if ping fails we proceed with whatever is in DB.
-        try {
-          const pingRes = await fetch(`/api/exchanges/binance/ping`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ account_id: accountId }),
-          })
-          if (pingRes.ok) {
-            const pingJson = await pingRes.json() as { instrument?: string }
-            if (pingJson.instrument) {
-              // Update the badge in the accounts list immediately
-              setAccounts((prev) => prev.map((a) =>
-                a.id === accountId ? { ...a, instrument: pingJson.instrument! } : a,
-              ))
-            }
-          }
-        } catch { /* non-fatal */ }
-
-        // Binance: discover all traded symbols first (one income call for 180d),
-        // then process each symbol individually across 26 7-day windows.
-        // Each Vercel call = 26 userTrades requests = always <10s (Hobby-safe).
-        setScanState((prev) => ({
-          ...prev,
-          [accountId]: { current: 0, total: 0, failed: [] },
-        }))
-
-        const discoverRes = await fetch('/api/sync/binance/discover', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ account_id: accountId }),
-        })
-        if (!discoverRes.ok) throw new Error('Failed to discover traded symbols')
-        const { symbols } = (await discoverRes.json()) as {
-          symbols: { rawSymbol: string; weekIndices: number[] }[]
-        }
-
-        setScanState((prev) => ({
-          ...prev,
-          [accountId]: { current: 0, total: symbols.length, failed: [] },
-        }))
-
-        for (let i = 0; i < symbols.length; i++) {
-          const { rawSymbol, weekIndices } = symbols[i]
-          const res = await fetch('/api/sync/binance/full', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ account_id: accountId, symbol: rawSymbol, weeks: weekIndices }),
-          })
-          if (res.ok) {
-            const data = (await res.json()) as {
-              synced: number; failedSymbols: { symbol: string; error: string }[]
-            }
-            allFailed.push(...data.failedSymbols)
-          }
-          setScanState((prev) => ({
-            ...prev,
-            [accountId]: { current: i + 1, total: symbols.length, failed: allFailed },
-          }))
-        }
-
-        await fetch('/api/sync/binance/full', {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ account_id: accountId, failed_count: allFailed.length }),
-        })
-
-        try {
-          await fetch('/api/sync/reconstruct', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ account_id: accountId }),
-          })
-        } catch { /* non-fatal — reconstruction will happen on next WS fill */ }
-
-        setScanState((prev) => ({
-          ...prev,
-          [accountId]: { current: symbols.length, total: symbols.length, failed: allFailed, completed: true },
-        }))
-      } else {
-        // Bybit / OKX: time-based chunking (6 × 30-day windows)
-        const chunksRes = await fetch(`/api/sync/${exchange}/chunks`)
-        if (!chunksRes.ok) throw new Error('Failed to load chunks')
-        const { totalChunks } = (await chunksRes.json()) as { totalChunks: number }
-
-        setScanState((prev) => ({
-          ...prev,
-          [accountId]: { current: 0, total: totalChunks, failed: [] },
-        }))
-
-        // Capture a single reference timestamp before any chunks are dispatched so
-        // all 26 chunk windows share the same anchor and don't drift over time.
-        const referenceTimestamp = Date.now()
-
-        // Thread position state between chunks (oldest → newest) so positions that
-        // span a 7-day boundary are reconstructed correctly.
-        let inheritedState: Record<string, unknown> | undefined = undefined
-
-        for (let i = 0; i < totalChunks; i++) {
-          const res = await fetch(`/api/sync/${exchange}/full`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              account_id:          accountId,
-              chunk_index:         i,
-              inherited_state:     inheritedState,
-              reference_timestamp: referenceTimestamp,
-            }),
-          })
-          if (res.ok) {
-            const data = (await res.json()) as {
-              synced: number
-              failedCategories?: { symbol: string; error: string }[]
-              final_state?: Record<string, unknown>
-            }
-            allFailed.push(...(data.failedCategories ?? []))
-            // Carry open positions forward to next chunk
-            if (data.final_state) inheritedState = data.final_state
-          }
-          setScanState((prev) => ({
-            ...prev,
-            [accountId]: { current: i + 1, total: totalChunks, failed: allFailed },
-          }))
-        }
-
-        await fetch(`/api/sync/${exchange}/full`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ account_id: accountId, failed_count: allFailed.length }),
-        })
-
-        try {
-          await fetch('/api/sync/reconstruct', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ account_id: accountId }),
-          })
-        } catch { /* non-fatal — reconstruction will happen on next WS fill */ }
-
-        setScanState((prev) => ({
-          ...prev,
-          [accountId]: { current: totalChunks, total: totalChunks, failed: allFailed, completed: true },
-        }))
+      if (enqueueRes.status === 409) {
+        // Sync already running — attach to existing job
+        const { jobId } = await enqueueRes.json() as { jobId: string }
+        startPolling(accountId, jobId)
+        return
       }
 
-      await fetchAccounts()
+      if (!enqueueRes.ok) {
+        const body = await enqueueRes.json() as { error?: string }
+        throw new Error(body.error ?? `HTTP ${enqueueRes.status}`)
+      }
+
+      const { jobId } = await enqueueRes.json() as { jobId: string }
+      startPolling(accountId, jobId)
     } catch (err) {
       setScanState((prev) => ({ ...prev, [accountId]: { current: 0, total: 0, failed: [], isError: true, errorMsg: friendlyError(err) } }))
     }
-  }, [fetchAccounts])
+  }, [startPolling])
 
   // ---------------------------------------------------------------------------
   // Balance + transactions backfill — chunked, with phase progress
@@ -483,7 +401,7 @@ export default function ApiSettingsPage() {
       resetForm()
       await fetchAccounts()
       if (json.id) {
-        handleFullScan(json.id, form.exchangeId)
+        handleFullScan(json.id)
       }
     } catch (err) {
       setError(friendlyError(err))
@@ -909,7 +827,7 @@ export default function ApiSettingsPage() {
                             {/* Full History — all exchanges */}
                             {(!scanState[account.id] || scanState[account.id].isError || scanState[account.id].completed) && (
                               <button
-                                onClick={() => handleFullScan(account.id, account.exchange)}
+                                onClick={() => handleFullScan(account.id)}
                                 style={{
                                   fontSize: 10,
                                   padding: '3px 8px',
