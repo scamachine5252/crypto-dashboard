@@ -4,11 +4,5 @@
       "maxDuration": 300,
       "regions": ["fra1"]
     }
-  },
-  "crons": [
-    {
-      "path": "/api/sync",
-      "schedule": "0 */4 * * *"
-    }
-  ]
+  }
 }
