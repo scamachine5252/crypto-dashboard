@@ -32,7 +32,7 @@ describe('GET /api/sync/job/[jobId]', () => {
   it('returns 404 when job not found', async () => {
     mockSelectSingle.mockResolvedValue({ data: null, error: { message: 'not found' } })
 
-    const res = await GET(makeRequest('bad-id'), { params: { jobId: 'bad-id' } })
+    const res = await GET(makeRequest('bad-id'), { params: Promise.resolve({ jobId: 'bad-id' }) })
     expect(res.status).toBe(404)
     const json = await res.json() as { error: string }
     expect(json.error).toBe('Job not found')
@@ -54,7 +54,7 @@ describe('GET /api/sync/job/[jobId]', () => {
     }
     mockSelectSingle.mockResolvedValue({ data: job, error: null })
 
-    const res = await GET(makeRequest('job-1'), { params: { jobId: 'job-1' } })
+    const res = await GET(makeRequest('job-1'), { params: Promise.resolve({ jobId: 'job-1' }) })
     expect(res.status).toBe(200)
     const json = await res.json() as typeof job
     expect(json.status).toBe('processing')
@@ -78,7 +78,7 @@ describe('GET /api/sync/job/[jobId]', () => {
     }
     mockSelectSingle.mockResolvedValue({ data: job, error: null })
 
-    const res = await GET(makeRequest('job-2'), { params: { jobId: 'job-2' } })
+    const res = await GET(makeRequest('job-2'), { params: Promise.resolve({ jobId: 'job-2' }) })
     expect(res.status).toBe(200)
     const json = await res.json() as typeof job
     expect(json.completed_at).toBe('2025-01-01T00:05:00Z')

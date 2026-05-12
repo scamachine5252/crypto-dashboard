@@ -4,9 +4,9 @@ import { supabaseAdmin } from '@/lib/supabase/server'
 
 export async function GET(
   _req: NextRequest,
-  { params }: { params: { jobId: string } },
+  { params }: { params: Promise<{ jobId: string }> },
 ): Promise<NextResponse> {
-  const { jobId } = params
+  const { jobId } = await params
 
   const { data: job, error } = await supabaseAdmin
     .from('full_sync_jobs')
