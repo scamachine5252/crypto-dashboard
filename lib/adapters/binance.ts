@@ -499,45 +499,30 @@ export class BinanceAdapter implements ExchangeAdapter {
     try {
       let rows: Array<{ symbol: string; time: number }>
       if (this.isPortfolioMargin) {
-        // 26 × 7-day windows (UM + CM in parallel) = 52 base requests.
-        // Time-based pagination within each window handles the 1000-row cap for
-        // high-volume accounts, keeping total requests low to avoid nginx timeouts.
-        const fetchIncomePage = (
+        // Single paginated fetch (UM + CM in parallel) — 2 base requests total.
+        // Time-based pagination handles accounts with >1000 income events in 180 days.
+        const fetchPaginated = async (
           fetchFn: (p: Record<string, unknown>) => Promise<Array<{ symbol: string; time: number }>>,
-          startTime: number,
-          endTime: number,
-        ): Promise<Array<{ symbol: string; time: number }>> =>
-          fetchFn({ incomeType: 'REALIZED_PNL', startTime, endTime, limit: 1000 }).catch(() => [])
-
-        const allRows: Array<{ symbol: string; time: number }> = []
-        for (let week = 0; week < 26; week++) {
-          const wStart = scanStart + week * WINDOW
-          const wEnd   = Math.min(wStart + WINDOW, Date.now())
-          if (wStart >= Date.now()) break
-
-          // Fetch UM + CM for this week in parallel, each with pagination if capped at 1000.
-          const fetchWindowIncome = async (
-            fetchFn: (p: Record<string, unknown>) => Promise<Array<{ symbol: string; time: number }>>,
-          ): Promise<Array<{ symbol: string; time: number }>> => {
-            const acc: Array<{ symbol: string; time: number }> = []
-            let cursor = wStart
-            while (true) {
-              const page = await fetchIncomePage(fetchFn, cursor, wEnd)
-              acc.push(...page)
-              if (page.length < 1000) break
-              cursor = page[page.length - 1].time + 1
-              if (cursor >= wEnd) break
-            }
-            return acc
+        ): Promise<Array<{ symbol: string; time: number }>> => {
+          const acc: Array<{ symbol: string; time: number }> = []
+          const endTime = Date.now()
+          let cursor = scanStart
+          while (cursor <= endTime) {
+            const page = await fetchFn({
+              incomeType: 'REALIZED_PNL', startTime: cursor, endTime, limit: 1000,
+            }).catch(() => [] as Array<{ symbol: string; time: number }>)
+            acc.push(...page)
+            if (page.length < 1000) break
+            cursor = page[page.length - 1].time + 1
           }
-
-          const [umRows, cmRows] = await Promise.all([
-            fetchWindowIncome((p) => fapi.papiGetUmIncome(p)),
-            fetchWindowIncome((p) => fapi.papiGetCmIncome(p)),
-          ])
-          allRows.push(...umRows, ...cmRows)
+          return acc
         }
-        rows = allRows
+
+        const [umRows, cmRows] = await Promise.all([
+          fetchPaginated((p) => fapi.papiGetUmIncome(p)),
+          fetchPaginated((p) => fapi.papiGetCmIncome(p)),
+        ])
+        rows = [...umRows, ...cmRows]
       } else {
         // Split into 6 × 30-day windows to avoid the 1000-row cap on high-volume accounts.
         const WINDOW_30 = 30 * DAY

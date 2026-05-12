@@ -64,18 +64,34 @@ function buildAdapter(portfolioMargin: boolean) {
 // ─── discoverTradedSymbols() ──────────────────────────────────────────────────
 
 describe('BinanceAdapter.discoverTradedSymbols()', () => {
-  it('calls papiGetUmIncome + papiGetCmIncome when PM=true', async () => {
+  it('calls papiGetUmIncome + papiGetCmIncome when PM=true (single paginated fetch)', async () => {
     const { adapter, fns } = buildAdapter(true)
+    // Returns < 1000 rows → no pagination needed → exactly 1 call per endpoint
     fns.papiGetUmIncome.mockResolvedValue([makeIncome('BTCUSDT')])
     fns.papiGetCmIncome.mockResolvedValue([makeIncome('BTCUSD_PERP')])
 
     const result = await adapter.discoverTradedSymbols()
 
-    // 26 weekly windows × 2 (UM + CM) = 52 calls total (down from 360 daily calls)
-    expect(fns.papiGetUmIncome).toHaveBeenCalledTimes(26)
-    expect(fns.papiGetCmIncome).toHaveBeenCalledTimes(26)
+    // Exactly 1 call per endpoint (not 26 or 180)
+    expect(fns.papiGetUmIncome).toHaveBeenCalledTimes(1)
+    expect(fns.papiGetCmIncome).toHaveBeenCalledTimes(1)
     expect(fns.fapiPrivateGetIncome).not.toHaveBeenCalled()
     expect(result.map((r) => r.rawSymbol)).toEqual(expect.arrayContaining(['BTCUSDT', 'BTCUSD_PERP']))
+  })
+
+  it('paginates UM income when first page returns exactly 1000 rows (PM=true)', async () => {
+    const { adapter, fns } = buildAdapter(true)
+    const page1 = Array.from({ length: 1000 }, (_, i) => makeIncome('BTCUSDT', Date.now() - 1000 + i))
+    const page2 = [makeIncome('ETHUSDT', Date.now())]
+    fns.papiGetUmIncome
+      .mockResolvedValueOnce(page1)  // first page — exactly 1000 → need next
+      .mockResolvedValueOnce(page2)  // second page — < 1000 → stop
+    fns.papiGetCmIncome.mockResolvedValue([])
+
+    const result = await adapter.discoverTradedSymbols()
+
+    expect(fns.papiGetUmIncome).toHaveBeenCalledTimes(2)
+    expect(result.map((r) => r.rawSymbol)).toContain('ETHUSDT')
   })
 
   it('calls fapiPrivateGetIncome when PM=false', async () => {
