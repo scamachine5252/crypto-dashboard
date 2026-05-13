@@ -1,6 +1,7 @@
 import 'server-only'
 import Redis from 'ioredis'
 import { supabaseAdmin } from '@/lib/supabase/server'
+import { PositionReconstructor } from './position-reconstructor'
 
 export type SyncJobStatus = 'pending' | 'processing' | 'completed' | 'failed'
 
@@ -152,15 +153,8 @@ export class FullHistorySyncer {
       throw new Error(`Unsupported exchange: ${job.exchange}`)
     }
 
-    const reconstructRes = await fetch(`${base}/api/sync/reconstruct`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ account_id: job.account_id }),
-    })
-    if (!reconstructRes.ok) {
-      const body = await reconstructRes.json().catch(() => ({})) as { error?: string }
-      throw new Error(`reconstruct failed (${reconstructRes.status}): ${body.error ?? ''}`)
-    }
+    const reconstructor = new PositionReconstructor()
+    await reconstructor.reconstruct(job.account_id, job.exchange)
   }
 
   private async syncBinance(job: SyncJob, base: string): Promise<void> {

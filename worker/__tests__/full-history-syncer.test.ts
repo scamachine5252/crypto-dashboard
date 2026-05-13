@@ -27,6 +27,13 @@ jest.mock('@/lib/supabase/server', () => ({
 
 jest.mock('server-only', () => ({}))
 
+const mockReconstruct = jest.fn()
+jest.mock('../position-reconstructor', () => ({
+  PositionReconstructor: jest.fn().mockImplementation(() => ({
+    reconstruct: mockReconstruct,
+  })),
+}))
+
 // Global fetch mock
 const mockFetch = jest.fn()
 global.fetch = mockFetch as typeof fetch
@@ -183,18 +190,19 @@ describe('FullHistorySyncer', () => {
 
     mockSet.mockResolvedValue('OK')
     mockDel.mockResolvedValue(1)
+    mockReconstruct.mockResolvedValue(undefined)
 
     mockFetch
       .mockResolvedValueOnce({ ok: true, json: async () => ({ totalChunks: 1 }) })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ synced: 1, failedCategories: [], final_state: {} }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) })
 
     await syncer.processJob('job-1')
 
     const urls = (mockFetch.mock.calls as unknown[][]).map((c) => c[0] as string)
     expect(urls).toContain('http://localhost:3000/api/sync/bybit/chunks')
-    expect(urls).toContain('http://localhost:3000/api/sync/reconstruct')
+    expect(urls.every((u: string) => !u.includes('reconstruct'))).toBe(true)
+    expect(mockReconstruct).toHaveBeenCalledWith('acc-1', 'bybit')
     expect(mockDel).toHaveBeenCalledWith('fullscan:lock:acc-1')
   })
 
@@ -237,6 +245,7 @@ describe('FullHistorySyncer', () => {
     })
     mockSet.mockResolvedValue('OK')
     mockDel.mockResolvedValue(1)
+    mockReconstruct.mockResolvedValue(undefined)
 
     mockFetch
       .mockResolvedValueOnce({
@@ -245,13 +254,39 @@ describe('FullHistorySyncer', () => {
       })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ synced: 2, failedSymbols: [] }) })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) })
 
     await syncer.processJob('job-1')
 
     const urls = (mockFetch.mock.calls as unknown[][]).map((c) => c[0] as string)
     expect(urls).toContain('http://localhost:3000/api/sync/binance/discover')
     expect(urls).toContain('http://localhost:3000/api/sync/binance/full')
-    expect(urls.filter((u) => u.includes('reconstruct'))).toHaveLength(1)
+    expect(urls.every((u) => !u.includes('reconstruct'))).toBe(true)
+    expect(mockReconstruct).toHaveBeenCalledWith('acc-1', 'binance')
+  })
+
+  it('processJob marks job failed when PositionReconstructor.reconstruct() throws', async () => {
+    const job = makeJob({ exchange: 'bybit' })
+    let fromCallCount = 0
+    mockFrom.mockImplementation(() => {
+      fromCallCount++
+      if (fromCallCount === 1) {
+        const single = jest.fn().mockResolvedValue({ data: job, error: null })
+        const eq = jest.fn().mockReturnValue({ single })
+        return { select: jest.fn().mockReturnValue({ eq }) }
+      }
+      const eq = jest.fn().mockResolvedValue({ error: null })
+      return { update: jest.fn().mockReturnValue({ eq }) }
+    })
+    mockSet.mockResolvedValue('OK')
+    mockDel.mockResolvedValue(1)
+    mockFetch
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ totalChunks: 1 }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ fills: 1, failedCategories: [], final_state: {} }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) })
+    mockReconstruct.mockRejectedValue(new Error('trades upsert error: connection timeout'))
+
+    await syncer.processJob('job-1')
+
+    expect(mockDel).toHaveBeenCalledWith('fullscan:lock:acc-1')
   })
 })
