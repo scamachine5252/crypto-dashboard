@@ -152,11 +152,15 @@ export class FullHistorySyncer {
       throw new Error(`Unsupported exchange: ${job.exchange}`)
     }
 
-    await fetch(`${base}/api/sync/reconstruct`, {
+    const reconstructRes = await fetch(`${base}/api/sync/reconstruct`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ account_id: job.account_id }),
     })
+    if (!reconstructRes.ok) {
+      const body = await reconstructRes.json().catch(() => ({})) as { error?: string }
+      throw new Error(`reconstruct failed (${reconstructRes.status}): ${body.error ?? ''}`)
+    }
   }
 
   private async syncBinance(job: SyncJob, base: string): Promise<void> {

@@ -249,8 +249,8 @@ describe('PositionReconstructor', () => {
   // ── OKX reconstruction ────────────────────────────────────────────────────
 
   it('okx: maps each raw_fill to one trade row', async () => {
-    const fill1 = makeOkxFillRow({ exec_id: 'fill-001', exec_pnl: 50 })
-    const fill2 = makeOkxFillRow({ exec_id: 'fill-002', exec_pnl: -20, side: 'sell' })
+    const fill1 = makeOkxFillRow({ exec_id: 'fill-001', exec_pnl: 50,  exec_time: '2025-01-01T10:00:00.000Z' })
+    const fill2 = makeOkxFillRow({ exec_id: 'fill-002', exec_pnl: -20, side: 'sell', exec_time: '2025-01-01T11:00:00.000Z' })
 
     const { selectFn } = makeFlexibleSelectChain([[fill1, fill2], []])
     mockFromSelect.mockImplementation(selectFn)

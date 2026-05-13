@@ -10,9 +10,10 @@ const TOTAL_DAYS   = 90
 const TOTAL_CHUNKS = TOTAL_DAYS / CHUNK_DAYS
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  const body       = await req.json() as Record<string, unknown>
-  const accountId  = body.account_id  as string | undefined
-  const chunkIndex = body.chunk_index as number | undefined
+  const body               = await req.json() as Record<string, unknown>
+  const accountId          = body.account_id          as string | undefined
+  const chunkIndex         = body.chunk_index         as number | undefined
+  const referenceTimestamp = body.reference_timestamp as number | undefined
 
   if (!accountId)               return NextResponse.json({ error: 'account_id required' }, { status: 400 })
   if (chunkIndex === undefined) return NextResponse.json({ error: 'chunk_index required' }, { status: 400 })
@@ -30,9 +31,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'Account not found' }, { status: 404 })
   }
 
-  // Compute time window from chunk_index
-  // chunk 0 = oldest (180d–150d ago), chunk 5 = newest (30d–0d ago)
-  const now     = Date.now()
+  // Compute time window from chunk_index, anchored to reference_timestamp so all
+  // chunks in the same job use the same origin and don't drift as the job progresses.
+  const now     = referenceTimestamp ?? Date.now()
   const chunkMs = CHUNK_DAYS * 24 * 60 * 60 * 1000
   const since   = now - (TOTAL_CHUNKS - chunkIndex) * chunkMs
   const until   = since + chunkMs

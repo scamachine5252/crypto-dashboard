@@ -77,21 +77,26 @@ async function fetchAllFills(
 
 async function upsertTrades(accountId: string, exchange: string, trades: Trade[]): Promise<void> {
   if (trades.length === 0) return
-  const rows = trades.map((t: Trade) => ({
-    account_id:  accountId,
-    exchange,
-    symbol:      t.symbol,
-    side:        t.side === 'long' ? 'buy' : 'sell',
-    direction:   t.side === 'long' || t.side === 'short' ? t.side : 'unknown',
-    entry_price: t.entryPrice,
-    exit_price:  t.exitPrice,
-    quantity:    t.quantity,
-    pnl:         t.pnl,
-    fee:         t.fee,
-    opened_at:   t.openedAt,
-    closed_at:   t.closedAt,
-    trade_type:  t.tradeType,
-  }))
+  const rowMap = new Map<string, Record<string, unknown>>()
+  for (const t of trades) {
+    const key = `${accountId}|${t.symbol}|${t.openedAt}|${t.closedAt}`
+    rowMap.set(key, {
+      account_id:  accountId,
+      exchange,
+      symbol:      t.symbol,
+      side:        t.side === 'long' ? 'buy' : 'sell',
+      direction:   t.side === 'long' || t.side === 'short' ? t.side : 'unknown',
+      entry_price: t.entryPrice,
+      exit_price:  t.exitPrice,
+      quantity:    t.quantity,
+      pnl:         t.pnl,
+      fee:         t.fee,
+      opened_at:   t.openedAt,
+      closed_at:   t.closedAt,
+      trade_type:  t.tradeType,
+    })
+  }
+  const rows = Array.from(rowMap.values())
   const { error } = await supabaseAdmin
     .from('trades')
     .upsert(rows, { onConflict: 'account_id,symbol,opened_at,closed_at' })

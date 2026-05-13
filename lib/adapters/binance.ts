@@ -556,8 +556,8 @@ export class BinanceAdapter implements ExchangeAdapter {
         rawSymbol,
         weekIndices: Array.from(weeks).sort((a, b) => a - b),
       }))
-    } catch {
-      return []
+    } catch (err) {
+      throw new Error(`discoverTradedSymbols failed: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
