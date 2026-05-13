@@ -107,12 +107,20 @@ export class OkxConnector {
   async runGapFill(since: number, until: number): Promise<void> {
     if (!this.fetchGapFillsFn) return
     const fills = await this.fetchGapFillsFn(since, until)
-    if (fills.length > 0) await this.fillProcessor.storeBatch(fills)
+    if (fills.length > 0) {
+      await this.fillProcessor.storeBatch(fills)
+      const maxTs = Math.max(...fills.map(f => f.exec_time.getTime()))
+      if (maxTs > this.lastFillTime) this.lastFillTime = maxTs
+    }
   }
 
   // ── WebSocket lifecycle ───────────────────────────────────────────────────
 
   async connect(): Promise<void> {
+    await this.runGapFill(this.lastFillTime, Date.now()).catch(e =>
+      console.error('[okx-connector] startup gap fill failed:', e)
+    )
+
     while (!this.destroyed) {
       await this.connectOnce()
       if (this.destroyed) break

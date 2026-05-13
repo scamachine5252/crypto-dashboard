@@ -12,7 +12,7 @@ jest.mock('../fill-processor', () => ({
 }))
 
 import { OkxConnector } from '../connectors/okx-connector'
-import type { FillProcessor } from '../fill-processor'
+import type { FillProcessor, RawFill } from '../fill-processor'
 
 beforeEach(() => jest.clearAllMocks())
 
@@ -129,5 +129,45 @@ describe('OkxConnector — handleMessage', () => {
     })
 
     expect((conn as unknown as { lastFillTime: number }).lastFillTime).toBe(1735689600000)
+  })
+})
+
+// ── Startup gap fill ─────────────────────────────────────────────────────────
+
+describe('OkxConnector — startup gap fill', () => {
+  it('runs gap fill before first connectOnce', async () => {
+    const callOrder: string[] = []
+    const mockGapFills = jest.fn().mockImplementation(async () => {
+      callOrder.push('gapFill')
+      return []
+    })
+    const conn = new OkxConnector({ ...CREDS, fillProcessor: makeFp(), fetchGapFills: mockGapFills })
+    jest.spyOn(conn as unknown as { connectOnce(): Promise<void> }, 'connectOnce' as never)
+      .mockImplementation(async () => { callOrder.push('connectOnce'); conn.disconnect() })
+
+    await conn.connect()
+
+    expect(callOrder[0]).toBe('gapFill')
+    expect(callOrder[1]).toBe('connectOnce')
+  })
+})
+
+// ── runGapFill updates lastFillTime ──────────────────────────────────────────
+
+describe('OkxConnector — runGapFill updates lastFillTime', () => {
+  it('advances lastFillTime to max exec_time of fetched fills', async () => {
+    const ts = 1735689600000
+    const mockFill: RawFill = {
+      account_id: 'acc', exchange: 'okx', exec_id: 'x', symbol: 'BTC-USDT',
+      exec_time: new Date(ts), side: 'buy', exec_qty: 1, exec_price: 50000,
+      raw_data: {}, source: 'rest',
+    }
+    const mockGapFills = jest.fn().mockResolvedValue([mockFill])
+    const conn = new OkxConnector({ ...CREDS, fillProcessor: makeFp(), fetchGapFills: mockGapFills })
+    mockStoreBatch.mockResolvedValue(undefined)
+
+    await conn.runGapFill(0, ts + 1000)
+
+    expect((conn as unknown as { lastFillTime: number }).lastFillTime).toBe(ts)
   })
 })

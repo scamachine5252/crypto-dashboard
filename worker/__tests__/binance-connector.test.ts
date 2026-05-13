@@ -16,7 +16,7 @@ const mockFetch = jest.fn()
 global.fetch = mockFetch as unknown as typeof fetch
 
 import { BinanceConnector } from '../connectors/binance-connector'
-import type { FillProcessor } from '../fill-processor'
+import type { FillProcessor, RawFill } from '../fill-processor'
 
 beforeEach(() => jest.clearAllMocks())
 
@@ -125,5 +125,48 @@ describe('BinanceConnector — handleMessage', () => {
 
     const fill = mockStore.mock.calls[0][0]
     expect(fill.exec_fee).toBe(0.25)  // abs of -0.25
+  })
+})
+
+// ── Startup gap fill ─────────────────────────────────────────────────────────
+
+describe('BinanceConnector — startup gap fill', () => {
+  it('runs gap fill before first connectOnce', async () => {
+    const callOrder: string[] = []
+    const mockGapFills = jest.fn().mockImplementation(async () => {
+      callOrder.push('gapFill')
+      return []
+    })
+    const conn = new BinanceConnector({ ...CREDS, portfolioMargin: false, fillProcessor: makeFp(), fetchGapFills: mockGapFills })
+    jest.spyOn(conn as unknown as { connectOnce(): Promise<void> }, 'connectOnce' as never)
+      .mockImplementation(async () => { callOrder.push('connectOnce'); conn.disconnect() })
+    // createListenKey must not throw so the loop proceeds
+    jest.spyOn(conn as unknown as { createListenKey(): Promise<string> }, 'createListenKey' as never)
+      .mockResolvedValue('test-key')
+
+    await conn.connect()
+
+    expect(callOrder[0]).toBe('gapFill')
+    expect(callOrder[1]).toBe('connectOnce')
+  })
+})
+
+// ── runGapFill updates lastFillTime ──────────────────────────────────────────
+
+describe('BinanceConnector — runGapFill updates lastFillTime', () => {
+  it('advances lastFillTime to max exec_time of fetched fills', async () => {
+    const ts = 1735689600000
+    const mockFill: RawFill = {
+      account_id: 'acc', exchange: 'binance', exec_id: 'x', symbol: 'BTC',
+      exec_time: new Date(ts), side: 'buy', exec_qty: 1, exec_price: 50000,
+      raw_data: {}, source: 'rest',
+    }
+    const mockGapFills = jest.fn().mockResolvedValue([mockFill])
+    const conn = new BinanceConnector({ ...CREDS, portfolioMargin: false, fillProcessor: makeFp(), fetchGapFills: mockGapFills })
+    mockStoreBatch.mockResolvedValue(undefined)
+
+    await conn.runGapFill(0, ts + 1000)
+
+    expect((conn as unknown as { lastFillTime: number }).lastFillTime).toBe(ts)
   })
 })

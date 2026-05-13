@@ -40,7 +40,7 @@ jest.mock('ws', () => {
 })
 
 import { BybitConnector } from '../connectors/bybit-connector'
-import type { FillProcessor } from '../fill-processor'
+import type { FillProcessor, RawFill } from '../fill-processor'
 
 beforeEach(() => jest.clearAllMocks())
 
@@ -189,6 +189,48 @@ describe('BybitConnector — handleMessage', () => {
     })
 
     expect(mockFillProcessorStore).not.toHaveBeenCalled()
+  })
+})
+
+// ── Startup gap fill ─────────────────────────────────────────────────────────
+
+describe('BybitConnector — startup gap fill', () => {
+  it('runs gap fill before first connectOnce', async () => {
+    const callOrder: string[] = []
+    const mockGapFills = jest.fn().mockImplementation(async () => {
+      callOrder.push('gapFill')
+      return []
+    })
+    const fp = { store: mockFillProcessorStore, storeBatch: mockFillProcessorBatch } as unknown as FillProcessor
+    const conn = new BybitConnector({ ...CREDS, fillProcessor: fp, fetchGapFills: mockGapFills })
+    jest.spyOn(conn as unknown as { connectOnce(): Promise<void> }, 'connectOnce' as never)
+      .mockImplementation(async () => { callOrder.push('connectOnce'); conn.disconnect() })
+
+    await conn.connect()
+
+    expect(callOrder[0]).toBe('gapFill')
+    expect(callOrder[1]).toBe('connectOnce')
+  })
+})
+
+// ── runGapFill updates lastFillTime ──────────────────────────────────────────
+
+describe('BybitConnector — runGapFill updates lastFillTime', () => {
+  it('advances lastFillTime to max exec_time of fetched fills', async () => {
+    const ts = 1735689600000
+    const mockFill: RawFill = {
+      account_id: 'acc', exchange: 'bybit', exec_id: 'x', symbol: 'BTC',
+      exec_time: new Date(ts), side: 'buy', exec_qty: 1, exec_price: 50000,
+      raw_data: {}, source: 'rest',
+    }
+    const mockGapFills = jest.fn().mockResolvedValue([mockFill])
+    const fp = { store: mockFillProcessorStore, storeBatch: mockFillProcessorBatch } as unknown as FillProcessor
+    const conn = new BybitConnector({ ...CREDS, fillProcessor: fp, fetchGapFills: mockGapFills })
+    mockFillProcessorBatch.mockResolvedValue(undefined)
+
+    await conn.runGapFill(0, ts + 1000)
+
+    expect((conn as unknown as { lastFillTime: number }).lastFillTime).toBe(ts)
   })
 })
 
