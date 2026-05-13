@@ -135,6 +135,22 @@ function makeOkxFillRow(overrides: Record<string, unknown> = {}) {
   }
 }
 
+function makeMexcFillRow(overrides: Record<string, unknown> = {}) {
+  return {
+    exec_time:  '2025-01-01T10:00:00.000Z',
+    symbol:     'BTCUSDT',
+    side:       'buy',
+    exec_qty:   0.01,
+    exec_price: 50000,
+    exec_pnl:   100,
+    exec_fee:   0.5,
+    category:   'futures',
+    exec_id:    'fill-mexc-001',
+    raw_data:   { id: 'fill-mexc-001', symbol: 'BTCUSDT', pnl: '100' },
+    ...overrides,
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -292,10 +308,94 @@ describe('PositionReconstructor', () => {
     expect(mockUpsert).not.toHaveBeenCalled()
   })
 
+  // ── MEXC reconstruction ───────────────────────────────────────────────────
+
+  it('mexc: maps each raw_fill to one trade row (1:1)', async () => {
+    const fill1 = makeMexcFillRow({ exec_id: 'fill-001', exec_pnl: 50,  exec_time: '2025-01-01T10:00:00.000Z' })
+    const fill2 = makeMexcFillRow({ exec_id: 'fill-002', exec_pnl: -20, side: 'sell', exec_time: '2025-01-01T11:00:00.000Z' })
+
+    const { selectFn } = makeFlexibleSelectChain([[fill1, fill2], []])
+    mockFromSelect.mockImplementation(selectFn)
+    mockUpsert.mockResolvedValue({ error: null })
+
+    await reconstructor.reconstruct('acc-1', 'mexc')
+
+    expect(mockUpsert).toHaveBeenCalled()
+    const rows = mockUpsert.mock.calls[0][0]
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toMatchObject({ account_id: 'acc-1', exchange: 'mexc' })
+    expect(rows[1].side).toBe('sell')
+    expect(rows[1].direction).toBe('short')
+  })
+
+  it('mexc: category=futures → trade_type=futures', async () => {
+    const fill = makeMexcFillRow({ exec_id: 'fill-001', category: 'futures' })
+    const { selectFn } = makeFlexibleSelectChain([[fill], []])
+    mockFromSelect.mockImplementation(selectFn)
+    mockUpsert.mockResolvedValue({ error: null })
+
+    await reconstructor.reconstruct('acc-1', 'mexc')
+
+    const rows = mockUpsert.mock.calls[0][0]
+    expect(rows[0].trade_type).toBe('futures')
+  })
+
+  it('mexc: does not upsert when raw_fills is empty', async () => {
+    const { selectFn } = makeFlexibleSelectChain([[]])
+    mockFromSelect.mockImplementation(selectFn)
+    mockUpsert.mockResolvedValue({ error: null })
+
+    await reconstructor.reconstruct('acc-1', 'mexc')
+
+    expect(mockUpsert).not.toHaveBeenCalled()
+  })
+
+  // ── Error propagation ────────────────────────────────────────────────────
+
+  it('throws when trades upsert returns Supabase error (bybit)', async () => {
+    const openFill  = makeLinearFillRow()
+    const closeFill = makeLinearFillRow({
+      exec_time: '2025-01-01T01:00:00.000Z',
+      raw_data: { execTime: '1735693200000', symbol: 'BTCUSDT', side: 'Sell', execType: 'Trade', execPrice: '51000', execQty: '0.1', execPnl: '100', execFee: '0.5', closedSize: '0.1', orderId: 'ord-002' },
+    })
+    const { selectFn } = makeFlexibleSelectChain([[openFill, closeFill], [], []])
+    mockFromSelect.mockImplementation(selectFn)
+    mockUpsert.mockResolvedValue({ error: { message: 'duplicate key value violates unique constraint "trades_pkey"' } })
+
+    await expect(reconstructor.reconstruct('acc-1', 'bybit')).rejects.toThrow(
+      'trades upsert error: duplicate key value'
+    )
+  })
+
+  it('throws when deleteTrades returns Supabase error (binance)', async () => {
+    const openFill  = makeBinanceFillRow({ raw_data: { symbol: 'BTCUSDT', side: 'BUY', price: '50000', qty: '0.01', realizedPnl: '0', commission: '0.5', commissionAsset: 'USDT', time: 1735725600000, positionSide: 'BOTH', orderId: 1, id: 1 } })
+    const closeFill = makeBinanceFillRow({ raw_data: { symbol: 'BTCUSDT', side: 'SELL', price: '51000', qty: '0.01', realizedPnl: '100', commission: '0.5', commissionAsset: 'USDT', time: 1735729200000, positionSide: 'BOTH', orderId: 2, id: 2 } })
+    const { selectFn } = makeFlexibleSelectChain([[openFill, closeFill], []])
+    mockFromSelect.mockImplementation(selectFn)
+
+    // Override `from` so the trades table returns a delete chain that errors.
+    // Cannot use mockDelete.mockReturnValue() here because the module-level `from`
+    // mock resets mockDelete every time from('trades') is called.
+    const deleteErrorChain = {
+      eq: jest.fn().mockReturnThis(),
+      then: (resolve: (v: unknown) => unknown) =>
+        Promise.resolve({ error: { message: 'permission denied for table trades' } }).then(resolve),
+    }
+    const mockFrom = jest.requireMock('@/lib/supabase/server').supabaseAdmin.from as jest.Mock
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'raw_fills') return { select: mockFromSelect }
+      return { upsert: mockUpsert, delete: jest.fn().mockReturnValue(deleteErrorChain) }
+    })
+
+    await expect(reconstructor.reconstruct('acc-1', 'binance')).rejects.toThrow(
+      'trades delete error: permission denied'
+    )
+  })
+
   // ── unsupported exchange ──────────────────────────────────────────────────
 
-  it('returns without error for an unsupported exchange (mexc)', async () => {
-    await expect(reconstructor.reconstruct('acc-1', 'mexc')).resolves.not.toThrow()
+  it('returns without error for an unsupported exchange (hyperliquid)', async () => {
+    await expect(reconstructor.reconstruct('acc-1', 'hyperliquid')).resolves.not.toThrow()
     expect(mockFromSelect).not.toHaveBeenCalled()
   })
 })

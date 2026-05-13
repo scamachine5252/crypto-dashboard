@@ -193,6 +193,47 @@ export class PositionReconstructor {
       return
     }
 
-    // MEXC: REST-only, full sync route handles trades directly. No WS fills to reconstruct.
+    if (exchange === 'mexc') {
+      const rows = await fetchAllFills(accountId, exchange)
+      if (rows.length === 0) return
+
+      await deleteTrades(accountId, exchange)
+
+      const trades: Trade[] = rows.map(row => {
+        const sideRaw   = String(row.side ?? 'buy').toLowerCase()
+        const symbol    = String(row.symbol ?? '')
+        const cat       = String(row.category ?? '')
+        const tradeType: TradeType = (
+          cat === 'futures' ||
+          symbol.includes('_PERP') ||
+          symbol.includes('FUTURES')
+        ) ? 'futures' : 'spot'
+
+        return {
+          id:           String(row.exec_id ?? ''),
+          subAccountId: 'mexc',
+          exchangeId:   'mexc' as const,
+          symbol,
+          side:         sideRaw === 'buy' ? 'long' : 'short',
+          tradeType,
+          entryPrice:   Number(row.exec_price ?? 0),
+          exitPrice:    Number(row.exec_price ?? 0),
+          quantity:     Number(row.exec_qty   ?? 0),
+          pnl:          Number(row.exec_pnl   ?? 0),
+          pnlPercent:   0,
+          fee:          Number(row.exec_fee   ?? 0),
+          durationMin:  0,
+          leverage:     1,
+          fundingCost:  0,
+          isOvernight:  false,
+          openedAt:     String(row.exec_time ?? new Date().toISOString()),
+          closedAt:     String(row.exec_time ?? new Date().toISOString()),
+        }
+      })
+      await upsertTrades(accountId, exchange, trades)
+      return
+    }
+
+    // Unsupported exchange — no-op
   }
 }

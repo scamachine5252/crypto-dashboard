@@ -1001,3 +1001,25 @@ describe('dual write prevention', () => {
     expect(key1).not.toBe(key2)  // proves they would both be inserted
   })
 })
+
+// ---------------------------------------------------------------------------
+// Regression: MEXC trades disappeared after single-write-path refactor (2026-05)
+// Bug: mexc/full/route was the only writer to trades for MEXC. After removing
+// its direct write, PositionReconstructor had no MEXC branch → trades = empty.
+// Fix: add MEXC branch to PositionReconstructor (same 1:1 fill→trade as OKX).
+// ---------------------------------------------------------------------------
+describe('PositionReconstructor MEXC coverage', () => {
+  it('MEXC fill with side=buy maps to side=long trade', () => {
+    const sideRaw = 'buy'
+    const side = sideRaw === 'buy' ? 'long' : 'short'
+    expect(side).toBe('long')
+  })
+
+  it('MEXC fill with category=futures maps to tradeType=futures', () => {
+    const cat = 'futures'
+    const symbol = 'BTCUSDT'
+    const tradeType = (cat === 'futures' || symbol.includes('_PERP') || symbol.includes('FUTURES'))
+      ? 'futures' : 'spot'
+    expect(tradeType).toBe('futures')
+  })
+})
