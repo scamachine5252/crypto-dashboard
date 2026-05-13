@@ -35,7 +35,6 @@ interface AccountRow {
 const QUEUE_KEY    = 'fullscan:queue'
 const LOCK_PREFIX  = 'fullscan:lock:'
 const LOCK_TTL_SEC = 3600
-const STUCK_MS     = 10 * 60 * 1000
 
 const BYBIT_CHUNK_DAYS = 7
 const BYBIT_CHUNKS     = 26
@@ -43,8 +42,10 @@ const OKX_CHUNK_DAYS   = 30
 const OKX_CHUNKS       = 6
 
 export class FullHistorySyncer {
-  private redis:   Redis
-  private running: boolean = false
+  private redis:              Redis
+  private running:            boolean = false
+  private currentJobId:       string | null = null
+  private currentAccountId:   string | null = null
 
   constructor(redisUrl: string) {
     this.redis = new Redis(redisUrl)
@@ -69,37 +70,62 @@ export class FullHistorySyncer {
 
   // ── Recovery ────────────────────────────────────────────────────────────
 
-  async recoverStuckJobs(): Promise<number> {
-    const cutoff = new Date(Date.now() - STUCK_MS).toISOString()
-    const { data: stuck } = await supabaseAdmin
+  async recoverOnStartup(): Promise<void> {
+    // Reset ALL processing jobs — worker just started, none can be legitimately processing
+    const { data: processing } = await supabaseAdmin
       .from('full_sync_jobs')
       .select('id')
       .eq('status', 'processing')
-      .lt('started_at', cutoff)
 
-    if (!stuck || stuck.length === 0) return 0
-
-    for (const job of stuck as Array<{ id: string }>) {
-      await supabaseAdmin
-        .from('full_sync_jobs')
-        .update({ status: 'pending', started_at: null })
-        .eq('id', job.id)
-      await this.redis.lpush(QUEUE_KEY, job.id)
+    if (processing && processing.length > 0) {
+      for (const job of processing as Array<{ id: string }>) {
+        await supabaseAdmin
+          .from('full_sync_jobs')
+          .update({ status: 'pending', started_at: null })
+          .eq('id', job.id)
+        await this.redis.lpush(QUEUE_KEY, job.id)
+      }
+      console.log(`[full-history-syncer] reset ${processing.length} orphaned processing jobs`)
     }
-    console.log(`[full-history-syncer] recovered ${stuck.length} stuck jobs`)
-    return stuck.length
+
+    // Re-enqueue ALL pending jobs — Redis queue rebuilt from Supabase
+    const { data: pending } = await supabaseAdmin
+      .from('full_sync_jobs')
+      .select('id')
+      .eq('status', 'pending')
+      .order('created_at', { ascending: true })
+
+    if (pending && pending.length > 0) {
+      for (const job of pending as Array<{ id: string }>) {
+        await this.redis.lpush(QUEUE_KEY, job.id)
+      }
+      console.log(`[full-history-syncer] queued ${pending.length} pending jobs`)
+    }
   }
 
   // ── Lifecycle ────────────────────────────────────────────────────────────
 
   async start(): Promise<void> {
     this.running = true
-    await this.recoverStuckJobs()
+    await this.recoverOnStartup()
     void this.processLoop()
   }
 
   stop(): void {
     this.running = false
+    this.redis.disconnect()
+  }
+
+  async shutdown(): Promise<void> {
+    this.running = false
+    if (this.currentJobId && this.currentAccountId) {
+      console.log(`[full-history-syncer] shutdown: resetting job ${this.currentJobId} to pending`)
+      await supabaseAdmin
+        .from('full_sync_jobs')
+        .update({ status: 'pending', started_at: null })
+        .eq('id', this.currentJobId)
+      await this.releaseLock(this.currentAccountId)
+    }
     this.redis.disconnect()
   }
 
@@ -137,6 +163,9 @@ export class FullHistorySyncer {
       .update({ status: 'processing', started_at: new Date().toISOString() })
       .eq('id', jobId)
 
+    this.currentJobId     = jobId
+    this.currentAccountId = syncJob.account_id
+
     try {
       const { data: account } = await supabaseAdmin
         .from('accounts')
@@ -158,6 +187,8 @@ export class FullHistorySyncer {
         .update({ status: 'failed', error_message: message, completed_at: new Date().toISOString() })
         .eq('id', jobId)
     } finally {
+      this.currentJobId     = null
+      this.currentAccountId = null
       await this.releaseLock(syncJob.account_id)
     }
   }

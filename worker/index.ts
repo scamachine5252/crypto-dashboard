@@ -19,15 +19,15 @@ async function main() {
 
   console.log('[worker] all connectors + full-history syncer started')
 
-  const shutdown = () => {
+  const shutdown = async () => {
     console.log('[worker] shutting down...')
     manager.stop()
-    syncer.stop()
+    await syncer.shutdown()
     process.exit(0)
   }
 
-  process.once('SIGTERM', shutdown)
-  process.once('SIGINT',  shutdown)
+  process.once('SIGTERM', () => { void shutdown() })
+  process.once('SIGINT',  () => { void shutdown() })
 }
 
 main().catch(e => {

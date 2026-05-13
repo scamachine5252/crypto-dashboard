@@ -165,35 +165,49 @@ describe('FullHistorySyncer', () => {
     expect(mockLpush).toHaveBeenCalledWith('fullscan:queue', 'job-99')
   })
 
-  // ── recoverStuckJobs ──────────────────────────────────────────────────────
+  // ── recoverOnStartup ─────────────────────────────────────────────────────
 
-  it('recoverStuckJobs resets stuck processing jobs and re-queues them', async () => {
-    const mockEq  = jest.fn().mockReturnValue({ data: null, error: null })
-    const mockLt  = jest.fn().mockResolvedValue({ data: [{ id: 'stuck-1' }, { id: 'stuck-2' }], error: null })
-    const mockEq2 = jest.fn().mockReturnValue({ lt: mockLt })
-    const mockSel = jest.fn().mockReturnValue({ eq: mockEq2 })
-    const mockUpd = jest.fn().mockReturnValue({ eq: mockEq })
-    mockFrom.mockImplementation((table: string) =>
-      table === 'full_sync_jobs' ? { select: mockSel, update: mockUpd } : { select: mockSel },
-    )
+  it('recoverOnStartup resets ALL processing jobs (not just >10min) and re-enqueues pending', async () => {
+    const recentJob  = { id: 'job-recent' }
+    const oldJob     = { id: 'job-old' }
+    const pendingJob = { id: 'job-pend' }
+
+    mockFrom.mockImplementation((table: string) => {
+      if (table !== 'full_sync_jobs') return {
+        update: jest.fn().mockReturnValue({ eq: jest.fn().mockResolvedValue({ error: null }) }),
+      }
+      return {
+        select: jest.fn().mockReturnValue({
+          eq: jest.fn().mockImplementation((_col: string, val: string) => {
+            if (val === 'processing') return { data: [recentJob, oldJob], error: null }
+            if (val === 'pending')    return { order: jest.fn().mockResolvedValue({ data: [pendingJob], error: null }) }
+            return { data: [], error: null }
+          }),
+        }),
+        update: jest.fn().mockReturnValue({ eq: jest.fn().mockResolvedValue({ error: null }) }),
+      }
+    })
     mockLpush.mockResolvedValue(1)
 
-    const count = await syncer.recoverStuckJobs()
+    await syncer.recoverOnStartup()
 
-    expect(count).toBe(2)
-    expect(mockLpush).toHaveBeenCalledTimes(2)
-    expect(mockLpush).toHaveBeenCalledWith('fullscan:queue', 'stuck-1')
-    expect(mockLpush).toHaveBeenCalledWith('fullscan:queue', 'stuck-2')
+    expect(mockLpush).toHaveBeenCalledWith('fullscan:queue', 'job-recent')
+    expect(mockLpush).toHaveBeenCalledWith('fullscan:queue', 'job-old')
+    expect(mockLpush).toHaveBeenCalledWith('fullscan:queue', 'job-pend')
   })
 
-  it('recoverStuckJobs returns 0 when no stuck jobs', async () => {
-    const mockLt  = jest.fn().mockResolvedValue({ data: [], error: null })
-    const mockEq  = jest.fn().mockReturnValue({ lt: mockLt })
-    const mockSel = jest.fn().mockReturnValue({ eq: mockEq })
-    mockFrom.mockReturnValue({ select: mockSel })
+  it('recoverOnStartup is safe when no stuck or pending jobs exist', async () => {
+    mockFrom.mockImplementation(() => ({
+      select: jest.fn().mockReturnValue({
+        eq: jest.fn().mockImplementation((_col: string, val: string) => {
+          if (val === 'pending') return { order: jest.fn().mockResolvedValue({ data: [], error: null }) }
+          return { data: [], error: null }
+        }),
+      }),
+      update: jest.fn().mockReturnValue({ eq: jest.fn().mockResolvedValue({ error: null }) }),
+    }))
 
-    const count = await syncer.recoverStuckJobs()
-    expect(count).toBe(0)
+    await expect(syncer.recoverOnStartup()).resolves.not.toThrow()
     expect(mockLpush).not.toHaveBeenCalled()
   })
 
