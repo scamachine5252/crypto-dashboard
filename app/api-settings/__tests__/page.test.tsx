@@ -78,21 +78,78 @@ function makeErrorResponse(status = 500) {
 const ApiSettingsPage = () => require('../page').default
 
 // ---------------------------------------------------------------------------
+// Helpers for URL-aware fetch mocking (WorkerStatus + accounts coexist)
+// ---------------------------------------------------------------------------
+const WORKER_STATUS_EMPTY = {
+  worker:   { alive: false, last_heartbeat: null, started_at: null },
+  accounts: [],
+}
+
+type FetchRoute = {
+  workerStatus?: unknown
+  accounts?: unknown       // GET /api/accounts response
+  post?: unknown           // POST /api/accounts response
+  delete?: unknown         // DELETE /api/accounts/[id] response
+  accountsError?: boolean  // make GET /api/accounts return 500
+}
+
+function setupFetch(routes: FetchRoute = {}) {
+  let getAccountsCount = 0
+  const postAccount = routes.post ?? null
+
+  mockFetch.mockImplementation((url: string, opts?: RequestInit) => {
+    const s = String(url)
+
+    if (s.includes('worker-status')) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(routes.workerStatus ?? WORKER_STATUS_EMPTY),
+      } as Response)
+    }
+
+    if (s === '/api/accounts' && !opts?.method) {
+      getAccountsCount++
+      if (routes.accountsError) return makeErrorResponse(500)
+      // After a POST, second GET returns the new account
+      const data = (getAccountsCount > 1 && postAccount)
+        ? [postAccount]
+        : (routes.accounts ?? [])
+      return makeGetResponse(data as unknown[])
+    }
+
+    if (s === '/api/accounts' && opts?.method === 'POST') {
+      return makePostResponse(postAccount ?? {})
+    }
+
+    if (s.startsWith('/api/accounts/') && opts?.method === 'DELETE') {
+      return makeDeleteResponse()
+    }
+
+    // For exchanges/ping tests
+    if (s.includes('/api/exchanges/')) {
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ connected: true }) } as Response)
+    }
+
+    return Promise.resolve({ ok: true, json: () => Promise.resolve({}) } as Response)
+  })
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 describe('API Settings page', () => {
   beforeEach(() => {
     jest.clearAllMocks()
-    mockFetch.mockReset()    // clearAllMocks does NOT drain mockReturnValueOnce queues
+    mockFetch.mockReset()
     localStorageGetSpy.mockClear()
   })
 
   it('loads accounts from GET /api/accounts on mount', async () => {
-    mockFetch.mockReturnValueOnce(
-      makeGetResponse([
+    setupFetch({
+      accounts: [
         { id: 'uuid-1', fund: 'Cicada Foundation', exchange: 'binance', account_name: 'Alpha Fund', instrument: 'spot', status: 'not_configured' },
-      ]),
-    )
+      ],
+    })
 
     const Page = ApiSettingsPage()
     await act(async () => { render(<Page />) })
@@ -105,7 +162,7 @@ describe('API Settings page', () => {
   })
 
   it('shows empty state when no accounts exist', async () => {
-    mockFetch.mockReturnValueOnce(makeGetResponse([]))
+    setupFetch({ accounts: [] })
 
     const Page = ApiSettingsPage()
     await act(async () => { render(<Page />) })
@@ -116,16 +173,10 @@ describe('API Settings page', () => {
   })
 
   it('submits form to POST /api/accounts with correct fields', async () => {
-    // Initial GET returns empty
-    mockFetch.mockReturnValueOnce(makeGetResponse([]))
-    // POST returns the created account
-    mockFetch.mockReturnValueOnce(
-      makePostResponse({ id: 'new-uuid', fund: 'Cicada Foundation', exchange: 'bybit', account_name: 'Test Account', instrument: 'futures' }),
-    )
-    // Subsequent GET after creation
-    mockFetch.mockReturnValueOnce(
-      makeGetResponse([{ id: 'new-uuid', fund: 'Cicada Foundation', exchange: 'bybit', account_name: 'Test Account', instrument: 'futures', status: 'not_configured' }]),
-    )
+    setupFetch({
+      accounts: [],
+      post: { id: 'new-uuid', fund: 'Cicada Foundation', exchange: 'bybit', account_name: 'Test Account', instrument: 'futures', status: 'not_configured' },
+    })
 
     const Page = ApiSettingsPage()
     await act(async () => { render(<Page />) })
@@ -152,13 +203,11 @@ describe('API Settings page', () => {
   })
 
   it('removes account via DELETE /api/accounts/[id] on Remove click', async () => {
-    mockFetch.mockReturnValueOnce(
-      makeGetResponse([
+    setupFetch({
+      accounts: [
         { id: 'uuid-to-delete', fund: 'Cicada Foundation', exchange: 'binance', account_name: 'Alpha Fund', instrument: 'spot', status: 'not_configured' },
-      ]),
-    )
-    mockFetch.mockReturnValueOnce(makeDeleteResponse())
-    mockFetch.mockReturnValueOnce(makeGetResponse([]))
+      ],
+    })
 
     const Page = ApiSettingsPage()
     await act(async () => { render(<Page />) })
@@ -175,8 +224,13 @@ describe('API Settings page', () => {
   })
 
   it('shows loading state while fetching', async () => {
-    // Never resolves — stays in loading state
-    mockFetch.mockReturnValueOnce(new Promise(() => {}))
+    // Worker-status resolves immediately, accounts never resolves
+    mockFetch.mockImplementation((url: string) => {
+      if (String(url).includes('worker-status')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(WORKER_STATUS_EMPTY) } as Response)
+      }
+      return new Promise(() => {})  // accounts never resolves → loading state
+    })
 
     const Page = ApiSettingsPage()
     render(<Page />)
@@ -185,7 +239,7 @@ describe('API Settings page', () => {
   })
 
   it('shows error state if fetch fails', async () => {
-    mockFetch.mockReturnValueOnce(makeErrorResponse(500))
+    setupFetch({ accountsError: true })
 
     const Page = ApiSettingsPage()
     render(<Page />)
@@ -194,7 +248,7 @@ describe('API Settings page', () => {
   })
 
   it('never reads from localStorage for accounts', async () => {
-    mockFetch.mockReturnValueOnce(makeGetResponse([]))
+    setupFetch({ accounts: [] })
 
     const Page = ApiSettingsPage()
     await act(async () => { render(<Page />) })

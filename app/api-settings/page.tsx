@@ -5,6 +5,62 @@ import type { ExchangeId } from '@/lib/types'
 import Header from '@/components/layout/Header'
 
 // ---------------------------------------------------------------------------
+// Worker status
+// ---------------------------------------------------------------------------
+interface WorkerStatusData {
+  worker:   { alive: boolean; last_heartbeat: string | null; started_at: string | null }
+  accounts: Array<{ id: string; exchange: string; account_name: string; last_fill_at: string | null; stale: boolean }>
+}
+
+function WorkerStatus() {
+  const [data, setData] = useState<WorkerStatusData | null>(null)
+
+  useEffect(() => {
+    fetch('/api/worker-status')
+      .then(r => r.json() as Promise<WorkerStatusData>)
+      .then(setData)
+      .catch(() => {/* silently ignore */})
+  }, [])
+
+  if (!data) return null
+
+  const { worker, accounts } = data
+  const hbDate = worker.last_heartbeat ? new Date(worker.last_heartbeat) : null
+  const hbLabel = hbDate
+    ? `${String(hbDate.getDate()).padStart(2,'0')}.${String(hbDate.getMonth()+1).padStart(2,'0')}.${String(hbDate.getFullYear()).slice(2)} ${String(hbDate.getHours()).padStart(2,'0')}:${String(hbDate.getMinutes()).padStart(2,'0')}`
+    : 'unknown'
+
+  const staleAccounts = accounts.filter(a => a.stale)
+
+  return (
+    <div
+      className="mx-6 mt-4 px-4 py-2.5 flex items-center gap-6 text-[11px] flex-wrap"
+      style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)' }}
+    >
+      <span style={{ color: 'var(--text-muted)' }}>WORKER</span>
+      <span
+        className="font-semibold uppercase tracking-wider"
+        style={{ color: worker.alive ? 'var(--accent-profit)' : 'var(--accent-loss)' }}
+      >
+        {worker.alive ? 'Alive' : 'Stale'}
+      </span>
+      <span style={{ color: 'var(--text-muted)' }}>
+        Last heartbeat: <span style={{ color: 'var(--text-secondary)' }}>{hbLabel}</span>
+      </span>
+      {staleAccounts.length > 0 && (
+        <span style={{ color: '#FFD700' }}>
+          ⚠ {staleAccounts.length} account{staleAccounts.length > 1 ? 's' : ''} with no fills in 24h:{' '}
+          {staleAccounts.map(a => `${a.account_name} (${a.exchange})`).join(', ')}
+        </span>
+      )}
+      {staleAccounts.length === 0 && accounts.length > 0 && (
+        <span style={{ color: 'var(--text-muted)' }}>All accounts have recent fills</span>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Types for API responses (snake_case, no sensitive fields)
 // ---------------------------------------------------------------------------
 interface AccountRow {
@@ -473,6 +529,7 @@ export default function ApiSettingsPage() {
   return (
     <div className="min-h-screen flex flex-col" style={{ background: 'var(--bg-primary)' }}>
       <Header />
+      <WorkerStatus />
 
       {/* Two-column body */}
       <div className="flex gap-6 px-6 py-5 flex-1 items-start">
