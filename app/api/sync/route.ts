@@ -347,8 +347,3 @@ async function runSync(): Promise<NextResponse> {
 export async function POST(_req: NextRequest): Promise<NextResponse> {
   return runSync()
 }
-
-// GET /api/sync — Vercel Cron Job trigger (runs on schedule)
-export async function GET(_req: NextRequest): Promise<NextResponse> {
-  return runSync()
-}
