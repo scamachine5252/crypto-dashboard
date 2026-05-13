@@ -299,6 +299,47 @@ describe('FullHistorySyncer', () => {
     expect(mockReconstruct).toHaveBeenCalledWith('acc-1', 'mexc')
   })
 
+  it('mexc sync failure surfaces in failed_items (not silently completed)', async () => {
+    const job = makeJob({ exchange: 'mexc' })
+    const updateCalls: unknown[][] = []
+    let callCount = 0
+    const account = makeAccountRow()
+    mockFrom.mockImplementation((table: string) => {
+      callCount++
+      if (table === 'full_sync_jobs' && callCount === 1) {
+        const single = jest.fn().mockResolvedValue({ data: job, error: null })
+        return { select: jest.fn().mockReturnValue({ eq: jest.fn().mockReturnValue({ single }) }) }
+      }
+      if (table === 'accounts') {
+        const single = jest.fn().mockResolvedValue({ data: account, error: null })
+        return { select: jest.fn().mockReturnValue({ eq: jest.fn().mockReturnValue({ single }) }),
+                 update: jest.fn().mockReturnValue({ eq: jest.fn().mockResolvedValue({ error: null }) }) }
+      }
+      // Capture update patches to full_sync_jobs to inspect failed_items
+      const eq = jest.fn().mockResolvedValue({ error: null })
+      const update = jest.fn().mockImplementation((patch: unknown) => {
+        updateCalls.push([table, patch])
+        return { eq }
+      })
+      return { update, upsert: jest.fn().mockResolvedValue({ error: null }) }
+    })
+    mockSet.mockResolvedValue('OK')
+    mockDel.mockResolvedValue(1)
+    mockGetTradesMexc.mockRejectedValue(new Error('MEXC API rate limit'))
+    mockReconstruct.mockResolvedValue(undefined)
+
+    await syncer.processJob('job-1')
+
+    // failed_items must include the mexc error, not be empty
+    const progressUpdate = updateCalls.find(
+      ([, val]) => val && typeof val === 'object' && 'failed_items' in (val as object),
+    )
+    expect(progressUpdate).toBeDefined()
+    const items = (progressUpdate![1] as { failed_items: Array<{ symbol: string; error: string }> }).failed_items
+    expect(items).toHaveLength(1)
+    expect(items[0].error).toContain('rate limit')
+  })
+
   it('processJob marks job failed and releases lock on error', async () => {
     const job = makeJob({ exchange: 'bybit' })
     setupJobMocks(job)

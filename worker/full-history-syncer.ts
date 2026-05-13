@@ -356,6 +356,8 @@ export class FullHistorySyncer {
     const since = Date.now() - 90 * 24 * 60 * 60 * 1000
     await this.updateProgress(job.id, { total_steps: 1 })
 
+    const allFailed: Array<{ symbol: string; error: string }> = []
+
     try {
       const trades = await adapter.getTrades('', {} as DateRange, since, 1000, Date.now())
       if (trades.length > 0) {
@@ -384,10 +386,11 @@ export class FullHistorySyncer {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       console.error('[full-history-syncer] mexc sync failed:', msg)
+      allFailed.push({ symbol: 'mexc', error: msg })
     }
 
-    await this.updateProgress(job.id, { current_step: 1 })
-    return 0
+    await this.updateProgress(job.id, { current_step: 1, failed_items: allFailed })
+    return allFailed.length
   }
 
   private async updateProgress(
