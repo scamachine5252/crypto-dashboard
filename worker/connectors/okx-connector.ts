@@ -99,6 +99,8 @@ export class OkxConnector {
         source:      'ws',
       }
       await this.fillProcessor.store(row)
+      const fillTs = Number(fill.ts)
+      if (fillTs > this.lastFillTime) this.lastFillTime = fillTs
     }
   }
 
@@ -115,7 +117,9 @@ export class OkxConnector {
       await this.connectOnce()
       if (this.destroyed) break
 
-      await this.runGapFill(this.lastFillTime, Date.now())
+      await this.runGapFill(this.lastFillTime, Date.now()).catch(e =>
+        console.error('[okx-connector] gap fill failed (will retry on next reconnect):', e)
+      )
 
       await new Promise(r => setTimeout(r, this.reconnectDelay))
       this.reconnectDelay = Math.min(this.reconnectDelay * 2, 60_000)

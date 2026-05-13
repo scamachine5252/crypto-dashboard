@@ -105,7 +105,7 @@ describe('OkxConnector — handleMessage', () => {
     const conn = new OkxConnector({ ...CREDS, fillProcessor: makeFp() })
 
     await conn.handleMessage({
-      event: 'fills',
+      arg: { channel: 'fills' },
       data: [{
         fillId: 'f2', instId: 'ETH-USDT', ts: '100', side: 'sell',
         fillSz: '1', fillPx: '3000', pnl: '0', fee: '-1.5',
@@ -114,5 +114,20 @@ describe('OkxConnector — handleMessage', () => {
 
     const fill = mockStore.mock.calls[0][0]
     expect(fill.exec_fee).toBe(1.5)
+  })
+
+  it('updates lastFillTime when a fill is received via WS', async () => {
+    mockStore.mockResolvedValue(undefined)
+    const conn = new OkxConnector({ ...CREDS, fillProcessor: makeFp(), lastFillTime: 0 })
+
+    await conn.handleMessage({
+      arg: { channel: 'fills' },
+      data: [{
+        fillId: 'f3', instId: 'BTC-USDT-SWAP', ts: '1735689600000',
+        side: 'buy', fillSz: '0.1', fillPx: '50000', pnl: '100', fee: '-0.5',
+      }],
+    })
+
+    expect((conn as unknown as { lastFillTime: number }).lastFillTime).toBe(1735689600000)
   })
 })
