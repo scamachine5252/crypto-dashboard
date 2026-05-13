@@ -552,10 +552,14 @@ export class BinanceAdapter implements ExchangeAdapter {
         symbolWeeks.get(row.symbol)!.add(clamped)
       }
 
-      return Array.from(symbolWeeks.entries()).map(([rawSymbol, weeks]) => ({
-        rawSymbol,
-        weekIndices: Array.from(weeks).sort((a, b) => a - b),
-      }))
+      return Array.from(symbolWeeks.entries()).map(([rawSymbol, weeks]) => {
+        // weeks is non-empty by construction (only populated symbols reach here)
+        const maxWeek = weeks.size === 0 ? 0 : Math.max(...weeks)
+        return {
+          rawSymbol,
+          weekIndices: Array.from({ length: maxWeek + 1 }, (_, i) => i),
+        }
+      })
     } catch (err) {
       throw new Error(`discoverTradedSymbols failed: ${err instanceof Error ? err.message : String(err)}`)
     }

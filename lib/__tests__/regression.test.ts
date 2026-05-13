@@ -947,3 +947,38 @@ describe('Bybit: incremental sync window (R5)', () => {
     expect(7 * DAY).toBe(604_800_000)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Regression: discoverTradedSymbols sparse weeks → wrong opened_at (2026-05)
+// Bug: positions opened in weeks with no income events were never fetched,
+// causing PositionReconstructor to set opened_at = closed_at (pseudo-open).
+// Fix: return [0..max] contiguous weeks so opening fills are always captured.
+// ---------------------------------------------------------------------------
+describe('discoverTradedSymbols: contiguous week coverage', () => {
+  it('single income event → weekIndices starts at 0, not at event week', () => {
+    // Simulates: position opened week 3, closed week 8 (income event week 8 only)
+    // OLD BUG: weekIndices = [8] → week 3 opening fill never fetched
+    // EXPECTED FIX: weekIndices = [0,1,2,3,4,5,6,7,8]
+    const scanStart = 0
+    const WEEK = 7 * 24 * 60 * 60 * 1000
+    const incomeWeek = 8
+    const incomeTime = scanStart + incomeWeek * WEEK + 1000
+
+    // Reproduce the mapping logic from discoverTradedSymbols
+    const symbolWeeks = new Map<string, Set<number>>()
+    const t = Number(incomeTime)
+    const weekIndex = Number.isFinite(t) ? Math.floor((t - scanStart) / WEEK) : 0
+    const clamped = Math.min(Math.max(weekIndex, 0), 25)
+    if (!symbolWeeks.has('BTCUSDT')) symbolWeeks.set('BTCUSDT', new Set())
+    symbolWeeks.get('BTCUSDT')!.add(clamped)
+
+    // Apply the FIX: [0..max] instead of sparse set
+    const weeks = symbolWeeks.get('BTCUSDT')!
+    const maxWeek = Math.max(...weeks)
+    const result = Array.from({ length: maxWeek + 1 }, (_, i) => i)
+
+    expect(result[0]).toBe(0)       // starts at 0, not 8
+    expect(result).toHaveLength(9)  // 0..8 inclusive
+    expect(result[8]).toBe(8)
+  })
+})

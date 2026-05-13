@@ -115,6 +115,41 @@ describe('BinanceAdapter.discoverTradedSymbols()', () => {
     const result = await adapter.discoverTradedSymbols()
     expect(result).toEqual([])
   })
+
+  it('non-PM: returns [0..max] when income events are sparse', async () => {
+    const { adapter, fns } = buildAdapter(false)
+    const scanStart = Date.now() - 180 * 24 * 60 * 60 * 1000
+    const WEEK = 7 * 24 * 60 * 60 * 1000
+    // Income only in weeks 10 and 23 — opening fill could be in week 7
+    fns.fapiPrivateGetIncome.mockResolvedValue([
+      { symbol: 'BTCUSDT', time: scanStart + 10 * WEEK + 1000 },
+      { symbol: 'BTCUSDT', time: scanStart + 23 * WEEK + 1000 },
+    ])
+
+    const result = await adapter.discoverTradedSymbols()
+
+    expect(result).toHaveLength(1)
+    expect(result[0].rawSymbol).toBe('BTCUSDT')
+    // Must be [0, 1, 2, …, 23] — 24 contiguous weeks
+    expect(result[0].weekIndices).toEqual(Array.from({ length: 24 }, (_, i) => i))
+  })
+
+  it('PM: returns [0..max] when income events are sparse', async () => {
+    const { adapter, fns } = buildAdapter(true)
+    const scanStart = Date.now() - 180 * 24 * 60 * 60 * 1000
+    const WEEK = 7 * 24 * 60 * 60 * 1000
+    // Only one UM income event on week 15
+    fns.papiGetUmIncome.mockResolvedValue([
+      { symbol: 'BTCUSDT', time: scanStart + 15 * WEEK + 1000 },
+    ])
+    fns.papiGetCmIncome.mockResolvedValue([])
+
+    const result = await adapter.discoverTradedSymbols()
+
+    expect(result).toHaveLength(1)
+    // Must be [0, 1, …, 15] — 16 weeks
+    expect(result[0].weekIndices).toEqual(Array.from({ length: 16 }, (_, i) => i))
+  })
 })
 
 // ─── getFullTrades() ──────────────────────────────────────────────────────────
