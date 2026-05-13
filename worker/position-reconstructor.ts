@@ -99,7 +99,7 @@ async function upsertTrades(accountId: string, exchange: string, trades: Trade[]
   const rows = Array.from(rowMap.values())
   const { error } = await supabaseAdmin
     .from('trades')
-    .upsert(rows, { onConflict: 'account_id,symbol,opened_at,closed_at' })
+    .upsert(rows, { onConflict: 'account_id,symbol,opened_at,closed_at', ignoreDuplicates: true })
   if (error) throw new Error(`trades upsert error: ${error.message}`)
 }
 
