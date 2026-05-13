@@ -126,7 +126,9 @@ export class BinanceConnector {
       await this.connectOnce()
       if (this.destroyed) break
 
-      await this.runGapFill(this.lastFillTime, Date.now())
+      await this.runGapFill(this.lastFillTime, Date.now()).catch(e =>
+        console.error('[binance-connector] gap fill failed (will retry on next reconnect):', e)
+      )
 
       await new Promise(r => setTimeout(r, this.reconnectDelay))
       this.reconnectDelay = Math.min(this.reconnectDelay * 2, 60_000)

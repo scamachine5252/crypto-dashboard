@@ -135,7 +135,9 @@ export class BybitConnector {
       if (this.destroyed) break
 
       // Gap-fill the window between last known fill and now before reconnecting
-      await this.runGapFill(this.lastFillTime, Date.now())
+      await this.runGapFill(this.lastFillTime, Date.now()).catch(e =>
+        console.error('[bybit-connector] gap fill failed (will retry on next reconnect):', e)
+      )
 
       await new Promise(r => setTimeout(r, this.reconnectDelay))
       this.reconnectDelay = Math.min(this.reconnectDelay * 2, 60_000)
