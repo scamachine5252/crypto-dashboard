@@ -272,7 +272,7 @@ export class FullHistorySyncer {
             exec_id:      String(fill.id),
             symbol:       fill.symbol,
             category:     fill.positionSide,
-            exec_time:    new Date(fill.time).toISOString(),
+            exec_time:    new Date(Number(fill.time)).toISOString(),
             side:         fill.side,
             exec_qty:     Number(fill.qty),
             exec_price:   Number(fill.price),
