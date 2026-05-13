@@ -9,7 +9,14 @@ import Header from '@/components/layout/Header'
 // ---------------------------------------------------------------------------
 interface WorkerStatusData {
   worker:   { alive: boolean; last_heartbeat: string | null; started_at: string | null }
+  binance:  { banned: boolean; ban_until: string | null }
   accounts: Array<{ id: string; exchange: string; account_name: string; last_fill_at: string | null; stale: boolean }>
+}
+
+function formatTs(iso: string | null): string {
+  if (!iso) return 'unknown'
+  const d = new Date(iso)
+  return `${String(d.getDate()).padStart(2,'0')}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getFullYear()).slice(2)} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
 }
 
 function WorkerStatus() {
@@ -24,12 +31,7 @@ function WorkerStatus() {
 
   if (!data) return null
 
-  const { worker, accounts } = data
-  const hbDate = worker.last_heartbeat ? new Date(worker.last_heartbeat) : null
-  const hbLabel = hbDate
-    ? `${String(hbDate.getDate()).padStart(2,'0')}.${String(hbDate.getMonth()+1).padStart(2,'0')}.${String(hbDate.getFullYear()).slice(2)} ${String(hbDate.getHours()).padStart(2,'0')}:${String(hbDate.getMinutes()).padStart(2,'0')}`
-    : 'unknown'
-
+  const { worker, binance, accounts } = data
   const staleAccounts = accounts.filter(a => a.stale)
 
   return (
@@ -45,15 +47,20 @@ function WorkerStatus() {
         {worker.alive ? 'Alive' : 'Stale'}
       </span>
       <span style={{ color: 'var(--text-muted)' }}>
-        Last heartbeat: <span style={{ color: 'var(--text-secondary)' }}>{hbLabel}</span>
+        Last heartbeat: <span style={{ color: 'var(--text-secondary)' }}>{formatTs(worker.last_heartbeat)}</span>
       </span>
+      {binance?.banned && (
+        <span style={{ color: 'var(--accent-loss)', fontWeight: 600 }}>
+          BINANCE IP BANNED until {formatTs(binance.ban_until)} — balance polling halted
+        </span>
+      )}
       {staleAccounts.length > 0 && (
         <span style={{ color: '#FFD700' }}>
           ⚠ {staleAccounts.length} account{staleAccounts.length > 1 ? 's' : ''} with no fills in 24h:{' '}
           {staleAccounts.map(a => `${a.account_name} (${a.exchange})`).join(', ')}
         </span>
       )}
-      {staleAccounts.length === 0 && accounts.length > 0 && (
+      {staleAccounts.length === 0 && accounts.length > 0 && !binance?.banned && (
         <span style={{ color: 'var(--text-muted)' }}>All accounts have recent fills</span>
       )}
     </div>

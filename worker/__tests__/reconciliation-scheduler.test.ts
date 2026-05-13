@@ -96,13 +96,13 @@ describe('ReconciliationScheduler — runAll', () => {
     expect(mockGetTradesMexc).toHaveBeenCalledTimes(1)
   })
 
-  it('calls discoverTradedSymbols + getFullTrades for binance account', async () => {
+  it('calls discoverTradedSymbols + getFullTrades for binance account via runBinance', async () => {
     setupAccounts([makeAccount('binance')])
     mockDiscoverSymbols.mockResolvedValue([{ rawSymbol: 'BTCUSDT', weekIndices: [25] }])
     mockGetFullTrades.mockResolvedValue({ rawFills: [], failedSymbols: [] })
 
     const scheduler = new ReconciliationScheduler()
-    await scheduler.runAll()
+    await scheduler.runBinance()
 
     expect(mockDiscoverSymbols).toHaveBeenCalledTimes(1)
     expect(mockGetFullTrades).toHaveBeenCalledWith('BTCUSDT', [25])

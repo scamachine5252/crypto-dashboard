@@ -4,6 +4,7 @@ import { decrypt } from '@/lib/crypto/decrypt'
 import { BybitAdapter } from '@/lib/adapters/bybit'
 import { BinanceAdapter } from '@/lib/adapters/binance'
 import { OkxAdapter } from '@/lib/adapters/okx'
+import { binanceBanGuard } from './binance-ban-guard'
 
 type AccountRow = {
   id:          string
@@ -14,63 +15,41 @@ type AccountRow = {
   instrument?: string
 }
 
-async function pollBalances(): Promise<void> {
+async function saveBalance(acctId: string, usdt: number): Promise<void> {
+  const today = new Date().toISOString().split('T')[0]
+  await supabaseAdmin.from('balances').delete()
+    .eq('account_id', acctId).is('token_symbol', null).eq('snapshot_date', today)
+  const { error } = await supabaseAdmin.from('balances').insert({
+    account_id:   acctId,
+    usdt_balance: usdt,
+    recorded_at:  new Date().toISOString(),
+  })
+  if (error) console.warn(`[balance-poller] insert failed for ${acctId}:`, error.message)
+}
+
+async function pollNonBinance(): Promise<void> {
   const { data: accounts, error } = await supabaseAdmin
     .from('accounts')
     .select('id, exchange, api_key, api_secret, passphrase, instrument')
+    .not('exchange', 'eq', 'binance')
 
-  if (error) {
-    console.error('[balance-poller] failed to load accounts:', error.message)
-    return
-  }
+  if (error) { console.error('[balance-poller] failed to load accounts:', error.message); return }
 
   await Promise.allSettled(
     (accounts ?? []).map(async (acct: AccountRow) => {
       try {
         const apiKey    = decrypt(acct.api_key)
         const apiSecret = decrypt(acct.api_secret)
-
         let balance: { usdt: number } | null = null
 
         if (acct.exchange === 'bybit') {
-          const adapter = new BybitAdapter({ apiKey, apiSecret })
-          balance = await adapter.fetchBalance()
-        } else if (acct.exchange === 'binance') {
-          const adapter = new BinanceAdapter({
-            apiKey, apiSecret,
-            portfolioMargin: acct.instrument === 'portfolio_margin',
-          })
-          balance = await adapter.fetchBalance()
+          balance = await new BybitAdapter({ apiKey, apiSecret }).fetchBalance()
         } else if (acct.exchange === 'okx') {
           const passphrase = acct.passphrase ? decrypt(acct.passphrase) : ''
-          const adapter = new OkxAdapter({ apiKey, apiSecret, passphrase })
-          balance = await adapter.fetchBalance()
+          balance = await new OkxAdapter({ apiKey, apiSecret, passphrase }).fetchBalance()
         }
 
-        if (!balance) return
-
-        const today = new Date().toISOString().split('T')[0]
-
-        // Delete today's record first (partial unique index on snapshot_date can't be used
-        // with onConflict in Supabase JS — delete+insert is the reliable alternative)
-        await supabaseAdmin
-          .from('balances')
-          .delete()
-          .eq('account_id', acct.id)
-          .is('token_symbol', null)
-          .eq('snapshot_date', today)
-
-        const { error: insertError } = await supabaseAdmin
-          .from('balances')
-          .insert({
-            account_id:   acct.id,
-            usdt_balance: balance.usdt,
-            recorded_at:  new Date().toISOString(),
-          })
-
-        if (insertError) {
-          console.warn(`[balance-poller] insert failed for ${acct.id}:`, insertError.message)
-        }
+        if (balance) await saveBalance(acct.id, balance.usdt)
       } catch (e) {
         console.error(`[balance-poller] error for account ${acct.id}:`, (e as Error).message)
       }
@@ -78,15 +57,48 @@ async function pollBalances(): Promise<void> {
   )
 }
 
+async function pollBinance(): Promise<void> {
+  if (binanceBanGuard.isBanned()) {
+    console.warn('[balance-poller] Binance IP banned — skipping balance poll')
+    return
+  }
+
+  const { data: accounts, error } = await supabaseAdmin
+    .from('accounts')
+    .select('id, exchange, api_key, api_secret, passphrase, instrument')
+    .eq('exchange', 'binance')
+
+  if (error) { console.error('[balance-poller] failed to load Binance accounts:', error.message); return }
+
+  // Sequential — Binance rate limits are strict
+  for (const acct of (accounts ?? []) as AccountRow[]) {
+    try {
+      const adapter = new BinanceAdapter({
+        apiKey:          decrypt(acct.api_key),
+        apiSecret:       decrypt(acct.api_secret),
+        portfolioMargin: acct.instrument === 'portfolio_margin',
+      })
+      const balance = await adapter.fetchBalance()
+      if (balance) await saveBalance(acct.id, balance.usdt)
+    } catch (e) {
+      await binanceBanGuard.recordIfBanned(e)
+      console.error(`[balance-poller] error for account ${acct.id}:`, (e as Error).message)
+    }
+  }
+}
+
 export function startBalancePoller(): void {
-  // Poll every 15 minutes
-  const task = cron.schedule('*/15 * * * *', () => void pollBalances())
-  console.log('[balance-poller] started — polling every 15 min')
+  // Non-Binance: every 15 min, parallel
+  cron.schedule('*/15 * * * *', () => void pollNonBinance())
 
-  // Initial poll on start
-  void pollBalances()
+  // Binance: every 60 min, sequential, ban-aware
+  cron.schedule('0 * * * *', () => void pollBinance())
 
-  // Graceful shutdown
-  process.once('SIGTERM', () => task.stop())
-  process.once('SIGINT',  () => task.stop())
+  console.log('[balance-poller] started — polling every 15 min (non-Binance) / 60 min (Binance)')
+
+  void pollNonBinance()
+  void pollBinance()
+
+  process.once('SIGTERM', () => { /* cron tasks stop with process */ })
+  process.once('SIGINT',  () => { /* cron tasks stop with process */ })
 }

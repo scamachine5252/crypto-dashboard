@@ -6,12 +6,15 @@ import { OkxAdapter } from '@/lib/adapters/okx'
 import { MexcAdapter } from '@/lib/adapters/mexc'
 import { BinanceAdapter } from '@/lib/adapters/binance'
 import { PositionReconstructor } from './position-reconstructor'
+import { binanceBanGuard } from './binance-ban-guard'
 import type { Trade, DateRange } from '@/lib/types'
 import type { RawExecution } from '@/lib/adapters/bybit'
 import type { RawFapiTrade } from '@/lib/adapters/binance'
 
-const WINDOW_MS   = 7 * 24 * 60 * 60 * 1000   // 7 days
-const INTERVAL_MS = 6 * 60 * 60 * 1000         // 6 hours
+const WINDOW_MS        = 7 * 24 * 60 * 60 * 1000   // 7 days
+const INTERVAL_MS      = 6 * 60 * 60 * 1000         // 6 hours
+const BINANCE_INTERVAL = 24 * 60 * 60 * 1000        // 24 hours
+const BINANCE_DELAY_MS = 500                         // between symbol requests
 
 interface AccountRow {
   id:           string
@@ -23,22 +26,30 @@ interface AccountRow {
 }
 
 export class ReconciliationScheduler {
-  private timer: ReturnType<typeof setInterval> | null = null
+  private timer:        ReturnType<typeof setInterval> | null = null
+  private binanceTimer: ReturnType<typeof setInterval> | null = null
 
   start(): void {
+    // Non-Binance: every 6h
     void this.runAll()
     this.timer = setInterval(() => void this.runAll(), INTERVAL_MS)
     this.timer.unref?.()
+
+    // Binance: every 24h (rate-limit sensitive)
+    void this.runBinance()
+    this.binanceTimer = setInterval(() => void this.runBinance(), BINANCE_INTERVAL)
+    this.binanceTimer.unref?.()
   }
 
   stop(): void {
-    if (this.timer) { clearInterval(this.timer); this.timer = null }
+    if (this.timer)        { clearInterval(this.timer);        this.timer = null }
+    if (this.binanceTimer) { clearInterval(this.binanceTimer); this.binanceTimer = null }
   }
 
   async runAll(): Promise<void> {
     console.log('[reconciliation] starting run')
 
-    const { data: accounts, error } = await supabaseAdmin
+    const { data: allAccounts, error } = await supabaseAdmin
       .from('accounts')
       .select('id, exchange, api_key, api_secret, passphrase, instrument, is_suspended')
       .eq('is_suspended', false)
@@ -48,12 +59,42 @@ export class ReconciliationScheduler {
       return
     }
 
-    for (const account of (accounts ?? []) as AccountRow[]) {
+    const accounts = (allAccounts ?? []).filter((a: AccountRow) => a.exchange !== 'binance')
+
+    for (const account of accounts as AccountRow[]) {
       await this.reconcileAccount(account).catch(e =>
         console.error(`[reconciliation] account ${account.id} (${account.exchange}) failed:`, e)
       )
     }
     console.log('[reconciliation] run complete')
+  }
+
+  async runBinance(): Promise<void> {
+    if (binanceBanGuard.isBanned()) {
+      console.warn('[reconciliation] Binance IP banned — skipping Binance reconciliation')
+      return
+    }
+
+    console.log('[reconciliation] starting Binance run')
+
+    const { data: allAccounts, error } = await supabaseAdmin
+      .from('accounts')
+      .select('id, exchange, api_key, api_secret, passphrase, instrument, is_suspended')
+      .eq('is_suspended', false)
+
+    if (error) {
+      console.error('[reconciliation] failed to load Binance accounts:', error.message)
+      return
+    }
+
+    const accounts = (allAccounts ?? []).filter((a: AccountRow) => a.exchange === 'binance')
+
+    for (const account of accounts as AccountRow[]) {
+      await this.reconcileAccount(account).catch(e =>
+        console.error(`[reconciliation] Binance account ${account.id} failed:`, e)
+      )
+    }
+    console.log('[reconciliation] Binance run complete')
   }
 
   private async reconcileAccount(account: AccountRow): Promise<void> {
@@ -134,27 +175,44 @@ export class ReconciliationScheduler {
   }
 
   private async reconcileBinance(account: AccountRow): Promise<number> {
+    if (binanceBanGuard.isBanned()) return 0
+
     const adapter = new BinanceAdapter({
       apiKey:          decrypt(account.api_key),
       apiSecret:       decrypt(account.api_secret),
       portfolioMargin: account.instrument === 'portfolio_margin',
     })
-    const symbols = await adapter.discoverTradedSymbols()
+
+    let symbols: Awaited<ReturnType<typeof adapter.discoverTradedSymbols>>
+    try {
+      symbols = await adapter.discoverTradedSymbols()
+    } catch (e) {
+      await binanceBanGuard.recordIfBanned(e)
+      throw e
+    }
+
     let total = 0
     for (const { rawSymbol } of symbols) {
-      const { rawFills } = await adapter.getFullTrades(rawSymbol, [25])
-      const rows = rawFills.map((fill: RawFapiTrade) => ({
-        account_id:   account.id,      exchange:    'binance',
-        exec_id:      String(fill.id), symbol:      fill.symbol,
-        category:     fill.positionSide,
-        exec_time:    new Date(Number(fill.time)).toISOString(),
-        side:         fill.side,
-        exec_qty:     Number(fill.qty),           exec_price:  Number(fill.price),
-        exec_pnl:     Number(fill.realizedPnl),   exec_fee:    Math.abs(Number(fill.commission)),
-        closed_size:  null, position_idx: null,
-        raw_data:     fill, source: 'rest' as const,
-      }))
-      total += await this.upsert('binance', rows)
+      if (binanceBanGuard.isBanned()) break
+      try {
+        const { rawFills } = await adapter.getFullTrades(rawSymbol, [25])
+        const rows = rawFills.map((fill: RawFapiTrade) => ({
+          account_id:   account.id,      exchange:    'binance',
+          exec_id:      String(fill.id), symbol:      fill.symbol,
+          category:     fill.positionSide,
+          exec_time:    new Date(Number(fill.time)).toISOString(),
+          side:         fill.side,
+          exec_qty:     Number(fill.qty),           exec_price:  Number(fill.price),
+          exec_pnl:     Number(fill.realizedPnl),   exec_fee:    Math.abs(Number(fill.commission)),
+          closed_size:  null, position_idx: null,
+          raw_data:     fill, source: 'rest' as const,
+        }))
+        total += await this.upsert('binance', rows)
+      } catch (e) {
+        await binanceBanGuard.recordIfBanned(e)
+        throw e
+      }
+      await new Promise(r => setTimeout(r, BINANCE_DELAY_MS))
     }
     return total
   }

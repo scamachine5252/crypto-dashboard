@@ -7,7 +7,7 @@ const STALE_HOURS = 24
 export async function GET() {
   const { data: ws } = await supabaseAdmin
     .from('worker_status')
-    .select('last_heartbeat, started_at')
+    .select('last_heartbeat, started_at, binance_ban_until')
     .eq('id', 1)
     .single()
 
@@ -43,11 +43,18 @@ export async function GET() {
     return { id: a.id, exchange: a.exchange, account_name: a.account_name, last_fill_at: lastFillAt, stale }
   })
 
+  const banUntil     = ws?.binance_ban_until ?? null
+  const binanceBanned = banUntil ? new Date(banUntil).getTime() > Date.now() : false
+
   return NextResponse.json({
     worker: {
       alive:          workerAlive,
       last_heartbeat: ws?.last_heartbeat ?? null,
       started_at:     ws?.started_at ?? null,
+    },
+    binance: {
+      banned:    binanceBanned,
+      ban_until: binanceBanned ? banUntil : null,
     },
     accounts: accountStatuses,
   })
