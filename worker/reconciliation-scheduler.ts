@@ -1,0 +1,170 @@
+import 'server-only'
+import { supabaseAdmin } from '@/lib/supabase/server'
+import { decrypt } from '@/lib/crypto/decrypt'
+import { BybitAdapter } from '@/lib/adapters/bybit'
+import { OkxAdapter } from '@/lib/adapters/okx'
+import { MexcAdapter } from '@/lib/adapters/mexc'
+import { BinanceAdapter } from '@/lib/adapters/binance'
+import { PositionReconstructor } from './position-reconstructor'
+import type { Trade, DateRange } from '@/lib/types'
+import type { RawExecution } from '@/lib/adapters/bybit'
+import type { RawFapiTrade } from '@/lib/adapters/binance'
+
+const WINDOW_MS   = 7 * 24 * 60 * 60 * 1000   // 7 days
+const INTERVAL_MS = 6 * 60 * 60 * 1000         // 6 hours
+
+interface AccountRow {
+  id:           string
+  exchange:     string
+  api_key:      string
+  api_secret:   string
+  passphrase?:  string | null
+  instrument?:  string | null
+}
+
+export class ReconciliationScheduler {
+  private timer: ReturnType<typeof setInterval> | null = null
+
+  start(): void {
+    void this.runAll()
+    this.timer = setInterval(() => void this.runAll(), INTERVAL_MS)
+    this.timer.unref?.()
+  }
+
+  stop(): void {
+    if (this.timer) { clearInterval(this.timer); this.timer = null }
+  }
+
+  async runAll(): Promise<void> {
+    console.log('[reconciliation] starting run')
+
+    const { data: accounts, error } = await supabaseAdmin
+      .from('accounts')
+      .select('id, exchange, api_key, api_secret, passphrase, instrument, is_suspended')
+      .eq('is_suspended', false)
+
+    if (error) {
+      console.error('[reconciliation] failed to load accounts:', error.message)
+      return
+    }
+
+    for (const account of (accounts ?? []) as AccountRow[]) {
+      await this.reconcileAccount(account).catch(e =>
+        console.error(`[reconciliation] account ${account.id} (${account.exchange}) failed:`, e)
+      )
+    }
+    console.log('[reconciliation] run complete')
+  }
+
+  private async reconcileAccount(account: AccountRow): Promise<void> {
+    const since = Date.now() - WINDOW_MS
+    const until = Date.now()
+    let filled = 0
+
+    if      (account.exchange === 'bybit')   filled = await this.reconcileBybit(account, since, until)
+    else if (account.exchange === 'okx')     filled = await this.reconcileOkx(account, since, until)
+    else if (account.exchange === 'mexc')    filled = await this.reconcileMexc(account, since)
+    else if (account.exchange === 'binance') filled = await this.reconcileBinance(account)
+
+    if (filled > 0) {
+      await new PositionReconstructor().reconstruct(account.id, account.exchange)
+    }
+  }
+
+  private async reconcileBybit(account: AccountRow, since: number, until: number): Promise<number> {
+    const adapter = new BybitAdapter({
+      apiKey:    decrypt(account.api_key),
+      apiSecret: decrypt(account.api_secret),
+    })
+    const { rawExecutions } = await adapter.getTradesForChunk(since, until)
+    const rows = rawExecutions.flatMap(({ category, executions }: { category: string; executions: RawExecution[] }) =>
+      executions.map((exec: RawExecution) => ({
+        account_id:   account.id,  exchange:    'bybit',
+        exec_id:      `${exec.orderId}_${exec.execTime}_${exec.execQty}`,
+        symbol:       exec.symbol, category,
+        exec_time:    new Date(Number(exec.execTime)).toISOString(),
+        side:         exec.side,
+        exec_qty:     Number(exec.execQty),  exec_price: Number(exec.execPrice),
+        exec_pnl:     Number(exec.execPnl),  exec_fee:   Math.abs(Number(exec.execFee)),
+        closed_size:  Number(exec.closedSize),
+        position_idx: exec.positionIdx ? Number(exec.positionIdx) : null,
+        raw_data:     exec,        source: 'rest' as const,
+      }))
+    )
+    return this.upsert('bybit', rows)
+  }
+
+  private async reconcileOkx(account: AccountRow, since: number, until: number): Promise<number> {
+    const adapter = new OkxAdapter({
+      apiKey:     decrypt(account.api_key),
+      apiSecret:  decrypt(account.api_secret),
+      passphrase: account.passphrase ? decrypt(account.passphrase) : '',
+    })
+    const trades = await adapter.getTrades('', {} as DateRange, since, 1000, until)
+    const rows = trades.map((t: Trade) => ({
+      account_id:   account.id,  exchange:    'okx',
+      exec_id:      t.id,        symbol:      t.symbol,  category: t.tradeType,
+      exec_time:    t.closedAt,  side:        t.side === 'long' ? 'buy' : 'sell',
+      exec_qty:     t.quantity,  exec_price:  t.exitPrice,
+      exec_pnl:     t.pnl,       exec_fee:    Math.abs(t.fee),
+      closed_size:  null,        position_idx: null,
+      raw_data:     { id: t.id, symbol: t.symbol, pnl: t.pnl },
+      source: 'rest' as const,
+    }))
+    return this.upsert('okx', rows)
+  }
+
+  private async reconcileMexc(account: AccountRow, since: number): Promise<number> {
+    const adapter = new MexcAdapter({
+      apiKey:    decrypt(account.api_key),
+      apiSecret: decrypt(account.api_secret),
+    })
+    const trades = await adapter.getTrades('', {} as DateRange, since, 1000, Date.now())
+    const rows = trades.map((t: Trade) => ({
+      account_id:   account.id,  exchange:    'mexc',
+      exec_id:      t.id,        symbol:      t.symbol,  category: t.tradeType,
+      exec_time:    t.closedAt,  side:        t.side === 'long' ? 'buy' : 'sell',
+      exec_qty:     t.quantity,  exec_price:  t.exitPrice,
+      exec_pnl:     t.pnl,       exec_fee:    Math.abs(t.fee),
+      closed_size:  null,        position_idx: null,
+      raw_data:     { id: t.id, symbol: t.symbol, pnl: t.pnl },
+      source: 'rest' as const,
+    }))
+    return this.upsert('mexc', rows)
+  }
+
+  private async reconcileBinance(account: AccountRow): Promise<number> {
+    const adapter = new BinanceAdapter({
+      apiKey:          decrypt(account.api_key),
+      apiSecret:       decrypt(account.api_secret),
+      portfolioMargin: account.instrument === 'portfolio_margin',
+    })
+    const symbols = await adapter.discoverTradedSymbols()
+    let total = 0
+    for (const { rawSymbol } of symbols) {
+      const { rawFills } = await adapter.getFullTrades(rawSymbol, [25])
+      const rows = rawFills.map((fill: RawFapiTrade) => ({
+        account_id:   account.id,      exchange:    'binance',
+        exec_id:      String(fill.id), symbol:      fill.symbol,
+        category:     fill.positionSide,
+        exec_time:    new Date(Number(fill.time)).toISOString(),
+        side:         fill.side,
+        exec_qty:     Number(fill.qty),           exec_price:  Number(fill.price),
+        exec_pnl:     Number(fill.realizedPnl),   exec_fee:    Math.abs(Number(fill.commission)),
+        closed_size:  null, position_idx: null,
+        raw_data:     fill, source: 'rest' as const,
+      }))
+      total += await this.upsert('binance', rows)
+    }
+    return total
+  }
+
+  private async upsert(exchange: string, rows: unknown[]): Promise<number> {
+    if (rows.length === 0) return 0
+    const { error } = await supabaseAdmin
+      .from('raw_fills')
+      .upsert(rows, { onConflict: 'account_id,exchange,exec_id', ignoreDuplicates: true })
+    if (error) console.warn(`[reconciliation] ${exchange} upsert warning:`, error.message)
+    return rows.length
+  }
+}
