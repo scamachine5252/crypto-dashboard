@@ -475,7 +475,7 @@ describe('A4 · sync chunk size — must not exceed exchange API window limit', 
   const FULL_HISTORY_DAYS     = 180
 
   it('Bybit chunk size does not exceed the 7-day API window limit', () => {
-    const BYBIT_CHUNK_DAYS = 7 // from app/api/sync/bybit/full/route.ts
+    const BYBIT_CHUNK_DAYS = 7 // FullHistorySyncer hardcoded chunk size
     expect(BYBIT_CHUNK_DAYS).toBeLessThanOrEqual(BYBIT_MAX_WINDOW_DAYS)
   })
 
