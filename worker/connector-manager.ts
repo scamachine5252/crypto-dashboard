@@ -6,6 +6,10 @@ import { PositionReconstructor } from './position-reconstructor'
 import { BybitConnector } from './connectors/bybit-connector'
 import { BinanceConnector } from './connectors/binance-connector'
 import { OkxConnector } from './connectors/okx-connector'
+import { MexcConnector } from './connectors/mexc-connector'
+import { MexcAdapter } from '@/lib/adapters/mexc'
+import type { RawFill } from './fill-processor'
+import type { DateRange } from '@/lib/types'
 
 export interface AccountRow {
   id:              string
@@ -100,6 +104,39 @@ export class ConnectorManager {
       })
       this.connectors.push(connector)
       void connector.connect()  // runs its own reconnect loop — do not await
+      return
+    }
+
+    if (acct.exchange === 'mexc') {
+      const adapter = new MexcAdapter({
+        apiKey:    apiKey,
+        apiSecret: apiSecret,
+      })
+      const fetchFills = async (since: number): Promise<RawFill[]> => {
+        const trades = await adapter.getTrades('', {} as DateRange, since, 1000, Date.now())
+        return trades.map(t => ({
+          account_id:   acct.id,
+          exchange:     'mexc',
+          exec_id:      t.id,
+          symbol:       t.symbol,
+          category:     t.tradeType,
+          exec_time:    new Date(t.closedAt),
+          side:         t.side === 'long' ? 'buy' : 'sell',
+          exec_qty:     t.quantity,
+          exec_price:   t.exitPrice,
+          exec_pnl:     t.pnl,
+          exec_fee:     Math.abs(t.fee),
+          closed_size:  null,
+          position_idx: null,
+          raw_data:     { id: t.id, symbol: t.symbol, pnl: t.pnl },
+          source:       'rest' as const,
+        }))
+      }
+      const connector = new MexcConnector({
+        accountId: acct.id, lastFillTime, fillProcessor: this.processor, fetchFills,
+      })
+      this.connectors.push(connector)
+      void connector.connect()
       return
     }
 
