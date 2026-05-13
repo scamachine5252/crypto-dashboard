@@ -115,7 +115,11 @@ function setupJobMocks(job: ReturnType<typeof makeJob>, account = makeAccountRow
       }
     }
     const eq = jest.fn().mockResolvedValue({ error: null })
+    // fresh-fetch after processJob: return completed job so shouldRetry = false
+    const freshData = { status: 'completed', retry_count: 0, failed_items: [] }
+    const freshSingle = jest.fn().mockResolvedValue({ data: freshData, error: null })
     return {
+      select: jest.fn().mockReturnValue({ eq: jest.fn().mockReturnValue({ single: freshSingle }) }),
       update: jest.fn().mockReturnValue({ eq }),
       upsert: jest.fn().mockResolvedValue({ error: null }),
     }
@@ -335,7 +339,13 @@ describe('FullHistorySyncer', () => {
         updateCalls.push([table, patch])
         return { eq }
       })
-      return { update, upsert: jest.fn().mockResolvedValue({ error: null }) }
+      const freshData = { status: 'completed', retry_count: 0, failed_items: [] }
+      const freshSingle = jest.fn().mockResolvedValue({ data: freshData, error: null })
+      return {
+        select: jest.fn().mockReturnValue({ eq: jest.fn().mockReturnValue({ single: freshSingle }) }),
+        update,
+        upsert: jest.fn().mockResolvedValue({ error: null }),
+      }
     })
     mockSet.mockResolvedValue('OK')
     mockDel.mockResolvedValue(1)
@@ -377,5 +387,89 @@ describe('FullHistorySyncer', () => {
     await syncer.processJob('job-1')
 
     expect(mockDel).toHaveBeenCalledWith('fullscan:lock:acc-1')
+  })
+
+  // ── Auto-retry ─────────────────────────────────────────────────────────────
+
+  it('re-enqueues with 1h delay when job fails and retry_count < 3', async () => {
+    jest.useFakeTimers()
+    let selectCallCount = 0
+
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'full_sync_jobs') {
+        return {
+          select: jest.fn().mockImplementation(() => {
+            const data = selectCallCount === 0
+              ? makeJob({ exchange: 'binance', retry_count: 1 })
+              : { status: 'failed', retry_count: 1, failed_items: [] }
+            selectCallCount++
+            return { eq: jest.fn().mockReturnValue({ single: jest.fn().mockResolvedValue({ data, error: null }) }) }
+          }),
+          update: jest.fn().mockReturnValue({ eq: jest.fn().mockResolvedValue({ error: null }) }),
+        }
+      }
+      if (table === 'accounts') {
+        return {
+          select: jest.fn().mockReturnValue({ eq: jest.fn().mockReturnValue({ single: jest.fn().mockResolvedValue({ data: makeAccountRow(), error: null }) }) }),
+          update: jest.fn().mockReturnValue({ eq: jest.fn().mockResolvedValue({ error: null }) }),
+        }
+      }
+      return {
+        update: jest.fn().mockReturnValue({ eq: jest.fn().mockResolvedValue({ error: null }) }),
+        upsert: jest.fn().mockResolvedValue({ error: null }),
+      }
+    })
+
+    mockSet.mockResolvedValue('OK')
+    mockDel.mockResolvedValue(1)
+    mockDiscoverSymbols.mockRejectedValue(new Error('exchange unreachable'))
+
+    await syncer.processJob('job-1')
+
+    jest.advanceTimersByTime(60 * 60 * 1000)
+
+    expect(mockLpush).toHaveBeenCalledWith('fullscan:queue', 'job-1')
+    jest.useRealTimers()
+  })
+
+  it('does not re-enqueue when retry_count is already 3', async () => {
+    jest.useFakeTimers()
+    let selectCallCount = 0
+
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'full_sync_jobs') {
+        return {
+          select: jest.fn().mockImplementation(() => {
+            const data = selectCallCount === 0
+              ? makeJob({ exchange: 'binance', retry_count: 3 })
+              : { status: 'failed', retry_count: 3, failed_items: [] }
+            selectCallCount++
+            return { eq: jest.fn().mockReturnValue({ single: jest.fn().mockResolvedValue({ data, error: null }) }) }
+          }),
+          update: jest.fn().mockReturnValue({ eq: jest.fn().mockResolvedValue({ error: null }) }),
+        }
+      }
+      if (table === 'accounts') {
+        return {
+          select: jest.fn().mockReturnValue({ eq: jest.fn().mockReturnValue({ single: jest.fn().mockResolvedValue({ data: makeAccountRow(), error: null }) }) }),
+          update: jest.fn().mockReturnValue({ eq: jest.fn().mockResolvedValue({ error: null }) }),
+        }
+      }
+      return {
+        update: jest.fn().mockReturnValue({ eq: jest.fn().mockResolvedValue({ error: null }) }),
+        upsert: jest.fn().mockResolvedValue({ error: null }),
+      }
+    })
+
+    mockSet.mockResolvedValue('OK')
+    mockDel.mockResolvedValue(1)
+    mockDiscoverSymbols.mockRejectedValue(new Error('exchange unreachable'))
+
+    await syncer.processJob('job-1')
+
+    jest.advanceTimersByTime(60 * 60 * 1000)
+
+    expect(mockLpush).not.toHaveBeenCalledWith('fullscan:queue', 'job-1')
+    jest.useRealTimers()
   })
 })

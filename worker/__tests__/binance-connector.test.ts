@@ -138,10 +138,12 @@ describe('BinanceConnector — startup gap fill', () => {
       return []
     })
     const conn = new BinanceConnector({ ...CREDS, portfolioMargin: false, fillProcessor: makeFp(), fetchGapFills: mockGapFills })
-    jest.spyOn(conn as unknown as { connectOnce(): Promise<void> }, 'connectOnce' as never)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    jest.spyOn(conn as any, 'connectOnce')
       .mockImplementation(async () => { callOrder.push('connectOnce'); conn.disconnect() })
     // createListenKey must not throw so the loop proceeds
-    jest.spyOn(conn as unknown as { createListenKey(): Promise<string> }, 'createListenKey' as never)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    jest.spyOn(conn as any, 'createListenKey')
       .mockResolvedValue('test-key')
 
     await conn.connect()

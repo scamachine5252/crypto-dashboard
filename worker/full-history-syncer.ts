@@ -18,6 +18,7 @@ export interface SyncJob {
   status:        SyncJobStatus
   current_step:  number
   total_steps:   number
+  retry_count:   number
   failed_items:  Array<{ symbol: string; error: string }>
   error_message: string | null
   started_at:    string | null
@@ -190,6 +191,29 @@ export class FullHistorySyncer {
       this.currentJobId     = null
       this.currentAccountId = null
       await this.releaseLock(syncJob.account_id)
+    }
+
+    const { data: freshJob } = await supabaseAdmin
+      .from('full_sync_jobs')
+      .select('status, retry_count, failed_items')
+      .eq('id', jobId)
+      .single()
+
+    if (freshJob) {
+      const hasFailedItems = Array.isArray(freshJob.failed_items) && freshJob.failed_items.length > 0
+      const shouldRetry = (freshJob.status === 'failed' || hasFailedItems) && freshJob.retry_count < 3
+
+      if (shouldRetry) {
+        await supabaseAdmin
+          .from('full_sync_jobs')
+          .update({ status: 'pending', started_at: null, retry_count: freshJob.retry_count + 1, failed_items: [] })
+          .eq('id', jobId)
+        setTimeout(() => {
+          void this.redis.lpush(QUEUE_KEY, jobId)
+            .catch(e => console.error('[full-history-syncer] retry enqueue failed:', e))
+        }, 60 * 60 * 1000)
+        console.log(`[full-history-syncer] job ${jobId} retry ${freshJob.retry_count + 1}/3 scheduled in 1h`)
+      }
     }
   }
 

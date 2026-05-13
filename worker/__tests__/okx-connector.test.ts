@@ -142,7 +142,8 @@ describe('OkxConnector — startup gap fill', () => {
       return []
     })
     const conn = new OkxConnector({ ...CREDS, fillProcessor: makeFp(), fetchGapFills: mockGapFills })
-    jest.spyOn(conn as unknown as { connectOnce(): Promise<void> }, 'connectOnce' as never)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    jest.spyOn(conn as any, 'connectOnce')
       .mockImplementation(async () => { callOrder.push('connectOnce'); conn.disconnect() })
 
     await conn.connect()
