@@ -3,6 +3,23 @@
 // ---------------------------------------------------------------------------
 const mockFromSelect = jest.fn()
 const mockUpsert     = jest.fn()
+const mockDelete     = jest.fn()
+
+// Builds a chainable object whose terminal .eq() call resolves to { error: null }.
+// Supports arbitrary depth: .delete().eq().eq().eq() all resolve correctly.
+function makeDeleteChain(): Record<string, unknown> {
+  const chain: Record<string, unknown> = {}
+  chain.eq = jest.fn().mockImplementation(() => {
+    const next = makeDeleteChain()
+    // Make next also thenable so `await chain.eq()` works
+    ;(next as Record<string, unknown>).then = (resolve: (v: unknown) => unknown) =>
+      Promise.resolve({ error: null }).then(resolve)
+    return next
+  })
+  chain.then = (resolve: (v: unknown) => unknown) =>
+    Promise.resolve({ error: null }).then(resolve)
+  return chain
+}
 
 jest.mock('@/lib/supabase/server', () => ({
   supabaseAdmin: {
@@ -10,8 +27,8 @@ jest.mock('@/lib/supabase/server', () => ({
       if (table === 'raw_fills') {
         return { select: mockFromSelect }
       }
-      // trades
-      return { upsert: mockUpsert }
+      mockDelete.mockReturnValue(makeDeleteChain())
+      return { upsert: mockUpsert, delete: mockDelete }
     }),
   },
 }))

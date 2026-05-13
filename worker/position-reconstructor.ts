@@ -103,11 +103,20 @@ async function upsertTrades(accountId: string, exchange: string, trades: Trade[]
   if (error) throw new Error(`trades upsert error: ${error.message}`)
 }
 
+async function deleteTrades(accountId: string, exchange: string, tradeType?: string): Promise<void> {
+  let query = supabaseAdmin.from('trades').delete().eq('account_id', accountId).eq('exchange', exchange)
+  if (tradeType) query = query.eq('trade_type', tradeType)
+  const { error } = await query
+  if (error) throw new Error(`trades delete error: ${error.message}`)
+}
+
 export class PositionReconstructor {
   async reconstruct(accountId: string, exchange: string): Promise<void> {
     if (exchange === 'bybit') {
-      // Spot fills (category='spot') are 1-fill=1-trade and written directly by the
-      // full sync route — no position reconstruction needed for spot.
+      // Delete existing futures trades before re-reconstructing to avoid stale records
+      // with wrong opened_at from a previous run. Spot trades are written directly by
+      // the sync route and must not be deleted here.
+      await deleteTrades(accountId, exchange, 'futures')
       for (const category of ['linear', 'inverse'] as const) {
         const rows = await fetchAllFills(accountId, exchange, category)
         if (rows.length === 0) continue
@@ -121,6 +130,11 @@ export class PositionReconstructor {
     if (exchange === 'binance') {
       const rows = await fetchAllFills(accountId, exchange)
       if (rows.length === 0) return
+
+      // Delete ALL existing binance trades before re-reconstructing to ensure
+      // changed opened_at values (from more history being available) don't leave
+      // stale records alongside new ones.
+      await deleteTrades(accountId, exchange)
 
       // Group fills by symbol, reconstruct positions per symbol
       const bySymbol = new Map<string, Record<string, unknown>[]>()
@@ -141,6 +155,8 @@ export class PositionReconstructor {
     if (exchange === 'okx') {
       const rows = await fetchAllFills(accountId, exchange)
       if (rows.length === 0) return
+
+      await deleteTrades(accountId, exchange)
 
       const trades: Trade[] = rows.map(row => {
         const sideRaw  = String(row.side ?? 'buy').toLowerCase()
