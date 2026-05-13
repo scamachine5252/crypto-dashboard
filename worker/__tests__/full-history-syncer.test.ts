@@ -34,7 +34,41 @@ jest.mock('../position-reconstructor', () => ({
   })),
 }))
 
-// Global fetch mock
+// Adapter mocks
+const mockGetTradesForChunk    = jest.fn()
+const mockDiscoverSymbols      = jest.fn()
+const mockBinanceGetFullTrades = jest.fn()
+const mockGetTradesOkx         = jest.fn()
+const mockGetTradesMexc        = jest.fn()
+
+jest.mock('@/lib/adapters/bybit', () => ({
+  BybitAdapter: jest.fn().mockImplementation(() => ({
+    getTradesForChunk: mockGetTradesForChunk,
+  })),
+}))
+
+jest.mock('@/lib/adapters/binance', () => ({
+  BinanceAdapter: jest.fn().mockImplementation(() => ({
+    discoverTradedSymbols: mockDiscoverSymbols,
+    getFullTrades:         mockBinanceGetFullTrades,
+  })),
+}))
+
+jest.mock('@/lib/adapters/okx', () => ({
+  OkxAdapter: jest.fn().mockImplementation(() => ({
+    getTrades: mockGetTradesOkx,
+  })),
+}))
+
+jest.mock('@/lib/adapters/mexc', () => ({
+  MexcAdapter: jest.fn().mockImplementation(() => ({
+    getTrades: mockGetTradesMexc,
+  })),
+}))
+
+jest.mock('@/lib/crypto/decrypt', () => ({ decrypt: (v: string) => `dec:${v}` }))
+
+// Global fetch mock (kept for tests that verify NO fetch is called)
 const mockFetch = jest.fn()
 global.fetch = mockFetch as typeof fetch
 
@@ -60,6 +94,34 @@ function makeJob(overrides: Record<string, unknown> = {}) {
   }
 }
 
+function makeAccountRow(overrides: Record<string, unknown> = {}) {
+  return { id: 'acc-1', api_key: 'k', api_secret: 's', passphrase: null, instrument: 'unified', ...overrides }
+}
+
+function setupJobMocks(job: ReturnType<typeof makeJob>, account = makeAccountRow()) {
+  let callCount = 0
+  mockFrom.mockImplementation((table: string) => {
+    callCount++
+    if (table === 'full_sync_jobs' && callCount === 1) {
+      const single = jest.fn().mockResolvedValue({ data: job, error: null })
+      return { select: jest.fn().mockReturnValue({ eq: jest.fn().mockReturnValue({ single }) }) }
+    }
+    if (table === 'accounts') {
+      const single = jest.fn().mockResolvedValue({ data: account, error: null })
+      const eq = jest.fn().mockReturnValue({ single })
+      return {
+        select: jest.fn().mockReturnValue({ eq }),
+        update: jest.fn().mockReturnValue({ eq: jest.fn().mockResolvedValue({ error: null }) }),
+      }
+    }
+    const eq = jest.fn().mockResolvedValue({ error: null })
+    return {
+      update: jest.fn().mockReturnValue({ eq }),
+      upsert: jest.fn().mockResolvedValue({ error: null }),
+    }
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -69,7 +131,7 @@ describe('FullHistorySyncer', () => {
 
   beforeEach(() => {
     jest.clearAllMocks()
-    syncer = new FullHistorySyncer('redis://localhost:6379', 'http://localhost:3000')
+    syncer = new FullHistorySyncer('redis://localhost:6379')
   })
 
   afterEach(() => syncer.stop())
@@ -173,116 +235,88 @@ describe('FullHistorySyncer', () => {
     expect(mockFetch).not.toHaveBeenCalled()
   })
 
-  it('processJob runs bybit sync via HTTP and marks job completed', async () => {
+  it('processJob runs bybit sync via direct adapter — zero HTTP calls', async () => {
     const job = makeJob({ exchange: 'bybit' })
-
-    let fromCallCount = 0
-    mockFrom.mockImplementation(() => {
-      fromCallCount++
-      if (fromCallCount === 1) {
-        const single = jest.fn().mockResolvedValue({ data: job, error: null })
-        const eq     = jest.fn().mockReturnValue({ single })
-        return { select: jest.fn().mockReturnValue({ eq }) }
-      }
-      const eq  = jest.fn().mockResolvedValue({ error: null })
-      return { update: jest.fn().mockReturnValue({ eq }) }
-    })
-
+    setupJobMocks(job)
     mockSet.mockResolvedValue('OK')
     mockDel.mockResolvedValue(1)
+    mockGetTradesForChunk.mockResolvedValue({ trades: [], finalState: {}, rawExecutions: [] })
     mockReconstruct.mockResolvedValue(undefined)
-
-    mockFetch
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ totalChunks: 1 }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ synced: 1, failedCategories: [], final_state: {} }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) })
 
     await syncer.processJob('job-1')
 
-    const urls = (mockFetch.mock.calls as unknown[][]).map((c) => c[0] as string)
-    expect(urls).toContain('http://localhost:3000/api/sync/bybit/chunks')
-    expect(urls.every((u: string) => !u.includes('reconstruct'))).toBe(true)
+    expect(mockFetch).not.toHaveBeenCalled()
+    expect(mockGetTradesForChunk).toHaveBeenCalledTimes(26)
     expect(mockReconstruct).toHaveBeenCalledWith('acc-1', 'bybit')
     expect(mockDel).toHaveBeenCalledWith('fullscan:lock:acc-1')
   })
 
-  it('processJob marks job failed and releases lock on error', async () => {
-    const job = makeJob({ exchange: 'bybit' })
-
-    let fromCallCount = 0
-    mockFrom.mockImplementation(() => {
-      fromCallCount++
-      if (fromCallCount === 1) {
-        const single = jest.fn().mockResolvedValue({ data: job, error: null })
-        const eq     = jest.fn().mockReturnValue({ single })
-        return { select: jest.fn().mockReturnValue({ eq }) }
-      }
-      const eq  = jest.fn().mockResolvedValue({ error: null })
-      return { update: jest.fn().mockReturnValue({ eq }) }
-    })
+  it('processJob runs binance sync via direct adapter — zero HTTP calls', async () => {
+    const job = makeJob({ exchange: 'binance' })
+    setupJobMocks(job)
     mockSet.mockResolvedValue('OK')
     mockDel.mockResolvedValue(1)
-    mockFetch.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({ error: 'DB error' }) })
+    mockDiscoverSymbols.mockResolvedValue([{ rawSymbol: 'BTCUSDT', weekIndices: [0, 1, 2] }])
+    mockBinanceGetFullTrades.mockResolvedValue({ trades: [], failedSymbols: [], rawFills: [] })
+    mockReconstruct.mockResolvedValue(undefined)
+
+    await syncer.processJob('job-1')
+
+    expect(mockFetch).not.toHaveBeenCalled()
+    expect(mockDiscoverSymbols).toHaveBeenCalled()
+    expect(mockBinanceGetFullTrades).toHaveBeenCalledWith('BTCUSDT', [0, 1, 2])
+    expect(mockReconstruct).toHaveBeenCalledWith('acc-1', 'binance')
+    expect(mockDel).toHaveBeenCalledWith('fullscan:lock:acc-1')
+  })
+
+  it('processJob runs okx sync via direct adapter — zero HTTP calls', async () => {
+    const job = makeJob({ exchange: 'okx' })
+    setupJobMocks(job, makeAccountRow({ passphrase: 'pp' }))
+    mockSet.mockResolvedValue('OK')
+    mockDel.mockResolvedValue(1)
+    mockGetTradesOkx.mockResolvedValue([])
+    mockReconstruct.mockResolvedValue(undefined)
+
+    await syncer.processJob('job-1')
+
+    expect(mockFetch).not.toHaveBeenCalled()
+    expect(mockGetTradesOkx).toHaveBeenCalledTimes(6)
+    expect(mockReconstruct).toHaveBeenCalledWith('acc-1', 'okx')
+  })
+
+  it('processJob runs mexc sync via direct adapter — zero HTTP calls', async () => {
+    const job = makeJob({ exchange: 'mexc' })
+    setupJobMocks(job)
+    mockSet.mockResolvedValue('OK')
+    mockDel.mockResolvedValue(1)
+    mockGetTradesMexc.mockResolvedValue([])
+    mockReconstruct.mockResolvedValue(undefined)
+
+    await syncer.processJob('job-1')
+
+    expect(mockFetch).not.toHaveBeenCalled()
+    expect(mockGetTradesMexc).toHaveBeenCalledTimes(1)
+    expect(mockReconstruct).toHaveBeenCalledWith('acc-1', 'mexc')
+  })
+
+  it('processJob marks job failed and releases lock on error', async () => {
+    const job = makeJob({ exchange: 'bybit' })
+    setupJobMocks(job)
+    mockSet.mockResolvedValue('OK')
+    mockDel.mockResolvedValue(1)
+    mockGetTradesForChunk.mockRejectedValue(new Error('exchange API error'))
 
     await syncer.processJob('job-1')
 
     expect(mockDel).toHaveBeenCalledWith('fullscan:lock:acc-1')
   })
 
-  it('processJob runs binance sync: discover → full per symbol → PATCH → reconstruct', async () => {
-    const job = makeJob({ exchange: 'binance' })
-
-    let fromCallCount = 0
-    mockFrom.mockImplementation(() => {
-      fromCallCount++
-      if (fromCallCount === 1) {
-        const single = jest.fn().mockResolvedValue({ data: job, error: null })
-        const eq     = jest.fn().mockReturnValue({ single })
-        return { select: jest.fn().mockReturnValue({ eq }) }
-      }
-      const eq  = jest.fn().mockResolvedValue({ error: null })
-      return { update: jest.fn().mockReturnValue({ eq }) }
-    })
-    mockSet.mockResolvedValue('OK')
-    mockDel.mockResolvedValue(1)
-    mockReconstruct.mockResolvedValue(undefined)
-
-    mockFetch
-      .mockResolvedValueOnce({
-        ok:   true,
-        json: async () => ({ symbols: [{ rawSymbol: 'BTCUSDT', weekIndices: [0, 1] }] }),
-      })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ synced: 2, failedSymbols: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) })
-
-    await syncer.processJob('job-1')
-
-    const urls = (mockFetch.mock.calls as unknown[][]).map((c) => c[0] as string)
-    expect(urls).toContain('http://localhost:3000/api/sync/binance/discover')
-    expect(urls).toContain('http://localhost:3000/api/sync/binance/full')
-    expect(urls.every((u) => !u.includes('reconstruct'))).toBe(true)
-    expect(mockReconstruct).toHaveBeenCalledWith('acc-1', 'binance')
-  })
-
   it('processJob marks job failed when PositionReconstructor.reconstruct() throws', async () => {
     const job = makeJob({ exchange: 'bybit' })
-    let fromCallCount = 0
-    mockFrom.mockImplementation(() => {
-      fromCallCount++
-      if (fromCallCount === 1) {
-        const single = jest.fn().mockResolvedValue({ data: job, error: null })
-        const eq = jest.fn().mockReturnValue({ single })
-        return { select: jest.fn().mockReturnValue({ eq }) }
-      }
-      const eq = jest.fn().mockResolvedValue({ error: null })
-      return { update: jest.fn().mockReturnValue({ eq }) }
-    })
+    setupJobMocks(job)
     mockSet.mockResolvedValue('OK')
     mockDel.mockResolvedValue(1)
-    mockFetch
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ totalChunks: 1 }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ fills: 1, failedCategories: [], final_state: {} }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) })
+    mockGetTradesForChunk.mockResolvedValue({ trades: [], finalState: {}, rawExecutions: [] })
     mockReconstruct.mockRejectedValue(new Error('trades upsert error: connection timeout'))
 
     await syncer.processJob('job-1')

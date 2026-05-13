@@ -2,6 +2,12 @@ import 'server-only'
 import Redis from 'ioredis'
 import { supabaseAdmin } from '@/lib/supabase/server'
 import { PositionReconstructor } from './position-reconstructor'
+import { BybitAdapter, type ReconstructionStateJson, type RawExecution } from '@/lib/adapters/bybit'
+import { BinanceAdapter, type RawFapiTrade } from '@/lib/adapters/binance'
+import { OkxAdapter } from '@/lib/adapters/okx'
+import { MexcAdapter } from '@/lib/adapters/mexc'
+import { decrypt } from '@/lib/crypto/decrypt'
+import type { Trade, DateRange } from '@/lib/types'
 
 export type SyncJobStatus = 'pending' | 'processing' | 'completed' | 'failed'
 
@@ -18,19 +24,30 @@ export interface SyncJob {
   completed_at:  string | null
 }
 
+interface AccountRow {
+  id:         string
+  api_key:    string
+  api_secret: string
+  passphrase: string | null
+  instrument: string
+}
+
 const QUEUE_KEY    = 'fullscan:queue'
 const LOCK_PREFIX  = 'fullscan:lock:'
 const LOCK_TTL_SEC = 3600
 const STUCK_MS     = 10 * 60 * 1000
 
-export class FullHistorySyncer {
-  private redis:      Redis
-  private running:    boolean = false
-  private appBaseUrl: string
+const BYBIT_CHUNK_DAYS = 7
+const BYBIT_CHUNKS     = 26
+const OKX_CHUNK_DAYS   = 30
+const OKX_CHUNKS       = 6
 
-  constructor(redisUrl: string, appBaseUrl = 'http://localhost:3000') {
-    this.redis      = new Redis(redisUrl)
-    this.appBaseUrl = appBaseUrl
+export class FullHistorySyncer {
+  private redis:   Redis
+  private running: boolean = false
+
+  constructor(redisUrl: string) {
+    this.redis = new Redis(redisUrl)
   }
 
   // ── Public helpers ───────────────────────────────────────────────────────
@@ -121,13 +138,18 @@ export class FullHistorySyncer {
       .eq('id', jobId)
 
     try {
-      await this.runSync(syncJob)
+      const { data: account } = await supabaseAdmin
+        .from('accounts')
+        .select('id, api_key, api_secret, passphrase, instrument')
+        .eq('id', syncJob.account_id)
+        .single()
+      if (!account) throw new Error(`Account ${syncJob.account_id} not found`)
+
+      await this.runSync(syncJob, account as AccountRow)
       await supabaseAdmin
         .from('full_sync_jobs')
         .update({ status: 'completed', completed_at: new Date().toISOString() })
         .eq('id', jobId)
-      // accounts.last_full_sync_at and full_sync_failed_count are written by the
-      // exchange-specific PATCH routes called inside syncBinance/syncChunked.
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       console.error('[full-history-syncer] sync failed:', message)
@@ -142,103 +164,230 @@ export class FullHistorySyncer {
 
   // ── Sync orchestration ───────────────────────────────────────────────────
 
-  private async runSync(job: SyncJob): Promise<void> {
-    const base = this.appBaseUrl
+  private async runSync(job: SyncJob, account: AccountRow): Promise<void> {
+    let failedCount = 0
 
-    if (job.exchange === 'binance') {
-      await this.syncBinance(job, base)
-    } else if (['bybit', 'okx', 'mexc'].includes(job.exchange)) {
-      await this.syncChunked(job, base)
+    if (job.exchange === 'bybit') {
+      failedCount = await this.syncBybitDirect(job, account)
+    } else if (job.exchange === 'binance') {
+      failedCount = await this.syncBinanceDirect(job, account)
+    } else if (job.exchange === 'okx') {
+      failedCount = await this.syncOkxDirect(job, account)
+    } else if (job.exchange === 'mexc') {
+      failedCount = await this.syncMexcDirect(job, account)
     } else {
       throw new Error(`Unsupported exchange: ${job.exchange}`)
     }
 
     const reconstructor = new PositionReconstructor()
     await reconstructor.reconstruct(job.account_id, job.exchange)
+
+    await supabaseAdmin
+      .from('accounts')
+      .update({
+        last_full_sync_at:      new Date().toISOString(),
+        full_sync_failed_count: failedCount,
+      })
+      .eq('id', job.account_id)
   }
 
-  private async syncBinance(job: SyncJob, base: string): Promise<void> {
-    const discoverRes = await fetch(`${base}/api/sync/binance/discover`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ account_id: job.account_id }),
-    })
-    if (!discoverRes.ok) {
-      const body = await discoverRes.json().catch(() => ({})) as { error?: string }
-      throw new Error(`discover failed (${discoverRes.status}): ${body.error ?? ''}`)
-    }
-    const { symbols } = await discoverRes.json() as {
-      symbols: Array<{ rawSymbol: string; weekIndices: number[] }>
-    }
+  // ── Per-exchange sync ────────────────────────────────────────────────────
 
+  private async syncBybitDirect(job: SyncJob, account: AccountRow): Promise<number> {
+    const adapter = new BybitAdapter({
+      apiKey:    decrypt(account.api_key),
+      apiSecret: decrypt(account.api_secret),
+    })
+
+    const chunkMs = BYBIT_CHUNK_DAYS * 24 * 60 * 60 * 1000
+    const refTs   = Date.now()
+    await this.updateProgress(job.id, { total_steps: BYBIT_CHUNKS })
+
+    const allFailed: Array<{ symbol: string; error: string }> = []
+    let inheritedState: ReconstructionStateJson | undefined
+
+    for (let i = 0; i < BYBIT_CHUNKS; i++) {
+      const since = refTs - (BYBIT_CHUNKS - i) * chunkMs
+      const until = since + chunkMs
+      try {
+        const { rawExecutions, finalState } = await adapter.getTradesForChunk(since, until, inheritedState)
+        inheritedState = finalState
+
+        const fillRows = rawExecutions.flatMap(({ category, executions }: { category: string; executions: RawExecution[] }) =>
+          executions.map((exec: RawExecution) => ({
+            account_id:   job.account_id,
+            exchange:     'bybit',
+            exec_id:      `${exec.orderId}_${exec.execTime}_${exec.execQty}`,
+            symbol:       exec.symbol,
+            category,
+            exec_time:    new Date(Number(exec.execTime)).toISOString(),
+            side:         exec.side,
+            exec_qty:     Number(exec.execQty),
+            exec_price:   Number(exec.execPrice),
+            exec_pnl:     Number(exec.execPnl),
+            exec_fee:     Math.abs(Number(exec.execFee)),
+            closed_size:  Number(exec.closedSize),
+            position_idx: exec.positionIdx ? Number(exec.positionIdx) : null,
+            raw_data:     exec,
+            source:       'rest' as const,
+          }))
+        )
+        if (fillRows.length > 0) {
+          const { error } = await supabaseAdmin
+            .from('raw_fills')
+            .upsert(fillRows, { onConflict: 'account_id,exchange,exec_id', ignoreDuplicates: true })
+          if (error) console.warn('[full-history-syncer] bybit raw_fills warning:', error.message)
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        allFailed.push({ symbol: `chunk-${i}`, error: msg })
+      }
+      await this.updateProgress(job.id, { current_step: i + 1, failed_items: allFailed })
+    }
+    return allFailed.length
+  }
+
+  private async syncBinanceDirect(job: SyncJob, account: AccountRow): Promise<number> {
+    const adapter = new BinanceAdapter({
+      apiKey:           decrypt(account.api_key),
+      apiSecret:        decrypt(account.api_secret),
+      portfolioMargin:  account.instrument === 'portfolio_margin',
+    })
+
+    const symbols = await adapter.discoverTradedSymbols()
     await this.updateProgress(job.id, { total_steps: symbols.length })
 
     const allFailed: Array<{ symbol: string; error: string }> = []
+
     for (let i = 0; i < symbols.length; i++) {
       const { rawSymbol, weekIndices } = symbols[i]
-      const res = await fetch(`${base}/api/sync/binance/full`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ account_id: job.account_id, symbol: rawSymbol, weeks: weekIndices }),
-      })
-      if (res.ok) {
-        const data = await res.json() as { failedSymbols: Array<{ symbol: string; error: string }> }
-        allFailed.push(...data.failedSymbols)
-      } else {
-        const body = await res.json().catch(() => ({})) as { error?: string }
-        allFailed.push({ symbol: rawSymbol, error: body.error ?? `HTTP ${res.status}` })
+      try {
+        const { rawFills, failedSymbols } = await adapter.getFullTrades(rawSymbol, weekIndices)
+        allFailed.push(...failedSymbols)
+
+        if (rawFills.length > 0) {
+          const fillRows = rawFills.map((fill: RawFapiTrade) => ({
+            account_id:   job.account_id,
+            exchange:     'binance',
+            exec_id:      String(fill.id),
+            symbol:       fill.symbol,
+            category:     fill.positionSide,
+            exec_time:    new Date(fill.time).toISOString(),
+            side:         fill.side,
+            exec_qty:     Number(fill.qty),
+            exec_price:   Number(fill.price),
+            exec_pnl:     Number(fill.realizedPnl),
+            exec_fee:     Math.abs(Number(fill.commission)),
+            closed_size:  null,
+            position_idx: null,
+            raw_data:     fill,
+            source:       'rest' as const,
+          }))
+          const { error } = await supabaseAdmin
+            .from('raw_fills')
+            .upsert(fillRows, { onConflict: 'account_id,exchange,exec_id', ignoreDuplicates: true })
+          if (error) console.warn('[full-history-syncer] binance raw_fills warning:', error.message)
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        allFailed.push({ symbol: rawSymbol, error: msg })
       }
       await this.updateProgress(job.id, { current_step: i + 1, failed_items: allFailed })
     }
-
-    await fetch(`${base}/api/sync/binance/full`, {
-      method:  'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ account_id: job.account_id, failed_count: allFailed.length }),
-    })
+    return allFailed.length
   }
 
-  private async syncChunked(job: SyncJob, base: string): Promise<void> {
-    const chunksRes = await fetch(`${base}/api/sync/${job.exchange}/chunks`)
-    if (!chunksRes.ok) throw new Error(`chunks failed: ${chunksRes.status}`)
-    const { totalChunks } = await chunksRes.json() as { totalChunks: number }
+  private async syncOkxDirect(job: SyncJob, account: AccountRow): Promise<number> {
+    const adapter = new OkxAdapter({
+      apiKey:     decrypt(account.api_key),
+      apiSecret:  decrypt(account.api_secret),
+      passphrase: account.passphrase ? decrypt(account.passphrase) : '',
+    })
 
-    await this.updateProgress(job.id, { total_steps: totalChunks })
+    const chunkMs = OKX_CHUNK_DAYS * 24 * 60 * 60 * 1000
+    const refTs   = Date.now()
+    await this.updateProgress(job.id, { total_steps: OKX_CHUNKS })
 
     const allFailed: Array<{ symbol: string; error: string }> = []
-    const refTs = Date.now()
-    let inheritedState: Record<string, unknown> | undefined
 
-    for (let i = 0; i < totalChunks; i++) {
-      const res = await fetch(`${base}/api/sync/${job.exchange}/full`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({
-          account_id:          job.account_id,
-          chunk_index:         i,
-          inherited_state:     inheritedState,
-          reference_timestamp: refTs,
-        }),
-      })
-      if (res.ok) {
-        const data = await res.json() as {
-          failedCategories?: Array<{ symbol: string; error: string }>
-          final_state?:      Record<string, unknown>
+    for (let i = 0; i < OKX_CHUNKS; i++) {
+      const since = refTs - (OKX_CHUNKS - i) * chunkMs
+      const until = since + chunkMs
+      try {
+        const trades = await adapter.getTrades('', {} as DateRange, since, 1000, until)
+        if (trades.length > 0) {
+          const fillRows = trades.map((t: Trade) => ({
+            account_id:   job.account_id,
+            exchange:     'okx',
+            exec_id:      t.id,
+            symbol:       t.symbol,
+            category:     t.tradeType,
+            exec_time:    t.closedAt,
+            side:         t.side === 'long' ? 'buy' : 'sell',
+            exec_qty:     t.quantity,
+            exec_price:   t.exitPrice,
+            exec_pnl:     t.pnl,
+            exec_fee:     Math.abs(t.fee),
+            closed_size:  null,
+            position_idx: null,
+            raw_data:     { id: t.id, symbol: t.symbol, pnl: t.pnl },
+            source:       'rest' as const,
+          }))
+          const { error } = await supabaseAdmin
+            .from('raw_fills')
+            .upsert(fillRows, { onConflict: 'account_id,exchange,exec_id', ignoreDuplicates: true })
+          if (error) console.warn('[full-history-syncer] okx raw_fills warning:', error.message)
         }
-        allFailed.push(...(data.failedCategories ?? []))
-        if (data.final_state) inheritedState = data.final_state
-      } else {
-        const body = await res.json().catch(() => ({})) as { error?: string }
-        allFailed.push({ symbol: `chunk-${i}`, error: body.error ?? `HTTP ${res.status}` })
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        allFailed.push({ symbol: `chunk-${i}`, error: msg })
       }
       await this.updateProgress(job.id, { current_step: i + 1, failed_items: allFailed })
     }
+    return allFailed.length
+  }
 
-    await fetch(`${base}/api/sync/${job.exchange}/full`, {
-      method:  'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ account_id: job.account_id, failed_count: allFailed.length }),
+  private async syncMexcDirect(job: SyncJob, account: AccountRow): Promise<number> {
+    const adapter = new MexcAdapter({
+      apiKey:    decrypt(account.api_key),
+      apiSecret: decrypt(account.api_secret),
     })
+
+    const since = Date.now() - 90 * 24 * 60 * 60 * 1000
+    await this.updateProgress(job.id, { total_steps: 1 })
+
+    try {
+      const trades = await adapter.getTrades('', {} as DateRange, since, 1000, Date.now())
+      if (trades.length > 0) {
+        const fillRows = trades.map((t: Trade) => ({
+          account_id:   job.account_id,
+          exchange:     'mexc',
+          exec_id:      t.id,
+          symbol:       t.symbol,
+          category:     t.tradeType,
+          exec_time:    t.closedAt,
+          side:         t.side === 'long' ? 'buy' : 'sell',
+          exec_qty:     t.quantity,
+          exec_price:   t.exitPrice,
+          exec_pnl:     t.pnl,
+          exec_fee:     Math.abs(t.fee),
+          closed_size:  null,
+          position_idx: null,
+          raw_data:     { id: t.id, symbol: t.symbol, pnl: t.pnl },
+          source:       'rest' as const,
+        }))
+        const { error } = await supabaseAdmin
+          .from('raw_fills')
+          .upsert(fillRows, { onConflict: 'account_id,exchange,exec_id', ignoreDuplicates: true })
+        if (error) console.warn('[full-history-syncer] mexc raw_fills warning:', error.message)
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error('[full-history-syncer] mexc sync failed:', msg)
+    }
+
+    await this.updateProgress(job.id, { current_step: 1 })
+    return 0
   }
 
   private async updateProgress(
