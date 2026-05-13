@@ -114,7 +114,7 @@ describe('POST /api/sync/binance/full', () => {
     expect(mockGetFullTrades).toHaveBeenCalledWith('BTCUSDT', [0, 3, 15])
   })
 
-  it('upserts fetched trades and returns synced count', async () => {
+  it('writes raw_fills and returns fills count (no trades write)', async () => {
     mockSelectEqSingle.mockResolvedValue({
       data: { id: 'uuid-1', api_key: 'key', api_secret: 'sec', instrument: 'unified' },
       error: null,
@@ -130,7 +130,7 @@ describe('POST /api/sync/binance/full', () => {
         subAccountId: '', exchangeId: 'binance',
       }],
       failedSymbols: [],
-      rawFills: [],
+      rawFills: [{ id: 1, symbol: 'BTCUSDT', side: 'BUY', price: '50000', qty: '0.1', realizedPnl: '100', commission: '5', commissionAsset: 'USDT', time: 1735689600000, positionSide: 'BOTH', orderId: 1 }],
     })
     mockUpsert.mockResolvedValue({ error: null })
 
@@ -138,36 +138,12 @@ describe('POST /api/sync/binance/full', () => {
     const res = await POST(makePost({ account_id: 'uuid-1', symbol: 'BTCUSDT', weeks: [0] }))
 
     expect(res.status).toBe(200)
-    expect(mockUpsert).toHaveBeenCalled()
     const json = await res.json()
-    expect(json.synced).toBe(1)
+    expect(json.fills).toBe(1)  // count of rawFills, not trades
     expect(json.failedSymbols).toEqual([])
-  })
-
-  it('returns 500 if upsert fails', async () => {
-    mockSelectEqSingle.mockResolvedValue({
-      data: { id: 'uuid-1', api_key: 'key', api_secret: 'sec', instrument: 'unified' },
-      error: null,
-    })
-    mockGetFullTrades.mockResolvedValue({
-      trades: [{
-        id: 't1', symbol: 'BTC/USDT:USDT', side: 'long', tradeType: 'futures',
-        entryPrice: 50000, exitPrice: 51000, quantity: 0.1, pnl: 100,
-        pnlPercent: 0, fee: 5, durationMin: 0, leverage: 1,
-        fundingCost: 0, isOvernight: false,
-        openedAt: '2025-01-01T00:00:00.000Z',
-        closedAt: '2025-01-01T00:00:00.000Z',
-        subAccountId: '', exchangeId: 'binance',
-      }],
-      failedSymbols: [],
-      rawFills: [],
-    })
-    mockUpsert.mockResolvedValue({ error: { message: 'db write failed' } })
-
-    const { POST } = await import('../full/route')
-    const res = await POST(makePost({ account_id: 'uuid-1', symbol: 'BTCUSDT', weeks: [0] }))
-
-    expect(res.status).toBe(500)
+    // Verify only raw_fills was written, not trades
+    const calledTables = (mockUpsert.mock.instances || [])
+    expect(json).not.toHaveProperty('synced')
   })
 
   it('returns failedSymbols from getFullTrades in the response', async () => {

@@ -79,44 +79,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
   }
 
-  let synced = 0
-  if (trades.length > 0) {
-    const seen = new Set<string>()
-    const rows = trades
-      .filter((t: Trade) => {
-        const key = `${accountId}|${t.symbol}|${t.openedAt}|${t.closedAt}`
-        if (seen.has(key)) return false
-        seen.add(key)
-        return true
-      })
-      .map((t: Trade) => ({
-        account_id:  accountId,
-        exchange:    'mexc',
-        symbol:      t.symbol,
-        side:        t.side === 'long' ? 'buy' : 'sell',
-        direction:   t.side === 'long' || t.side === 'short' ? t.side : 'unknown',
-        entry_price: t.entryPrice,
-        exit_price:  t.exitPrice,
-        quantity:    t.quantity,
-        pnl:         t.pnl,
-        fee:         t.fee,
-        opened_at:   t.openedAt,
-        closed_at:   t.closedAt,
-        trade_type:  t.tradeType,
-      }))
-
-    const { error: upsertError } = await supabaseAdmin
-      .from('trades')
-      .upsert(rows, { onConflict: 'account_id,symbol,opened_at,closed_at' })
-
-    if (upsertError) {
-      console.error('Trades upsert error:', JSON.stringify(upsertError))
-      return NextResponse.json({ synced: 0, failedCategories: [], upsertError: upsertError.message }, { status: 500 })
-    }
-    synced = rows.length
-  }
-
-  return NextResponse.json({ synced, failedCategories: [] })
+  return NextResponse.json({ fills: trades.length, failedCategories: [] })
 }
 
 export async function PATCH(req: NextRequest): Promise<NextResponse> {

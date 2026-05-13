@@ -982,3 +982,22 @@ describe('discoverTradedSymbols: contiguous week coverage', () => {
     expect(result[8]).toBe(8)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Regression: dual write to trades → duplicate rows with different opened_at (2026-05)
+// Bug: binance/full/route AND PositionReconstructor both write to trades.
+// If discoverTradedSymbols gives different weekIndices on two runs,
+// two reconstructions produce different opened_at → both survive upsert.
+// Fix: full-history routes write ONLY raw_fills; PositionReconstructor is sole writer.
+// ---------------------------------------------------------------------------
+describe('dual write prevention', () => {
+  it('two trade rows with same symbol but different opened_at both survive upsert conflict', () => {
+    // Demonstrates WHY removing dual write matters
+    const row1 = { account_id: 'a', symbol: 'BTCUSDT', opened_at: '2025-01-01', closed_at: '2025-01-10' }
+    const row2 = { account_id: 'a', symbol: 'BTCUSDT', opened_at: '2024-12-25', closed_at: '2025-01-10' }
+    // Different opened_at → different composite key → both insert → duplicates in history
+    const key1 = `${row1.account_id}|${row1.symbol}|${row1.opened_at}|${row1.closed_at}`
+    const key2 = `${row2.account_id}|${row2.symbol}|${row2.opened_at}|${row2.closed_at}`
+    expect(key1).not.toBe(key2)  // proves they would both be inserted
+  })
+})

@@ -4,7 +4,6 @@ import { supabaseAdmin } from '@/lib/supabase/server'
 import { decrypt } from '@/lib/crypto/decrypt'
 import { BybitAdapter } from '@/lib/adapters/bybit'
 import type { ReconstructionStateJson } from '@/lib/adapters/bybit'
-import type { Trade } from '@/lib/types'
 
 const CHUNK_DAYS   = 7    // Bybit Unified API enforces 7-day max window per request
 const TOTAL_DAYS   = 182  // 26 × 7 days
@@ -48,14 +47,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     apiSecret: decrypt((account as Record<string, string>).api_secret),
   })
 
-  let trades: Trade[]
   let finalState: ReconstructionStateJson
   let rawExecutions: Awaited<ReturnType<typeof adapter.getTradesForChunk>>['rawExecutions'] = []
   try {
     // since/until are exactly 7 days apart — within Bybit's API limit.
     // inheritedState carries open positions from the previous chunk.
     const result = await adapter.getTradesForChunk(since, until, inheritedState)
-    trades        = result.trades
     finalState    = result.finalState
     rawExecutions = result.rawExecutions
   } catch (err) {
@@ -63,8 +60,6 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     console.error(`[bybit/full] chunk=${chunkIndex} getTradesForChunk error:`, message)
     return NextResponse.json({ error: message, chunk_index: chunkIndex }, { status: 500 })
   }
-
-  console.log(`[bybit/full] chunk=${chunkIndex} trades=${trades.length} window=${new Date(since).toISOString()}..${new Date(until).toISOString()}`)
 
   // ── Store raw fills (idempotent, best-effort) ────────────────────────────────
   // exec_id = orderId_execTime_execQty — deterministic composite key (Bybit REST
@@ -92,74 +87,17 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       .from('raw_fills')
       .upsert(fillRows, { onConflict: 'account_id,exchange,exec_id', ignoreDuplicates: true })
     if (fillsError) {
-      // Non-fatal: raw_fills is for future reconstruction; trades upsert is authoritative now.
+      // Non-fatal: raw_fills is the only write path; PositionReconstructor writes trades.
       console.warn(`[bybit/full] chunk=${chunkIndex} raw_fills upsert warning (${category}):`, fillsError.message)
     }
   }
 
-  let synced = 0
-  let skippedNoOpenTime = 0
-  if (trades.length > 0) {
-    // Merge fills that share (symbol, opened_at, closed_at) — same position closed by multiple
-    // simultaneous fills (same execTime ms). Drop rather than merge would silently lose PnL.
-    type DbRow = {
-      account_id: string; exchange: string; symbol: string; side: string; direction: string;
-      entry_price: number; exit_price: number; quantity: number; pnl: number; fee: number;
-      opened_at: string; closed_at: string; trade_type: string;
-    }
-    const rowMap = new Map<string, DbRow>()
-    for (const t of trades) {
-      if (!t.openedAt) { skippedNoOpenTime++; continue }
-      const key = `${accountId}|${t.symbol}|${t.openedAt}|${t.closedAt}`
-      const existing = rowMap.get(key)
-      if (existing) {
-        existing.pnl      += t.pnl      ?? 0
-        existing.fee      += t.fee      ?? 0
-        existing.quantity += t.quantity ?? 0
-      } else {
-        rowMap.set(key, {
-          account_id:  accountId,
-          exchange:    'bybit',
-          symbol:      t.symbol,
-          side:        t.side === 'long' ? 'buy' : 'sell',
-          direction:   t.side === 'long' || t.side === 'short' ? t.side : 'unknown',
-          entry_price: t.entryPrice,
-          exit_price:  t.exitPrice,
-          quantity:    t.quantity,
-          pnl:         t.pnl,
-          fee:         t.fee,
-          opened_at:   t.openedAt,
-          closed_at:   t.closedAt,
-          trade_type:  t.tradeType,
-        })
-      }
-    }
-    const rows = Array.from(rowMap.values())
-
-    if (rows.length > 0) {
-      const { error: upsertError } = await supabaseAdmin
-        .from('trades')
-        .upsert(rows, { onConflict: 'account_id,symbol,opened_at,closed_at' })
-
-      if (upsertError) {
-        console.error(`[bybit/full] chunk=${chunkIndex} upsert error:`, JSON.stringify(upsertError))
-        return NextResponse.json({ synced: 0, failedCategories: [], upsertError: upsertError.message, chunk_index: chunkIndex }, { status: 500 })
-      }
-    }
-    synced = rows.length
-  }
-
-  const warnings: string[] = trades
-    .filter((t: Trade) => !t.openedAt)
-    .map((t: Trade) => `no openedAt: ${t.symbol} closed=${t.closedAt}`)
-
-  console.log(`[bybit/full] chunk=${chunkIndex} synced=${synced} skippedNoOpenTime=${skippedNoOpenTime}`)
+  const fillCount = rawExecutions.reduce((n: number, r: { executions: unknown[] }) => n + r.executions.length, 0)
+  console.log(`[bybit/full] chunk=${chunkIndex} fills=${fillCount} window=${new Date(since).toISOString()}..${new Date(until).toISOString()}`)
   return NextResponse.json({
-    synced,
-    failedCategories:     [],
-    skipped_no_open_time: skippedNoOpenTime,
-    warnings,
-    final_state:          finalState,  // pass to next chunk as inherited_state
+    fills:            fillCount,
+    failedCategories: [],
+    final_state:      finalState,  // pass to next chunk as inherited_state
   })
 }
 

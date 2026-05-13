@@ -96,7 +96,7 @@ describe('POST /api/sync/okx/full', () => {
     expect(res.status).toBe(404)
   })
 
-  it('returns { synced, failedCategories } on success with empty trades', async () => {
+  it('returns { fills, failedCategories } on success with empty trades', async () => {
     mockSelectEqSingle.mockResolvedValue({
       data: { id: 'uuid-1', api_key: 'enc-key', api_secret: 'enc-sec', passphrase: 'enc-pass' },
       error: null,
@@ -109,11 +109,12 @@ describe('POST /api/sync/okx/full', () => {
 
     expect(res.status).toBe(200)
     const json = await res.json()
-    expect(json.synced).toBe(0)
+    expect(json.fills).toBe(0)
     expect(json.failedCategories).toEqual([])
+    expect(json).not.toHaveProperty('synced')
   })
 
-  it('upserts fetched trades and returns correct synced count', async () => {
+  it('writes raw_fills and returns fills count (no trades write)', async () => {
     mockSelectEqSingle.mockResolvedValue({
       data: { id: 'uuid-1', api_key: 'enc-key', api_secret: 'enc-sec', passphrase: 'enc-pass' },
       error: null,
@@ -135,34 +136,10 @@ describe('POST /api/sync/okx/full', () => {
     const res = await POST(makePost({ account_id: 'uuid-1', chunk_index: 2 }))
 
     expect(res.status).toBe(200)
-    expect(mockUpsert).toHaveBeenCalled()
     const json = await res.json()
-    expect(json.synced).toBe(1)
+    expect(json.fills).toBe(1)
     expect(json.failedCategories).toEqual([])
-  })
-
-  it('returns 500 if upsert fails', async () => {
-    mockSelectEqSingle.mockResolvedValue({
-      data: { id: 'uuid-1', api_key: 'enc-key', api_secret: 'enc-sec', passphrase: 'enc-pass' },
-      error: null,
-    })
-    mockGetTrades.mockResolvedValue([
-      {
-        id: 't1', symbol: 'ETH/USDT', side: 'short', tradeType: 'futures',
-        entryPrice: 3000, exitPrice: 2900, quantity: 1, pnl: 100,
-        pnlPercent: 3.33, fee: 3, durationMin: 30, leverage: 5,
-        fundingCost: 0, isOvernight: false,
-        openedAt: '2025-01-02T00:00:00.000Z',
-        closedAt: '2025-01-02T00:30:00.000Z',
-        subAccountId: 'okx', exchangeId: 'okx',
-      },
-    ])
-    mockUpsert.mockResolvedValue({ error: { message: 'db write failed' } })
-
-    const { POST } = await import('../full/route')
-    const res = await POST(makePost({ account_id: 'uuid-1', chunk_index: 0 }))
-
-    expect(res.status).toBe(500)
+    expect(json).not.toHaveProperty('synced')
   })
 
   it('returns 500 if getTrades throws', async () => {
@@ -200,28 +177,23 @@ describe('POST /api/sync/okx/full', () => {
     expect(until - since).toBe(30 * 24 * 60 * 60 * 1000)
   })
 
-  it('deduplicates trades with same account_id/symbol/openedAt before upsert', async () => {
+  it('deduplication of trades is now handled by PositionReconstructor; raw_fills use exec_id conflict key', async () => {
+    // The route no longer writes trades. Deduplication is PositionReconstructor's job.
+    // raw_fills deduplication happens via the exec_id ON CONFLICT key in the upsert.
     mockSelectEqSingle.mockResolvedValue({
       data: { id: 'uuid-1', api_key: 'enc-key', api_secret: 'enc-sec', passphrase: 'enc-pass' },
       error: null,
     })
-    const dupTrade = {
-      id: 't1', symbol: 'BTC/USDT', side: 'long', tradeType: 'spot',
-      entryPrice: 50000, exitPrice: 50000, quantity: 0.1, pnl: 10,
-      pnlPercent: 0.2, fee: 5, durationMin: 0, leverage: 1,
-      fundingCost: 0, isOvernight: false,
-      openedAt: '2025-01-01T00:00:00.000Z',
-      closedAt: '2025-01-01T00:00:00.000Z',
-      subAccountId: 'okx', exchangeId: 'okx',
-    }
-    mockGetTrades.mockResolvedValue([dupTrade, dupTrade])
+    mockGetTrades.mockResolvedValue([])
     mockUpsert.mockResolvedValue({ error: null })
 
     const { POST } = await import('../full/route')
     const res = await POST(makePost({ account_id: 'uuid-1', chunk_index: 0 }))
 
+    expect(res.status).toBe(200)
     const json = await res.json()
-    expect(json.synced).toBe(1) // deduped from 2 → 1
+    expect(json).not.toHaveProperty('synced')
+    expect(json.fills).toBeDefined()
   })
 
   it('handles account with null passphrase gracefully', async () => {
@@ -237,7 +209,7 @@ describe('POST /api/sync/okx/full', () => {
 
     expect(res.status).toBe(200)
     const json = await res.json()
-    expect(json.synced).toBe(0)
+    expect(json.fills).toBe(0)
   })
 })
 

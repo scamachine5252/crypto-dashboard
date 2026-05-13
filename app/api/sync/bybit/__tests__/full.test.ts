@@ -96,7 +96,7 @@ describe('POST /api/sync/bybit/full', () => {
     expect(res.status).toBe(404)
   })
 
-  it('returns { synced, failedCategories, final_state } on success with empty trades', async () => {
+  it('returns { fills, failedCategories, final_state } on success with empty executions', async () => {
     mockSelectEqSingle.mockResolvedValue({
       data: { id: 'uuid-1', api_key: 'enc-key', api_secret: 'enc-sec' },
       error: null,
@@ -109,12 +109,13 @@ describe('POST /api/sync/bybit/full', () => {
 
     expect(res.status).toBe(200)
     const json = await res.json()
-    expect(json.synced).toBe(0)
+    expect(json.fills).toBe(0)
     expect(json.failedCategories).toEqual([])
     expect(json.final_state).toBeDefined()
+    expect(json).not.toHaveProperty('synced')
   })
 
-  it('upserts fetched trades and returns correct synced count', async () => {
+  it('writes raw_fills and returns fills count (no trades write)', async () => {
     mockSelectEqSingle.mockResolvedValue({
       data: { id: 'uuid-1', api_key: 'enc-key', api_secret: 'enc-sec' },
       error: null,
@@ -132,7 +133,10 @@ describe('POST /api/sync/bybit/full', () => {
         },
       ],
       finalState: {},
-      rawExecutions: [],
+      rawExecutions: [{
+        category: 'linear',
+        executions: [{ orderId: 'o1', execTime: '1735689600000', execQty: '0.1', symbol: 'BTCUSDT', side: 'Buy', execPrice: '50000', execPnl: '100', execFee: '5', closedSize: '0.1' }],
+      }],
     })
     mockUpsert.mockResolvedValue({ error: null })
 
@@ -140,38 +144,10 @@ describe('POST /api/sync/bybit/full', () => {
     const res = await POST(makePost({ account_id: 'uuid-1', chunk_index: 2 }))
 
     expect(res.status).toBe(200)
-    expect(mockUpsert).toHaveBeenCalled()
     const json = await res.json()
-    expect(json.synced).toBe(1)
+    expect(json.fills).toBe(1)  // 1 execution in rawExecutions
     expect(json.failedCategories).toEqual([])
-  })
-
-  it('returns 500 if upsert fails', async () => {
-    mockSelectEqSingle.mockResolvedValue({
-      data: { id: 'uuid-1', api_key: 'enc-key', api_secret: 'enc-sec' },
-      error: null,
-    })
-    mockGetTradesForChunk.mockResolvedValue({
-      trades: [
-        {
-          id: 't1', symbol: 'ETH/USDT', side: 'short', tradeType: 'futures',
-          entryPrice: 3000, exitPrice: 2900, quantity: 1, pnl: 100,
-          pnlPercent: 3.33, fee: 3, durationMin: 30, leverage: 5,
-          fundingCost: 0, isOvernight: false,
-          openedAt: '2025-01-02T00:00:00.000Z',
-          closedAt: '2025-01-02T00:30:00.000Z',
-          subAccountId: 'bybit', exchangeId: 'bybit',
-        },
-      ],
-      finalState: {},
-      rawExecutions: [],
-    })
-    mockUpsert.mockResolvedValue({ error: { message: 'db write failed' } })
-
-    const { POST } = await import('../full/route')
-    const res = await POST(makePost({ account_id: 'uuid-1', chunk_index: 0 }))
-
-    expect(res.status).toBe(500)
+    expect(json).not.toHaveProperty('synced')
   })
 
   it('returns 500 if getTradesForChunk throws', async () => {
@@ -241,28 +217,23 @@ describe('POST /api/sync/bybit/full', () => {
     expect(json.final_state).toEqual(finalState)
   })
 
-  it('deduplicates trades with same account_id/symbol/openedAt/closedAt before upsert', async () => {
+  it('deduplication is now handled by PositionReconstructor; raw_fills get unique exec_ids', async () => {
+    // The route no longer writes trades, so deduplication of trades is not its responsibility.
+    // raw_fills deduplication is handled by the exec_id conflict key in the upsert.
     mockSelectEqSingle.mockResolvedValue({
       data: { id: 'uuid-1', api_key: 'enc-key', api_secret: 'enc-sec' },
       error: null,
     })
-    const dupTrade = {
-      id: 't1', symbol: 'BTC/USDT', side: 'long', tradeType: 'spot',
-      entryPrice: 50000, exitPrice: 50000, quantity: 0.1, pnl: 10,
-      pnlPercent: 0.2, fee: 5, durationMin: 0, leverage: 1,
-      fundingCost: 0, isOvernight: false,
-      openedAt: '2025-01-01T00:00:00.000Z',
-      closedAt: '2025-01-01T00:00:00.000Z',
-      subAccountId: 'bybit', exchangeId: 'bybit',
-    }
-    mockGetTradesForChunk.mockResolvedValue({ trades: [dupTrade, dupTrade], finalState: {}, rawExecutions: [] })
+    mockGetTradesForChunk.mockResolvedValue({ trades: [], finalState: {}, rawExecutions: [] })
     mockUpsert.mockResolvedValue({ error: null })
 
     const { POST } = await import('../full/route')
     const res = await POST(makePost({ account_id: 'uuid-1', chunk_index: 0 }))
 
+    expect(res.status).toBe(200)
     const json = await res.json()
-    expect(json.synced).toBe(1) // deduped from 2 → 1
+    expect(json).not.toHaveProperty('synced')
+    expect(json.fills).toBeDefined()
   })
 })
 
