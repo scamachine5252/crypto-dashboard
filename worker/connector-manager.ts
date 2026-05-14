@@ -62,8 +62,13 @@ export class ConnectorManager {
     // Single batch query instead of N per-account queries
     const fillMap = new Map<string, number>()
     if (accountIds.length > 0) {
-      const { data: latestFills } = await supabaseAdmin
+      const { data: latestFills, error: rpcError } = await supabaseAdmin
         .rpc('latest_fill_per_account', { account_ids: accountIds })
+      if (rpcError) {
+        // All connectors will fall back to lastFillTime=0 — gap fill will fail for large windows.
+        // This usually means migration 031 was not applied to the production database.
+        console.error('[connector-manager] latest_fill_per_account RPC failed — all connectors starting with lastFillTime=0:', rpcError.message)
+      }
       for (const row of (latestFills ?? []) as Array<{ account_id: string; exec_time: string }>) {
         fillMap.set(row.account_id, new Date(row.exec_time).getTime())
       }
