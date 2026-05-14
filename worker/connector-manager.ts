@@ -152,7 +152,7 @@ export class ConnectorManager {
           exec_fee:     Math.abs(t.fee),
           closed_size:  null,
           position_idx: null,
-          raw_data:     { id: t.id, symbol: t.symbol, pnl: t.pnl },
+          raw_data:     t,
           source:       'rest' as const,
         }))
       }
@@ -186,7 +186,7 @@ export class ConnectorManager {
           exec_fee:     Math.abs(t.fee),
           closed_size:  null,
           position_idx: null,
-          raw_data:     { id: t.id, symbol: t.symbol, pnl: t.pnl },
+          raw_data:     t,
           source:       'rest' as const,
         }))
       }

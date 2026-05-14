@@ -149,7 +149,7 @@ export class ReconciliationScheduler {
       exec_qty:     t.quantity,  exec_price:  t.exitPrice,
       exec_pnl:     t.pnl,       exec_fee:    Math.abs(t.fee),
       closed_size:  null,        position_idx: null,
-      raw_data:     { id: t.id, symbol: t.symbol, pnl: t.pnl },
+      raw_data:     t,
       source: 'rest' as const,
     }))
     return this.upsert('okx', rows)
@@ -168,7 +168,7 @@ export class ReconciliationScheduler {
       exec_qty:     t.quantity,  exec_price:  t.exitPrice,
       exec_pnl:     t.pnl,       exec_fee:    Math.abs(t.fee),
       closed_size:  null,        position_idx: null,
-      raw_data:     { id: t.id, symbol: t.symbol, pnl: t.pnl },
+      raw_data:     t,
       source: 'rest' as const,
     }))
     return this.upsert('mexc', rows)

@@ -433,7 +433,7 @@ export class FullHistorySyncer {
             exec_fee:     Math.abs(t.fee),
             closed_size:  null,
             position_idx: null,
-            raw_data:     { id: t.id, symbol: t.symbol, pnl: t.pnl },
+            raw_data:     t,
             source:       'rest' as const,
           }))
           const { error } = await supabaseAdmin
@@ -478,7 +478,7 @@ export class FullHistorySyncer {
           exec_fee:     Math.abs(t.fee),
           closed_size:  null,
           position_idx: null,
-          raw_data:     { id: t.id, symbol: t.symbol, pnl: t.pnl },
+          raw_data:     t,
           source:       'rest' as const,
         }))
         const { error } = await supabaseAdmin
