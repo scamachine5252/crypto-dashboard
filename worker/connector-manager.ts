@@ -34,7 +34,7 @@ export class ConnectorManager {
 
   constructor(redisUrl = 'redis://127.0.0.1:6379') {
     this.redis        = new Redis(redisUrl)
-    this.reconstructor = new PositionReconstructor()
+    this.reconstructor = new PositionReconstructor(redisUrl)
     this.processor    = new FillProcessor(this.redis, {
       onReconstruct: (accountId, exchange) =>
         void this.reconstructor.reconstruct(accountId, exchange)

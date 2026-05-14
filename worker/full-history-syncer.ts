@@ -45,12 +45,14 @@ const OKX_CHUNKS       = 6
 
 export class FullHistorySyncer {
   private redis:              Redis
+  private redisUrl:           string
   private running:            boolean = false
   private currentJobId:       string | null = null
   private currentAccountId:   string | null = null
 
   constructor(redisUrl: string) {
-    this.redis = new Redis(redisUrl)
+    this.redisUrl = redisUrl
+    this.redis    = new Redis(redisUrl)
   }
 
   // ── Public helpers ───────────────────────────────────────────────────────
@@ -281,7 +283,7 @@ export class FullHistorySyncer {
       throw new Error(`Unsupported exchange: ${job.exchange}`)
     }
 
-    const reconstructor = new PositionReconstructor()
+    const reconstructor = new PositionReconstructor(this.redisUrl)
     await reconstructor.reconstruct(job.account_id, job.exchange)
 
     const { error: updateErr } = await supabaseAdmin

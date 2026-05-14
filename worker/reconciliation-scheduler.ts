@@ -30,6 +30,11 @@ export class ReconciliationScheduler {
   private timer:               ReturnType<typeof setInterval> | null = null
   private binanceTimer:        ReturnType<typeof setInterval> | null = null
   private binanceStartupTimer: ReturnType<typeof setTimeout>  | null = null
+  private redisUrl:            string
+
+  constructor(redisUrl = 'redis://127.0.0.1:6379') {
+    this.redisUrl = redisUrl
+  }
 
   start(): void {
     // Non-Binance: fire immediately, then every 6h
@@ -115,7 +120,7 @@ export class ReconciliationScheduler {
     else if (account.exchange === 'binance') filled = await this.reconcileBinance(account)
 
     if (filled > 0) {
-      await new PositionReconstructor().reconstruct(account.id, account.exchange)
+      await new PositionReconstructor(this.redisUrl).reconstruct(account.id, account.exchange)
     }
   }
 
@@ -227,7 +232,7 @@ export class ReconciliationScheduler {
     if (caughtError) {
       // Partial run: some fills were written before the ban/error — reconstruct what we have
       if (total > 0) {
-        await new PositionReconstructor().reconstruct(account.id, 'binance')
+        await new PositionReconstructor(this.redisUrl).reconstruct(account.id, 'binance')
           .catch(e => console.error('[reconciliation] binance partial reconstruction failed:', e))
       }
       throw caughtError

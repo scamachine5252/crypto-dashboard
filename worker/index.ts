@@ -27,7 +27,7 @@ async function main() {
 
   const manager    = new ConnectorManager(redisUrl)
   const syncer     = new FullHistorySyncer(redisUrl)
-  const reconciler = new ReconciliationScheduler()
+  const reconciler = new ReconciliationScheduler(redisUrl)
 
   startBalancePoller()
 

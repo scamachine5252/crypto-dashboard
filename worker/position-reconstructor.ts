@@ -1,12 +1,125 @@
+import Redis from 'ioredis'
 import { supabaseAdmin } from '@/lib/supabase/server'
 import { reconstructPositions, type RawExecution } from '@/lib/adapters/bybit'
 import { reconstructBinanceTrades, type RawFapiTrade } from '@/lib/adapters/binance'
-import type { Trade, TradeType } from '@/lib/types'
+import type { Trade, TradeType, TradeSide } from '@/lib/types'
 
-const PAGE_SIZE = 1000
+const PAGE_SIZE  = 1000
+const LOCK_TTL_S = 120   // 2-minute max hold time per reconstruction
 
-// Maps a raw_fills DB row back to the RawExecution shape expected by reconstructPositions().
-// raw_data stores the original API object which already has all required fields.
+// ── OKX per-symbol position state ────────────────────────────────────────────
+// Analogous to Bybit's SymbolState. OKX uses net mode so one slot per symbol.
+interface OkxSymbolState {
+  size:     number      // open size (positive)
+  avgEntry: number      // weighted-average entry price
+  openTime: string      // ISO — time of first opening fill
+  openSide: TradeSide   // 'long' | 'short'
+  accFee:   number      // fees accumulated on the open side
+}
+
+// OKX sets exec_pnl on closing fills only. Opening fills have exec_pnl = null.
+function isOkxClosingFill(row: Record<string, unknown>): boolean {
+  return row.exec_pnl !== null && row.exec_pnl !== undefined
+}
+
+export function reconstructOkxTrades(rows: Record<string, unknown>[]): Trade[] {
+  const sorted = [...rows].sort(
+    (a, b) => new Date(String(a.exec_time)).getTime() - new Date(String(b.exec_time)).getTime()
+  )
+
+  const states = new Map<string, OkxSymbolState>()
+  const trades: Trade[] = []
+
+  for (const row of sorted) {
+    const symbol    = String(row.symbol ?? '')
+    const sideRaw   = String(row.side ?? 'buy').toLowerCase()
+    const qty       = Number(row.exec_qty ?? 0)
+    const price     = Number(row.exec_price ?? 0)
+    const pnl       = Number(row.exec_pnl ?? 0)
+    const fee       = Number(row.exec_fee ?? 0)
+    const execTime  = String(row.exec_time ?? new Date().toISOString())
+    const cat       = String(row.category ?? '')
+    const tradeType: TradeType = (
+      cat === 'futures' || symbol.includes('SWAP') || symbol.includes('FUTURES')
+    ) ? 'futures' : 'spot'
+
+    const existing = states.get(symbol)
+
+    if (!isOkxClosingFill(row)) {
+      // Opening fill — create or add to position
+      if (!existing || existing.size === 0) {
+        states.set(symbol, {
+          size:     qty,
+          avgEntry: price,
+          openTime: execTime,
+          openSide: sideRaw === 'buy' ? 'long' : 'short',
+          accFee:   fee,
+        })
+      } else {
+        const total    = existing.size + qty
+        const avgEntry = (existing.avgEntry * existing.size + price * qty) / total
+        states.set(symbol, { ...existing, size: total, avgEntry, accFee: existing.accFee + fee })
+      }
+    } else {
+      // Closing fill — emit a reconstructed trade
+      if (existing && existing.size > 0) {
+        trades.push({
+          id:           String(row.exec_id ?? ''),
+          subAccountId: 'okx',
+          exchangeId:   'okx' as const,
+          symbol,
+          side:         existing.openSide,
+          tradeType,
+          entryPrice:   existing.avgEntry,
+          exitPrice:    price,
+          quantity:     Math.min(qty, existing.size),
+          pnl,
+          pnlPercent:   0,
+          fee:          existing.accFee + fee,
+          durationMin:  Math.round(
+            (new Date(execTime).getTime() - new Date(existing.openTime).getTime()) / 60_000
+          ),
+          leverage:     1,
+          fundingCost:  0,
+          isOvernight:  false,
+          openedAt:     existing.openTime,
+          closedAt:     execTime,
+        })
+        const remaining = existing.size - qty
+        if (remaining > 0.000001) {
+          states.set(symbol, { ...existing, size: remaining })
+        } else {
+          states.delete(symbol)
+        }
+      } else {
+        // No tracked open position — fall back to fill-level trade
+        trades.push({
+          id:           String(row.exec_id ?? ''),
+          subAccountId: 'okx',
+          exchangeId:   'okx' as const,
+          symbol,
+          side:         sideRaw === 'buy' ? 'long' : 'short',
+          tradeType,
+          entryPrice:   price,
+          exitPrice:    price,
+          quantity:     qty,
+          pnl,
+          pnlPercent:   0,
+          fee,
+          durationMin:  0,
+          leverage:     1,
+          fundingCost:  0,
+          isOvernight:  false,
+          openedAt:     execTime,
+          closedAt:     execTime,
+        })
+      }
+    }
+  }
+  return trades
+}
+
+// ── DB row → adapter types ────────────────────────────────────────────────────
 function rowToRawExecution(row: Record<string, unknown>): RawExecution {
   const raw = row.raw_data as Record<string, string>
   return {
@@ -41,6 +154,7 @@ function rowToRawFapiTrade(row: Record<string, unknown>): RawFapiTrade {
   }
 }
 
+// ── Paginated fill fetch ──────────────────────────────────────────────────────
 async function fetchAllFills(
   accountId: string,
   exchange: string,
@@ -48,7 +162,6 @@ async function fetchAllFills(
 ): Promise<Record<string, unknown>[]> {
   const fills: Record<string, unknown>[] = []
   let offset = 0
-
   while (true) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let query: any = supabaseAdmin
@@ -56,25 +169,20 @@ async function fetchAllFills(
       .select('*')
       .eq('account_id', accountId)
       .eq('exchange', exchange)
-
-    if (category !== undefined) {
-      query = query.eq('category', category)
-    }
-
+    if (category !== undefined) query = query.eq('category', category)
     const { data, error } = await query
       .order('exec_time', { ascending: true })
       .range(offset, offset + PAGE_SIZE - 1)
-
     if (error) throw new Error(`raw_fills fetch error: ${error.message}`)
     if (!data || data.length === 0) break
     fills.push(...(data as Record<string, unknown>[]))
     if (data.length < PAGE_SIZE) break
     offset += PAGE_SIZE
   }
-
   return fills
 }
 
+// ── Trade upsert / delete ─────────────────────────────────────────────────────
 async function upsertTrades(accountId: string, exchange: string, trades: Trade[]): Promise<void> {
   if (trades.length === 0) return
   const rowMap = new Map<string, Record<string, unknown>>()
@@ -104,24 +212,77 @@ async function upsertTrades(accountId: string, exchange: string, trades: Trade[]
 }
 
 async function deleteTrades(accountId: string, exchange: string, tradeType?: string): Promise<void> {
-  let query = supabaseAdmin.from('trades').delete().eq('account_id', accountId).eq('exchange', exchange)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let query: any = supabaseAdmin.from('trades').delete().eq('account_id', accountId).eq('exchange', exchange)
   if (tradeType) query = query.eq('trade_type', tradeType)
   const { error } = await query
   if (error) throw new Error(`trades delete error: ${error.message}`)
 }
 
+// ── Main class ────────────────────────────────────────────────────────────────
 export class PositionReconstructor {
+  private redis: Redis
+
+  constructor(redisUrl = 'redis://127.0.0.1:6379') {
+    this.redis = new Redis(redisUrl, { lazyConnect: true })
+  }
+
   async reconstruct(accountId: string, exchange: string): Promise<void> {
+    const lockKey = `recon:${accountId}:${exchange}`
+
+    // NX = only set if absent; EX = TTL seconds (ioredis v5: EX before NX)
+    const acquired = await this.redis.set(lockKey, '1', 'EX', LOCK_TTL_S, 'NX')
+    if (acquired !== 'OK') {
+      console.warn(`[reconstructor] ${accountId}/${exchange} already running — skipping`)
+      return
+    }
+
+    try {
+      // Skip reconstruction if no fills have arrived since last run
+      const { data: acct } = await supabaseAdmin
+        .from('accounts')
+        .select('last_reconstructed_at')
+        .eq('id', accountId)
+        .single()
+
+      if (acct?.last_reconstructed_at) {
+        const { data: latest } = await supabaseAdmin
+          .from('raw_fills')
+          .select('exec_time')
+          .eq('account_id', accountId)
+          .eq('exchange', exchange)
+          .order('exec_time', { ascending: false })
+          .limit(1)
+          .single()
+
+        if (latest?.exec_time) {
+          const latestMs = new Date(String(latest.exec_time)).getTime()
+          const reconMs  = new Date(String(acct.last_reconstructed_at)).getTime()
+          if (latestMs <= reconMs) {
+            console.log(`[reconstructor] ${accountId}/${exchange} — no new fills, skipping`)
+            return
+          }
+        }
+      }
+
+      await this.doReconstruct(accountId, exchange)
+
+      await supabaseAdmin
+        .from('accounts')
+        .update({ last_reconstructed_at: new Date().toISOString() })
+        .eq('id', accountId)
+    } finally {
+      await this.redis.del(lockKey)
+    }
+  }
+
+  private async doReconstruct(accountId: string, exchange: string): Promise<void> {
     if (exchange === 'bybit') {
-      // Delete existing futures trades before re-reconstructing to avoid stale records
-      // with wrong opened_at from a previous run. Spot trades are written directly by
-      // the sync route and must not be deleted here.
       await deleteTrades(accountId, exchange, 'futures')
       for (const category of ['linear', 'inverse'] as const) {
         const rows = await fetchAllFills(accountId, exchange, category)
         if (rows.length === 0) continue
-        const executions = rows.map(rowToRawExecution)
-        const { trades } = reconstructPositions(executions, category)
+        const { trades } = reconstructPositions(rows.map(rowToRawExecution), category)
         await upsertTrades(accountId, exchange, trades)
       }
       return
@@ -130,23 +291,15 @@ export class PositionReconstructor {
     if (exchange === 'binance') {
       const rows = await fetchAllFills(accountId, exchange)
       if (rows.length === 0) return
-
-      // Delete ALL existing binance trades before re-reconstructing to ensure
-      // changed opened_at values (from more history being available) don't leave
-      // stale records alongside new ones.
       await deleteTrades(accountId, exchange)
-
-      // Group fills by symbol, reconstruct positions per symbol
       const bySymbol = new Map<string, Record<string, unknown>[]>()
       for (const row of rows) {
         const sym = String(row.symbol ?? '')
         if (!bySymbol.has(sym)) bySymbol.set(sym, [])
         bySymbol.get(sym)!.push(row)
       }
-
       for (const [rawSymbol, symbolRows] of bySymbol) {
-        const fills  = symbolRows.map(rowToRawFapiTrade)
-        const trades = reconstructBinanceTrades(fills, rawSymbol)
+        const trades = reconstructBinanceTrades(symbolRows.map(rowToRawFapiTrade), rawSymbol)
         await upsertTrades(accountId, exchange, trades)
       }
       return
@@ -155,40 +308,8 @@ export class PositionReconstructor {
     if (exchange === 'okx') {
       const rows = await fetchAllFills(accountId, exchange)
       if (rows.length === 0) return
-
       await deleteTrades(accountId, exchange)
-
-      const trades: Trade[] = rows.map(row => {
-        const sideRaw  = String(row.side ?? 'buy').toLowerCase()
-        const symbol   = String(row.symbol ?? '')
-        const cat      = String(row.category ?? '')
-        const tradeType: TradeType = (
-          cat === 'futures' ||
-          symbol.includes('SWAP') ||
-          symbol.includes('FUTURES')
-        ) ? 'futures' : 'spot'
-
-        return {
-          id:           String(row.exec_id ?? ''),
-          subAccountId: 'okx',
-          exchangeId:   'okx' as const,
-          symbol,
-          side:         sideRaw === 'buy' ? 'long' : 'short',
-          tradeType,
-          entryPrice:   Number(row.exec_price ?? 0),
-          exitPrice:    Number(row.exec_price ?? 0),
-          quantity:     Number(row.exec_qty   ?? 0),
-          pnl:          Number(row.exec_pnl   ?? 0),
-          pnlPercent:   0,
-          fee:          Number(row.exec_fee   ?? 0),
-          durationMin:  0,
-          leverage:     1,
-          fundingCost:  0,
-          isOvernight:  false,
-          openedAt:     String(row.exec_time ?? new Date().toISOString()),
-          closedAt:     String(row.exec_time ?? new Date().toISOString()),
-        }
-      })
+      const trades = reconstructOkxTrades(rows)
       await upsertTrades(accountId, exchange, trades)
       return
     }
@@ -196,19 +317,14 @@ export class PositionReconstructor {
     if (exchange === 'mexc') {
       const rows = await fetchAllFills(accountId, exchange)
       if (rows.length === 0) return
-
       await deleteTrades(accountId, exchange)
-
       const trades: Trade[] = rows.map(row => {
-        const sideRaw   = String(row.side ?? 'buy').toLowerCase()
-        const symbol    = String(row.symbol ?? '')
-        const cat       = String(row.category ?? '')
+        const sideRaw  = String(row.side ?? 'buy').toLowerCase()
+        const symbol   = String(row.symbol ?? '')
+        const cat      = String(row.category ?? '')
         const tradeType: TradeType = (
-          cat === 'futures' ||
-          symbol.includes('_PERP') ||
-          symbol.includes('FUTURES')
+          cat === 'futures' || symbol.includes('_PERP') || symbol.includes('FUTURES')
         ) ? 'futures' : 'spot'
-
         return {
           id:           String(row.exec_id ?? ''),
           subAccountId: 'mexc',
@@ -233,7 +349,6 @@ export class PositionReconstructor {
       await upsertTrades(accountId, exchange, trades)
       return
     }
-
     // Unsupported exchange — no-op
   }
 }

@@ -17,7 +17,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   if (error || !account) return NextResponse.json({ error: 'Account not found' }, { status: 404 })
 
-  const reconstructor = new PositionReconstructor()
+  const reconstructor = new PositionReconstructor(process.env.REDIS_URL ?? 'redis://127.0.0.1:6379')
   try {
     await reconstructor.reconstruct(
       (account as Record<string, string>).id,
