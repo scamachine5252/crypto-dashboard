@@ -445,7 +445,10 @@ export class FullHistorySyncer {
         const msg = err instanceof Error ? err.message : String(err)
         allFailed.push({ symbol: `chunk-${i}`, error: msg })
       }
-      await this.updateProgress(job.id, { current_step: i + 1, failed_items: allFailed })
+      // Batch progress updates — write every 5 chunks or on the last one
+      if ((i + 1) % 5 === 0 || i === OKX_CHUNKS - 1) {
+        await this.updateProgress(job.id, { current_step: i + 1, failed_items: allFailed })
+      }
     }
     return allFailed.length
   }
