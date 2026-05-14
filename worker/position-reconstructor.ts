@@ -87,7 +87,8 @@ export function reconstructOkxTrades(rows: Record<string, unknown>[]): Trade[] {
         })
         const remaining = existing.size - qty
         if (remaining > 0.000001) {
-          states.set(symbol, { ...existing, size: remaining })
+          // Reset accFee after partial close — the emitted trade already consumed it
+          states.set(symbol, { ...existing, size: remaining, accFee: 0 })
         } else {
           states.delete(symbol)
         }

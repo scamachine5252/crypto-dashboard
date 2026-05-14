@@ -479,7 +479,7 @@ export class FullHistorySyncer {
           side:         t.side === 'long' ? 'buy' : 'sell',
           exec_qty:     t.quantity,
           exec_price:   t.exitPrice,
-          exec_pnl:     t.pnl,
+          exec_pnl:     t.pnl || null,
           exec_fee:     Math.abs(t.fee),
           closed_size:  null,
           position_idx: null,

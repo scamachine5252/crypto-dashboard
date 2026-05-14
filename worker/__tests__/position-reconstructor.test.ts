@@ -446,4 +446,128 @@ describe('PositionReconstructor', () => {
     await expect(reconstructor.reconstruct('acc-1', 'hyperliquid')).resolves.not.toThrow()
     expect(mockFromSelect).not.toHaveBeenCalled()
   })
+
+  // ── Redis lock contention ─────────────────────────────────────────────────
+
+  it('skips reconstruction when lock is already held (redis set returns null)', async () => {
+    mockRedisSet.mockResolvedValueOnce(null)  // lock not acquired
+
+    await reconstructor.reconstruct('acc-1', 'bybit')
+
+    // DB should not be touched at all
+    expect(mockFromSelect).not.toHaveBeenCalled()
+    expect(mockUpsert).not.toHaveBeenCalled()
+    expect(mockDelete).not.toHaveBeenCalled()
+  })
+
+  it('always releases the lock even when reconstruction throws', async () => {
+    // Open + close fill so reconstructPositions emits a trade and upsert is actually called
+    const openFill  = makeLinearFillRow()
+    const closeFill = makeLinearFillRow({
+      exec_time: '2025-01-01T01:00:00.000Z',
+      raw_data: {
+        execTime: '1735693200000', symbol: 'BTCUSDT', side: 'Sell',
+        execType: 'Trade', execPrice: '51000', execQty: '0.1',
+        execPnl: '100', execFee: '0.5', closedSize: '0.1', orderId: 'ord-002',
+      },
+    })
+    const { selectFn } = makeFlexibleSelectChain([[openFill, closeFill], [], []])
+    mockFromSelect.mockImplementation(selectFn)
+    mockUpsert.mockResolvedValue({ error: { message: 'DB down' } })
+
+    await expect(reconstructor.reconstruct('acc-1', 'bybit')).rejects.toThrow('DB down')
+    expect(mockRedisDel).toHaveBeenCalledTimes(1)
+  })
+
+  // ── OKX stateful reconstruction ───────────────────────────────────────────
+
+  it('okx: open → full close produces one trade with correct entry/exit/fee', async () => {
+    const openFill = makeOkxFillRow({
+      exec_id:    'f1',
+      exec_time:  '2025-01-01T00:00:00.000Z',
+      side:       'buy',
+      exec_qty:   1,
+      exec_price: 50000,
+      exec_pnl:   null,   // opening fill
+      exec_fee:   10,
+      category:   'futures',
+      symbol:     'BTC-USDT-SWAP',
+    })
+    const closeFill = makeOkxFillRow({
+      exec_id:    'f2',
+      exec_time:  '2025-01-02T00:00:00.000Z',
+      side:       'sell',
+      exec_qty:   1,
+      exec_price: 51000,
+      exec_pnl:   100,   // closing fill
+      exec_fee:   10,
+      category:   'futures',
+      symbol:     'BTC-USDT-SWAP',
+    })
+
+    const { selectFn } = makeFlexibleSelectChain([[openFill, closeFill], []])
+    mockFromSelect.mockImplementation(selectFn)
+    mockUpsert.mockResolvedValue({ error: null })
+
+    await reconstructor.reconstruct('acc-1', 'okx')
+
+    const rows = mockUpsert.mock.calls[0][0] as Record<string, unknown>[]
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      entry_price: 50000,
+      exit_price:  51000,
+      pnl:         100,
+      fee:         20,   // opening fee + closing fee
+      direction:   'long',
+    })
+  })
+
+  it('okx: open → partial close → full close — no accFee double-counting', async () => {
+    const openFill = makeOkxFillRow({
+      exec_id:    'f1',
+      exec_time:  '2025-01-01T00:00:00.000Z',
+      side:       'buy',
+      exec_qty:   2,
+      exec_price: 50000,
+      exec_pnl:   null,   // opening fill
+      exec_fee:   20,     // opening fee
+      symbol:     'BTC-USDT-SWAP',
+    })
+    const partialCloseFill = makeOkxFillRow({
+      exec_id:    'f2',
+      exec_time:  '2025-01-02T00:00:00.000Z',
+      side:       'sell',
+      exec_qty:   1,      // close half
+      exec_price: 51000,
+      exec_pnl:   50,
+      exec_fee:   5,      // partial close fee
+      symbol:     'BTC-USDT-SWAP',
+    })
+    const fullCloseFill = makeOkxFillRow({
+      exec_id:    'f3',
+      exec_time:  '2025-01-03T00:00:00.000Z',
+      side:       'sell',
+      exec_qty:   1,      // close remainder
+      exec_price: 52000,
+      exec_pnl:   100,
+      exec_fee:   5,      // second close fee
+      symbol:     'BTC-USDT-SWAP',
+    })
+
+    const { selectFn } = makeFlexibleSelectChain([[openFill, partialCloseFill, fullCloseFill], []])
+    mockFromSelect.mockImplementation(selectFn)
+    mockUpsert.mockResolvedValue({ error: null })
+
+    await reconstructor.reconstruct('acc-1', 'okx')
+
+    const rows = mockUpsert.mock.calls[0][0] as Record<string, unknown>[]
+    // Two trades: one for partial close, one for full close
+    expect(rows).toHaveLength(2)
+
+    const [first, second] = rows
+    // First trade: entry=50000, exit=51000, fee=openFee(20)+partialFee(5)=25
+    expect(first).toMatchObject({ entry_price: 50000, exit_price: 51000, pnl: 50, fee: 25 })
+    // Second trade: accFee was reset to 0 after partial close, so fee=0+secondFee(5)=5
+    expect(second).toMatchObject({ entry_price: 50000, exit_price: 52000, pnl: 100, fee: 5 })
+  })
 })

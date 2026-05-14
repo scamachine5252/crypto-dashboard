@@ -32,6 +32,7 @@ async function pollNonBinance(): Promise<void> {
     .from('accounts')
     .select('id, exchange, api_key, api_secret, passphrase, instrument')
     .not('exchange', 'eq', 'binance')
+    .eq('is_suspended', false)
 
   if (error) { console.error('[balance-poller] failed to load accounts:', error.message); return }
 
@@ -67,6 +68,7 @@ async function pollBinance(): Promise<void> {
     .from('accounts')
     .select('id, exchange, api_key, api_secret, passphrase, instrument')
     .eq('exchange', 'binance')
+    .eq('is_suspended', false)
 
   if (error) { console.error('[balance-poller] failed to load Binance accounts:', error.message); return }
 
