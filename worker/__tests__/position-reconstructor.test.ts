@@ -4,6 +4,16 @@
 const mockFromSelect = jest.fn()
 const mockUpsert     = jest.fn()
 const mockDelete     = jest.fn()
+const mockRedisSet   = jest.fn().mockResolvedValue('OK')
+const mockRedisDel   = jest.fn().mockResolvedValue(1)
+
+// Mock ioredis so the Redis lock doesn't try to connect in tests
+jest.mock('ioredis', () =>
+  jest.fn().mockImplementation(() => ({
+    set: mockRedisSet,
+    del: mockRedisDel,
+  }))
+)
 
 // Builds a chainable object whose terminal .eq() call resolves to { error: null }.
 // Supports arbitrary depth: .delete().eq().eq().eq() all resolve correctly.
@@ -26,6 +36,19 @@ jest.mock('@/lib/supabase/server', () => ({
     from: jest.fn((table: string) => {
       if (table === 'raw_fills') {
         return { select: mockFromSelect }
+      }
+      // accounts table: last_reconstructed_at=null bypasses skip check; update is a no-op
+      if (table === 'accounts') {
+        return {
+          select: jest.fn().mockReturnValue({
+            eq: jest.fn().mockReturnValue({
+              single: jest.fn().mockResolvedValue({ data: { last_reconstructed_at: null }, error: null }),
+            }),
+          }),
+          update: jest.fn().mockReturnValue({
+            eq: jest.fn().mockResolvedValue({ error: null }),
+          }),
+        }
       }
       mockDelete.mockReturnValue(makeDeleteChain())
       return { upsert: mockUpsert, delete: mockDelete }
@@ -160,6 +183,23 @@ describe('PositionReconstructor', () => {
 
   beforeEach(() => {
     jest.clearAllMocks()
+    mockRedisSet.mockResolvedValue('OK')
+    mockRedisDel.mockResolvedValue(1)
+    // Restore default `from` implementation (may have been overridden by a previous test)
+    const mockFrom = jest.requireMock('@/lib/supabase/server').supabaseAdmin.from as jest.Mock
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'raw_fills') return { select: mockFromSelect }
+      if (table === 'accounts') return {
+        select: jest.fn().mockReturnValue({
+          eq: jest.fn().mockReturnValue({
+            single: jest.fn().mockResolvedValue({ data: { last_reconstructed_at: null }, error: null }),
+          }),
+        }),
+        update: jest.fn().mockReturnValue({ eq: jest.fn().mockResolvedValue({ error: null }) }),
+      }
+      mockDelete.mockReturnValue(makeDeleteChain())
+      return { upsert: mockUpsert, delete: mockDelete }
+    })
     reconstructor = new PositionReconstructor()
   })
 
@@ -384,6 +424,14 @@ describe('PositionReconstructor', () => {
     const mockFrom = jest.requireMock('@/lib/supabase/server').supabaseAdmin.from as jest.Mock
     mockFrom.mockImplementation((table: string) => {
       if (table === 'raw_fills') return { select: mockFromSelect }
+      if (table === 'accounts') return {
+        select: jest.fn().mockReturnValue({
+          eq: jest.fn().mockReturnValue({
+            single: jest.fn().mockResolvedValue({ data: { last_reconstructed_at: null }, error: null }),
+          }),
+        }),
+        update: jest.fn().mockReturnValue({ eq: jest.fn().mockResolvedValue({ error: null }) }),
+      }
       return { upsert: mockUpsert, delete: jest.fn().mockReturnValue(deleteErrorChain) }
     })
 
