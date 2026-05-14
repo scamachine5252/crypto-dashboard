@@ -47,19 +47,21 @@ export class ConnectorManager {
 
     if (error) throw new Error(`ConnectorManager: failed to load accounts: ${error.message}`)
 
-    for (const acct of (accounts ?? []) as AccountRow[]) {
-      if (acct.is_suspended) continue
+    const activeAccounts = (accounts ?? []).filter((a: AccountRow) => !a.is_suspended)
+    const accountIds = activeAccounts.map((a: AccountRow) => a.id)
 
-      // Fetch max exec_time from raw_fills for gap fill baseline
-      const { data: latest } = await supabaseAdmin
-        .from('raw_fills')
-        .select('exec_time')
-        .eq('account_id', acct.id)
-        .order('exec_time', { ascending: false })
-        .limit(1)
-        .single()
-      const lastFillTime = latest?.exec_time ? new Date(latest.exec_time as string).getTime() : 0
+    // Single batch query instead of N per-account queries
+    const fillMap = new Map<string, number>()
+    if (accountIds.length > 0) {
+      const { data: latestFills } = await supabaseAdmin
+        .rpc('latest_fill_per_account', { account_ids: accountIds })
+      for (const row of (latestFills ?? []) as Array<{ account_id: string; exec_time: string }>) {
+        fillMap.set(row.account_id, new Date(row.exec_time).getTime())
+      }
+    }
 
+    for (const acct of activeAccounts as AccountRow[]) {
+      const lastFillTime = fillMap.get(acct.id) ?? 0
       try {
         await this.startConnector(acct, lastFillTime)
       } catch (e) {
