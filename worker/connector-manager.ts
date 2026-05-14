@@ -25,10 +25,12 @@ export interface AccountRow {
 }
 
 export class ConnectorManager {
-  private redis:        Redis
-  private processor:    FillProcessor
-  private reconstructor: PositionReconstructor
-  private connectors:   Array<{ disconnect(): void }> = []
+  private redis:          Redis
+  private processor:      FillProcessor
+  private reconstructor:  PositionReconstructor
+  private connectors:     Array<{ disconnect(): void }> = []
+  private inFlight        = 0
+  private drainResolve:   (() => void) | null = null
 
   constructor(redisUrl = 'redis://127.0.0.1:6379') {
     this.redis        = new Redis(redisUrl)
@@ -38,6 +40,13 @@ export class ConnectorManager {
         void this.reconstructor.reconstruct(accountId, exchange)
           .catch(e => console.error('[reconstructor] error:', e)),
     })
+  }
+
+  private trackStart(): void { this.inFlight++ }
+
+  private trackEnd(): void {
+    this.inFlight--
+    if (this.inFlight === 0) { this.drainResolve?.(); this.drainResolve = null }
   }
 
   async start(): Promise<void> {
@@ -78,10 +87,10 @@ export class ConnectorManager {
 
   async stopAndWait(timeoutMs = 30_000): Promise<void> {
     this.stop()
-    // Give connectors up to timeoutMs to finish in-flight gap fills / writes
+    if (this.inFlight === 0) return
     await Promise.race([
+      new Promise<void>(resolve => { this.drainResolve = resolve }),
       new Promise<void>(resolve => setTimeout(resolve, timeoutMs)),
-      // Connectors have no explicit "done" signal — the timeout is the backstop
     ])
   }
 
@@ -92,26 +101,31 @@ export class ConnectorManager {
     if (acct.exchange === 'bybit') {
       const adapter = new BybitAdapter({ apiKey, apiSecret })
       const fetchGapFills = async (since: number, until: number): Promise<RawFill[]> => {
-        const { rawExecutions } = await adapter.getTradesForChunk(since, until)
-        return rawExecutions.flatMap(({ category, executions }: { category: string; executions: RawExecution[] }) =>
-          executions.map((exec: RawExecution) => ({
-            account_id:   acct.id,
-            exchange:     'bybit',
-            exec_id:      `${exec.orderId}_${exec.execTime}_${exec.execQty}`,
-            symbol:       exec.symbol,
-            category,
-            exec_time:    new Date(Number(exec.execTime)),
-            side:         exec.side,
-            exec_qty:     Number(exec.execQty),
-            exec_price:   Number(exec.execPrice),
-            exec_pnl:     Number(exec.execPnl) || null,
-            exec_fee:     Math.abs(Number(exec.execFee)),
-            closed_size:  Number(exec.closedSize) || null,
-            position_idx: exec.positionIdx ? Number(exec.positionIdx) : null,
-            raw_data:     exec,
-            source:       'rest' as const,
-          }))
-        )
+        this.trackStart()
+        try {
+          const { rawExecutions } = await adapter.getTradesForChunk(since, until)
+          return rawExecutions.flatMap(({ category, executions }: { category: string; executions: RawExecution[] }) =>
+            executions.map((exec: RawExecution) => ({
+              account_id:   acct.id,
+              exchange:     'bybit',
+              exec_id:      `${exec.orderId}_${exec.execTime}_${exec.execQty}`,
+              symbol:       exec.symbol,
+              category,
+              exec_time:    new Date(Number(exec.execTime)),
+              side:         exec.side,
+              exec_qty:     Number(exec.execQty),
+              exec_price:   Number(exec.execPrice),
+              exec_pnl:     Number(exec.execPnl) || null,
+              exec_fee:     Math.abs(Number(exec.execFee)),
+              closed_size:  Number(exec.closedSize) || null,
+              position_idx: exec.positionIdx ? Number(exec.positionIdx) : null,
+              raw_data:     exec,
+              source:       'rest' as const,
+            }))
+          )
+        } finally {
+          this.trackEnd()
+        }
       }
       const connector = new BybitConnector({
         apiKey, apiSecret, accountId: acct.id, lastFillTime,
@@ -139,24 +153,29 @@ export class ConnectorManager {
       const passphrase = acct.passphrase ? decrypt(acct.passphrase) : ''
       const adapter    = new OkxAdapter({ apiKey, apiSecret, passphrase })
       const fetchGapFills = async (since: number, until: number): Promise<RawFill[]> => {
-        const trades = await adapter.getTrades('', {} as DateRange, since, 1000, until)
-        return trades.map(t => ({
-          account_id:   acct.id,
-          exchange:     'okx',
-          exec_id:      t.id,
-          symbol:       t.symbol,
-          category:     t.tradeType,
-          exec_time:    new Date(t.closedAt),
-          side:         t.side === 'long' ? 'buy' : 'sell',
-          exec_qty:     t.quantity,
-          exec_price:   t.exitPrice,
-          exec_pnl:     t.pnl || null,
-          exec_fee:     Math.abs(t.fee),
-          closed_size:  null,
-          position_idx: null,
-          raw_data:     t,
-          source:       'rest' as const,
-        }))
+        this.trackStart()
+        try {
+          const trades = await adapter.getTrades('', {} as DateRange, since, 1000, until)
+          return trades.map(t => ({
+            account_id:   acct.id,
+            exchange:     'okx',
+            exec_id:      t.id,
+            symbol:       t.symbol,
+            category:     t.tradeType,
+            exec_time:    new Date(t.closedAt),
+            side:         t.side === 'long' ? 'buy' : 'sell',
+            exec_qty:     t.quantity,
+            exec_price:   t.exitPrice,
+            exec_pnl:     t.pnl || null,
+            exec_fee:     Math.abs(t.fee),
+            closed_size:  null,
+            position_idx: null,
+            raw_data:     t,
+            source:       'rest' as const,
+          }))
+        } finally {
+          this.trackEnd()
+        }
       }
       const connector = new OkxConnector({
         apiKey, apiSecret, passphrase, accountId: acct.id, lastFillTime,
@@ -173,24 +192,29 @@ export class ConnectorManager {
         apiSecret: apiSecret,
       })
       const fetchFills = async (since: number): Promise<RawFill[]> => {
-        const trades = await adapter.getTrades('', {} as DateRange, since, 1000, Date.now())
-        return trades.map(t => ({
-          account_id:   acct.id,
-          exchange:     'mexc',
-          exec_id:      t.id,
-          symbol:       t.symbol,
-          category:     t.tradeType,
-          exec_time:    new Date(t.closedAt),
-          side:         t.side === 'long' ? 'buy' : 'sell',
-          exec_qty:     t.quantity,
-          exec_price:   t.exitPrice,
-          exec_pnl:     t.pnl,
-          exec_fee:     Math.abs(t.fee),
-          closed_size:  null,
-          position_idx: null,
-          raw_data:     t,
-          source:       'rest' as const,
-        }))
+        this.trackStart()
+        try {
+          const trades = await adapter.getTrades('', {} as DateRange, since, 1000, Date.now())
+          return trades.map(t => ({
+            account_id:   acct.id,
+            exchange:     'mexc',
+            exec_id:      t.id,
+            symbol:       t.symbol,
+            category:     t.tradeType,
+            exec_time:    new Date(t.closedAt),
+            side:         t.side === 'long' ? 'buy' : 'sell',
+            exec_qty:     t.quantity,
+            exec_price:   t.exitPrice,
+            exec_pnl:     t.pnl || null,
+            exec_fee:     Math.abs(t.fee),
+            closed_size:  null,
+            position_idx: null,
+            raw_data:     t,
+            source:       'rest' as const,
+          }))
+        } finally {
+          this.trackEnd()
+        }
       }
       const connector = new MexcConnector({
         accountId: acct.id, lastFillTime, fillProcessor: this.processor, fetchFills,
