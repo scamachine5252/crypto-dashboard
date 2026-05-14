@@ -97,7 +97,8 @@ export function startBalancePoller(): void {
   console.log('[balance-poller] started — polling every 15 min (non-Binance) / 60 min (Binance)')
 
   void pollNonBinance()
-  void pollBinance()
+  // 3-minute startup delay: avoids overlapping with reconciler's Binance startup (5-min delay)
+  setTimeout(() => void pollBinance(), 3 * 60 * 1000)
 
   process.once('SIGTERM', () => { /* cron tasks stop with process */ })
   process.once('SIGINT',  () => { /* cron tasks stop with process */ })

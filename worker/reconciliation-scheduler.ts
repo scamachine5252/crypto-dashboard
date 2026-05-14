@@ -13,7 +13,8 @@ import type { RawFapiTrade } from '@/lib/adapters/binance'
 
 const WINDOW_MS        = 7 * 24 * 60 * 60 * 1000   // 7 days
 const INTERVAL_MS      = 6 * 60 * 60 * 1000         // 6 hours
-const BINANCE_INTERVAL = 24 * 60 * 60 * 1000        // 24 hours
+const BINANCE_INTERVAL    = 6 * 60 * 60 * 1000       // 6 hours — safe after startup stagger fix
+const BINANCE_STARTUP_MS  = 5 * 60 * 1000            // 5-min delay on first run to avoid burst
 const BINANCE_DELAY_MS = 500                         // between symbol requests
 
 interface AccountRow {
@@ -26,24 +27,30 @@ interface AccountRow {
 }
 
 export class ReconciliationScheduler {
-  private timer:        ReturnType<typeof setInterval> | null = null
-  private binanceTimer: ReturnType<typeof setInterval> | null = null
+  private timer:               ReturnType<typeof setInterval> | null = null
+  private binanceTimer:        ReturnType<typeof setInterval> | null = null
+  private binanceStartupTimer: ReturnType<typeof setTimeout>  | null = null
 
   start(): void {
-    // Non-Binance: every 6h
+    // Non-Binance: fire immediately, then every 6h
     void this.runAll()
     this.timer = setInterval(() => void this.runAll(), INTERVAL_MS)
     this.timer.unref?.()
 
-    // Binance: every 24h (rate-limit sensitive)
-    void this.runBinance()
-    this.binanceTimer = setInterval(() => void this.runBinance(), BINANCE_INTERVAL)
-    this.binanceTimer.unref?.()
+    // Binance: 5-minute startup delay to avoid burst alongside balance-poller startup.
+    // Steady-state weight: ~0.42 wt/min — well below the 2,400/min limit.
+    this.binanceStartupTimer = setTimeout(() => {
+      this.binanceStartupTimer = null
+      void this.runBinance()
+      this.binanceTimer = setInterval(() => void this.runBinance(), BINANCE_INTERVAL)
+      this.binanceTimer.unref?.()
+    }, BINANCE_STARTUP_MS)
   }
 
   stop(): void {
-    if (this.timer)        { clearInterval(this.timer);        this.timer = null }
-    if (this.binanceTimer) { clearInterval(this.binanceTimer); this.binanceTimer = null }
+    if (this.binanceStartupTimer) { clearTimeout(this.binanceStartupTimer);  this.binanceStartupTimer = null }
+    if (this.timer)               { clearInterval(this.timer);               this.timer = null }
+    if (this.binanceTimer)        { clearInterval(this.binanceTimer);        this.binanceTimer = null }
   }
 
   async runAll(): Promise<void> {
