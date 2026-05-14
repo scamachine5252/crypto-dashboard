@@ -19,6 +19,7 @@ export interface SyncJob {
   current_step:  number
   total_steps:   number
   retry_count:   number
+  retry_after:   string | null
   failed_items:  Array<{ symbol: string; error: string }>
   error_message: string | null
   started_at:    string | null
@@ -89,18 +90,31 @@ export class FullHistorySyncer {
       console.log(`[full-history-syncer] reset ${processing.length} orphaned processing jobs`)
     }
 
-    // Re-enqueue ALL pending jobs — Redis queue rebuilt from Supabase
+    // Re-enqueue pending jobs — restore retry_after timers for deferred jobs
     const { data: pending } = await supabaseAdmin
       .from('full_sync_jobs')
-      .select('id')
+      .select('id, retry_after')
       .eq('status', 'pending')
       .order('created_at', { ascending: true })
 
     if (pending && pending.length > 0) {
-      for (const job of pending as Array<{ id: string }>) {
-        await this.redis.lpush(QUEUE_KEY, job.id)
+      let immediate = 0
+      let deferred  = 0
+      for (const job of pending as Array<{ id: string; retry_after: string | null }>) {
+        const retryAfterMs = job.retry_after ? new Date(job.retry_after).getTime() : 0
+        const delayMs      = Math.max(0, retryAfterMs - Date.now())
+        if (delayMs > 0) {
+          setTimeout(() => {
+            void this.redis.rpush(QUEUE_KEY, job.id)
+              .catch(e => console.error('[full-history-syncer] deferred enqueue failed:', e))
+          }, delayMs)
+          deferred++
+        } else {
+          await this.redis.rpush(QUEUE_KEY, job.id)
+          immediate++
+        }
       }
-      console.log(`[full-history-syncer] queued ${pending.length} pending jobs`)
+      console.log(`[full-history-syncer] queued ${immediate} immediate + ${deferred} deferred pending jobs`)
     }
   }
 
@@ -153,9 +167,23 @@ export class FullHistorySyncer {
     if (error || !job || (job as SyncJob).status !== 'pending') return
 
     const syncJob = job as SyncJob
+
+    // Respect crash-safe retry backoff: if retry_after is still in the future, defer
+    if (syncJob.retry_after && new Date(syncJob.retry_after) > new Date()) {
+      const delayMs = new Date(syncJob.retry_after).getTime() - Date.now()
+      setTimeout(() => {
+        void this.redis.rpush(QUEUE_KEY, jobId)
+          .catch(e => console.error('[full-history-syncer] deferred re-enqueue failed:', e))
+      }, delayMs)
+      console.log(`[full-history-syncer] job ${jobId} deferred ${Math.round(delayMs / 60000)}min (retry_after)`)
+      return
+    }
+
     const locked  = await this.acquireLock(syncJob.account_id, jobId)
     if (!locked) {
-      await this.redis.lpush(QUEUE_KEY, jobId)
+      // Re-queue at tail (FIFO) and back off to avoid spinning against the lock holder
+      await new Promise(r => setTimeout(r, 5000))
+      await this.redis.rpush(QUEUE_KEY, jobId)
       return
     }
 
@@ -204,15 +232,34 @@ export class FullHistorySyncer {
       const shouldRetry = (freshJob.status === 'failed' || hasFailedItems) && freshJob.retry_count < 3
 
       if (shouldRetry) {
+        // Preserve error context: append current error_message to failed_items history before clearing it.
+        const existingItems = Array.isArray(freshJob.failed_items) ? freshJob.failed_items : []
+        const { data: jobWithError } = await supabaseAdmin
+          .from('full_sync_jobs')
+          .select('error_message')
+          .eq('id', jobId)
+          .single()
+        const errorEntry = jobWithError?.error_message
+          ? [{ symbol: '_error', error: jobWithError.error_message, attempt: freshJob.retry_count + 1 }]
+          : []
+        const retryAfter = new Date(Date.now() + 60 * 60 * 1000).toISOString()
         await supabaseAdmin
           .from('full_sync_jobs')
-          .update({ status: 'pending', started_at: null, retry_count: freshJob.retry_count + 1, failed_items: [] })
+          .update({
+            status:        'pending',
+            started_at:    null,
+            retry_count:   freshJob.retry_count + 1,
+            retry_after:   retryAfter,
+            failed_items:  [...existingItems, ...errorEntry],
+            error_message: null,
+          })
           .eq('id', jobId)
+        // Also enqueue now — processJob will defer via retry_after check if picked up before the deadline
         setTimeout(() => {
-          void this.redis.lpush(QUEUE_KEY, jobId)
+          void this.redis.rpush(QUEUE_KEY, jobId)
             .catch(e => console.error('[full-history-syncer] retry enqueue failed:', e))
         }, 60 * 60 * 1000)
-        console.log(`[full-history-syncer] job ${jobId} retry ${freshJob.retry_count + 1}/3 scheduled in 1h`)
+        console.log(`[full-history-syncer] job ${jobId} retry ${freshJob.retry_count + 1}/3 scheduled in 1h (persisted to DB)`)
       }
     }
   }
@@ -237,13 +284,14 @@ export class FullHistorySyncer {
     const reconstructor = new PositionReconstructor()
     await reconstructor.reconstruct(job.account_id, job.exchange)
 
-    await supabaseAdmin
+    const { error: updateErr } = await supabaseAdmin
       .from('accounts')
       .update({
         last_full_sync_at:      new Date().toISOString(),
         full_sync_failed_count: failedCount,
       })
       .eq('id', job.account_id)
+    if (updateErr) console.warn(`[full-history-syncer] failed to update last_full_sync_at for ${job.account_id}:`, updateErr.message)
   }
 
   // ── Per-exchange sync ────────────────────────────────────────────────────

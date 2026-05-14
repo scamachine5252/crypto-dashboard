@@ -126,7 +126,7 @@ export class BybitConnector {
     const fills = await this.fetchGapFillsFn(since, until)
     if (fills.length > 0) {
       await this.fillProcessor.storeBatch(fills)
-      const maxTs = Math.max(...fills.map(f => f.exec_time.getTime()))
+      const maxTs = fills.reduce((max, f) => Math.max(max, f.exec_time.getTime()), 0)
       if (maxTs > this.lastFillTime) this.lastFillTime = maxTs
     }
   }
@@ -152,30 +152,36 @@ export class BybitConnector {
     }
   }
 
-  private connectOnce(): Promise<void> {
-    return new Promise(async (resolve) => {
-      const WebSocket = (await import('ws')).default
-      const ws = new WebSocket(WS_URL)
-      this.ws = ws
+  private async connectOnce(): Promise<void> {
+    const WebSocket = (await import('ws')).default
+    const ws = new WebSocket(WS_URL)
+    this.ws = ws
 
+    return new Promise<void>((resolve) => {
       ws.on('open', () => {
         this.reconnectDelay = 1000  // reset backoff on successful connection
         ws.send(JSON.stringify(this.buildAuthPayload()))
       })
 
       ws.on('message', async (data: Buffer | string) => {
+        let msg: Record<string, unknown>
         try {
-          const msg = JSON.parse(data.toString()) as Record<string, unknown>
+          msg = JSON.parse(data.toString()) as Record<string, unknown>
+        } catch { return /* malformed JSON — ignore */ }
+        try {
           if (msg.op === 'auth' || msg.op === 'pong') {
             if (msg.op === 'auth') ws.send(JSON.stringify(this.buildSubscribePayload()))
             return
           }
           await this.handleMessage(msg)
-        } catch { /* malformed JSON — ignore */ }
+        } catch (e) {
+          console.error('[bybit-connector] message processing error:', (e as Error).message)
+        }
       })
 
       ws.on('error', (err: Error) => {
         console.error(`[bybit-connector] ws error: ${err.message}`)
+        ws.close()  // ensures 'close' fires so connectOnce Promise always resolves
       })
 
       ws.on('close', () => {

@@ -23,15 +23,12 @@ export async function GET() {
 
   const fillMap = new Map<string, string>()
   if (accountIds.length > 0) {
+    // DISTINCT ON guarantees exactly one row per account regardless of data skew
     const { data: lastFills } = await supabaseAdmin
-      .from('raw_fills')
-      .select('account_id, exec_time')
-      .in('account_id', accountIds)
-      .order('exec_time', { ascending: false })
-      .limit(accountIds.length * 5)
+      .rpc('latest_fill_per_account', { account_ids: accountIds })
 
     for (const fill of (lastFills ?? []) as Array<{ account_id: string; exec_time: string }>) {
-      if (!fillMap.has(fill.account_id)) fillMap.set(fill.account_id, fill.exec_time)
+      fillMap.set(fill.account_id, fill.exec_time)
     }
   }
 

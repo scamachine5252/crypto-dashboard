@@ -16,15 +16,15 @@ type AccountRow = {
 }
 
 async function saveBalance(acctId: string, usdt: number): Promise<void> {
-  const today = new Date().toISOString().split('T')[0]
-  await supabaseAdmin.from('balances').delete()
-    .eq('account_id', acctId).is('token_symbol', null).eq('snapshot_date', today)
-  const { error } = await supabaseAdmin.from('balances').insert({
-    account_id:   acctId,
-    usdt_balance: usdt,
-    recorded_at:  new Date().toISOString(),
-  })
-  if (error) console.warn(`[balance-poller] insert failed for ${acctId}:`, error.message)
+  const { error } = await supabaseAdmin.from('balances').upsert(
+    {
+      account_id:   acctId,
+      usdt_balance: usdt,
+      recorded_at:  new Date().toISOString(),
+    },
+    { onConflict: 'account_id,snapshot_date' },
+  )
+  if (error) console.warn(`[balance-poller] upsert failed for ${acctId}:`, error.message)
 }
 
 async function pollNonBinance(): Promise<void> {

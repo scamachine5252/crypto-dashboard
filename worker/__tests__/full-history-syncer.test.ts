@@ -3,6 +3,7 @@
 // ---------------------------------------------------------------------------
 const mockBrpop      = jest.fn()
 const mockLpush      = jest.fn()
+const mockRpush      = jest.fn()
 const mockSet        = jest.fn()
 const mockDel        = jest.fn()
 const mockGet        = jest.fn()
@@ -12,6 +13,7 @@ jest.mock('ioredis', () =>
   jest.fn().mockImplementation(() => ({
     brpop:      mockBrpop,
     lpush:      mockLpush,
+    rpush:      mockRpush,
     set:        mockSet,
     del:        mockDel,
     get:        mockGet,
@@ -86,6 +88,8 @@ function makeJob(overrides: Record<string, unknown> = {}) {
     status:        'pending',
     current_step:  0,
     total_steps:   0,
+    retry_count:   0,
+    retry_after:   null,
     failed_items:  [],
     error_message: null,
     started_at:    null,
@@ -195,9 +199,11 @@ describe('FullHistorySyncer', () => {
 
     await syncer.recoverOnStartup()
 
+    // processing jobs are reset via lpush (priority recovery)
     expect(mockLpush).toHaveBeenCalledWith('fullscan:queue', 'job-recent')
     expect(mockLpush).toHaveBeenCalledWith('fullscan:queue', 'job-old')
-    expect(mockLpush).toHaveBeenCalledWith('fullscan:queue', 'job-pend')
+    // pending job (no retry_after) is re-enqueued via rpush (FIFO)
+    expect(mockRpush).toHaveBeenCalledWith('fullscan:queue', 'job-pend')
   })
 
   it('recoverOnStartup is safe when no stuck or pending jobs exist', async () => {
@@ -239,18 +245,23 @@ describe('FullHistorySyncer', () => {
   })
 
   it('processJob re-queues if lock is already held', async () => {
+    jest.useFakeTimers()
     const job        = makeJob()
     const mockSingle = jest.fn().mockResolvedValue({ data: job, error: null })
     const mockEq     = jest.fn().mockReturnValue({ single: mockSingle })
     const mockSel    = jest.fn().mockReturnValue({ eq: mockEq })
     mockFrom.mockReturnValue({ select: mockSel })
-    mockSet.mockResolvedValue(null)  // lock already held
-    mockLpush.mockResolvedValue(1)
+    mockSet.mockResolvedValue(null)   // lock already held
+    mockRpush.mockResolvedValue(1)
 
-    await syncer.processJob('job-1')
+    const p = syncer.processJob('job-1')
+    // advanceTimersByTimeAsync flushes microtasks after firing timers — required for async timer callbacks
+    await jest.advanceTimersByTimeAsync(6000)
+    await p
 
-    expect(mockLpush).toHaveBeenCalledWith('fullscan:queue', 'job-1')
+    expect(mockRpush).toHaveBeenCalledWith('fullscan:queue', 'job-1')
     expect(mockFetch).not.toHaveBeenCalled()
+    jest.useRealTimers()
   })
 
   it('processJob runs bybit sync via direct adapter — zero HTTP calls', async () => {
@@ -422,13 +433,17 @@ describe('FullHistorySyncer', () => {
 
     mockSet.mockResolvedValue('OK')
     mockDel.mockResolvedValue(1)
+    mockRpush.mockResolvedValue(1)
     mockDiscoverSymbols.mockRejectedValue(new Error('exchange unreachable'))
 
     await syncer.processJob('job-1')
 
-    jest.advanceTimersByTime(60 * 60 * 1000)
+    // Verify backoff is respected: no re-enqueue before 1h elapses
+    expect(mockRpush).not.toHaveBeenCalledWith('fullscan:queue', 'job-1')
 
-    expect(mockLpush).toHaveBeenCalledWith('fullscan:queue', 'job-1')
+    await jest.advanceTimersByTimeAsync(60 * 60 * 1000)
+
+    expect(mockRpush).toHaveBeenCalledWith('fullscan:queue', 'job-1')
     jest.useRealTimers()
   })
 
@@ -463,13 +478,14 @@ describe('FullHistorySyncer', () => {
 
     mockSet.mockResolvedValue('OK')
     mockDel.mockResolvedValue(1)
+    mockRpush.mockResolvedValue(1)
     mockDiscoverSymbols.mockRejectedValue(new Error('exchange unreachable'))
 
     await syncer.processJob('job-1')
 
-    jest.advanceTimersByTime(60 * 60 * 1000)
+    await jest.advanceTimersByTimeAsync(60 * 60 * 1000)
 
-    expect(mockLpush).not.toHaveBeenCalledWith('fullscan:queue', 'job-1')
+    expect(mockRpush).not.toHaveBeenCalledWith('fullscan:queue', 'job-1')
     jest.useRealTimers()
   })
 })

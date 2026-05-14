@@ -40,8 +40,6 @@ export class BinanceConnector {
   private fillProcessor:   FillProcessor
   private fetchGapFillsFn?: (since: number, until: number) => Promise<RawFill[]>
   private lastFillTime:    number
-  // apiSecret stored for future use if Binance adds HMAC-signed WS endpoints
-  private readonly _apiSecret: string
 
   private ws:              WebSocket | null = null
   private keepaliveTimer:  ReturnType<typeof setInterval> | null = null
@@ -51,7 +49,6 @@ export class BinanceConnector {
 
   constructor(opts: BinanceConnectorOptions) {
     this.apiKey          = opts.apiKey
-    this._apiSecret      = opts.apiSecret
     this.accountId       = opts.accountId
     this.portfolioMargin = opts.portfolioMargin
     this.fillProcessor   = opts.fillProcessor
@@ -109,7 +106,7 @@ export class BinanceConnector {
     const fills = await this.fetchGapFillsFn(since, until)
     if (fills.length > 0) {
       await this.fillProcessor.storeBatch(fills)
-      const maxTs = Math.max(...fills.map(f => f.exec_time.getTime()))
+      const maxTs = fills.reduce((max, f) => Math.max(max, f.exec_time.getTime()), 0)
       if (maxTs > this.lastFillTime) this.lastFillTime = maxTs
     }
   }
@@ -144,24 +141,31 @@ export class BinanceConnector {
     }
   }
 
-  private connectOnce(): Promise<void> {
-    return new Promise(async (resolve) => {
-      const WebSocket = (await import('ws')).default
-      const ws = new WebSocket(this.wsUrl(this.listenKey))
-      this.ws = ws
+  private async connectOnce(): Promise<void> {
+    const WebSocket = (await import('ws')).default
+    const ws = new WebSocket(this.wsUrl(this.listenKey))
+    this.ws = ws
 
+    return new Promise<void>((resolve) => {
       ws.on('open', () => {
         this.reconnectDelay = 1000
       })
 
       ws.on('message', async (data: Buffer | string) => {
+        let msg: Record<string, unknown>
         try {
-          await this.handleMessage(JSON.parse(data.toString()) as Record<string, unknown>)
-        } catch { /* ignore malformed */ }
+          msg = JSON.parse(data.toString()) as Record<string, unknown>
+        } catch { return /* malformed JSON — ignore */ }
+        try {
+          await this.handleMessage(msg)
+        } catch (e) {
+          console.error('[binance-connector] message processing error:', (e as Error).message)
+        }
       })
 
       ws.on('error', (err: Error) => {
         console.error(`[binance-connector] ws error: ${err.message}`)
+        ws.close()  // ensures 'close' fires so connectOnce Promise always resolves
       })
 
       ws.on('close', () => {

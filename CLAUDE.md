@@ -5,7 +5,7 @@
 ## Project State
 *Update this section after every major change.*
 
-### Status: Worker-based full history sync complete — all accounts synced, 4 live bugs fixed
+### Status: Phase 2 complete — data reliability layer, Binance IP ban protection, worker observability
 
 ### What has been built
 
@@ -16,7 +16,7 @@
 - `/performance` — PeriodSelector + accounts checkbox dropdown; **L1 tabs** SPOT/FUTURES; **L2 tabs** per category; per-account metrics table with polarity-aware best/worst highlighting; `OverlayLineChart` equity curves; **Open Positions** section (real-time via `/api/positions` + `/api/positions/open-times`)
 - `/history` — sticky header + TradeFilters bar; OrdersTable; Export CSV/PDF; all data from Supabase via `/api/trades`
 - `/results` — USDT balance line chart + PnL histogram; balance table; pair filter; data from `/api/results` + `/api/transactions`
-- `/api-settings` — Create/Edit/Remove accounts; Test connection; Full History Sync button (enqueue + poll); all data from real API routes; keys AES-256-GCM encrypted
+- `/api-settings` — Create/Edit/Remove accounts; Test connection; Full History Sync button (enqueue + poll); **Worker Status panel** (alive/stale badge, last heartbeat, per-account data freshness, Binance ban indicator); keys AES-256-GCM encrypted
 - `/risk-management` — risk rules, live metrics, alerts, snapshots
 
 **Credentials:** `admin` / `admin123`
@@ -28,13 +28,15 @@
 ### Infrastructure complete
 
 **Sync architecture (Hetzner worker):**
-- `worker/index.ts` — entry point; starts ConnectorManager + FullHistorySyncer + BalancePoller
-- `worker/full-history-syncer.ts` — BRPOP queue consumer; processes `full_sync_jobs` one at a time; Redis distributed lock per account; stuck-job recovery on start (>10 min in `processing` → reset to `pending`)
+- `worker/index.ts` — entry point; starts ConnectorManager + FullHistorySyncer + BalancePoller + ReconciliationScheduler; writes heartbeat to `worker_status` every 5 min
+- `worker/full-history-syncer.ts` — BRPOP queue consumer; processes `full_sync_jobs` one at a time; Redis distributed lock per account; stuck-job recovery on start (>10 min in `processing` → reset to `pending`); auto-retry up to 3× with 1h backoff when `failed_items` or `failed` status
+- `worker/reconciliation-scheduler.ts` — REST reconciliation: non-Binance every 6h, Binance every 24h (500ms delay between symbols); checks BinanceBanGuard before Binance requests; writes to `raw_fills` + triggers reconstruction
+- `worker/binance-ban-guard.ts` — singleton; detects 418 "banned until <ms>" errors; blocks all further Binance requests in-process; persists `binance_ban_until` to `worker_status` Supabase row; survives across reconcile/balance poll calls
 - `worker/connector-manager.ts` — manages WebSocket connectors per exchange
-- `worker/connectors/` — per-exchange WS connectors (Bybit, Binance, OKX, MEXC)
-- `worker/balance-poller.ts` — periodic balance polling
+- `worker/connectors/` — per-exchange WS connectors (Bybit, Binance, OKX, MEXC); **startup gap fill before first connect**; `lastFillTime` watermark advances after each gap fill to prevent re-fetching on reconnect
+- `worker/balance-poller.ts` — split: non-Binance every 15 min (parallel), Binance every 60 min (sequential, ban-guard checked)
 - `worker/fill-processor.ts` — processes WebSocket fills into `raw_fills`
-- `worker/position-reconstructor.ts` — rebuilds `trades` from `raw_fills` per exchange; deduplicates before upsert to prevent `ON CONFLICT DO UPDATE ... affect row a second time`
+- `worker/position-reconstructor.ts` — rebuilds `trades` from `raw_fills` per exchange; deduplicates before upsert; uses `ignoreDuplicates: true` to safely handle duplicate conflict keys in same batch
 - PM2 on Hetzner: processes `next-app` (×2) + `sync-worker`; `ecosystem.config.js` at `/app/crypto-dashboard/`
 
 **Full History Sync flow:**
@@ -66,6 +68,7 @@
 - `app/api/results/route.ts` — GET: balance history + PnL
 - `app/api/transactions/route.ts` — GET: deposit/withdrawal history
 - `app/api/risk/` — rules, alerts, evaluate, live-metrics, snapshots
+- `app/api/worker-status/route.ts` — GET: worker heartbeat age + alive/stale status; Binance ban state from `worker_status`; per-account last fill timestamp + stale flag (>24h)
 
 **Adapters (`lib/adapters/`):**
 - `binance.ts` — `BinanceAdapter`; `discoverTradedSymbols()` (PM: 2 paginated PAPI requests; regular: 6×30d fapiPrivateGetIncome); `getFullTrades(symbol, weekIndices)` — fetches fills for specified weeks only; throws on exchange errors (no silent `[]`)
@@ -74,12 +77,13 @@
 - `mexc.ts` — 1×90d chunk
 - `ccxt-utils.ts` — `mapCcxtTrade()`: PnL from all exchange field names; NaN-safe; tradeType from symbol
 
-**Database (30 migrations applied):**
+**Database (31 migrations applied):**
 - `accounts` — id, account_name, fund, exchange, instrument (`unified`/`futures`/`spot`/`portfolio_margin`/`margin`), api_key/secret/passphrase (AES-256-GCM encrypted), account_id_memo, last_full_sync_at, full_sync_failed_count, initial_aum, is_suspended
 - `balances` — daily snapshots per account; unique on `(account_id, token_symbol, DATE(snapshot_date))`
 - `trades` — reconstructed closed trades; unique on `(account_id, symbol, opened_at, closed_at)`
 - `raw_fills` — individual exchange fills; unique on `(account_id, exchange, exec_id)`
-- `full_sync_jobs` — id, account_id, exchange, status (pending/processing/completed/failed), current_step, total_steps, failed_items (jsonb), error_message, started_at, completed_at
+- `full_sync_jobs` — id, account_id, exchange, status (pending/processing/completed/failed), current_step, total_steps, **retry_count** (int, default 0), failed_items (jsonb), error_message, started_at, completed_at
+- `worker_status` — singleton (id=1); last_heartbeat, started_at, **binance_ban_until** (timestamptz nullable); read by `/api/worker-status` and `BinanceBanGuard` on startup
 - `transactions` — deposits/withdrawals
 - `risk_rules`, `risk_alerts`, `risk_monitor_snapshots`
 
@@ -90,8 +94,9 @@
 - `ecosystem.config.js` — PM2 config on Hetzner
 - `.github/workflows/deploy.yml` — CI/CD: `git pull && npx next build && pm2 reload all`
 - Redis: `REDIS_URL` in `.env.local`; keys `fullscan:queue` (job queue), `fullscan:lock:{accountId}` (distributed lock, TTL 3600s)
+- Supabase Edge Function: `supabase/functions/watchdog/index.ts` — deployed to Supabase; called by pg_cron every 30 min; if `worker_status.last_heartbeat` is stale (>30 min), creates `pending` `full_sync_jobs` for all accounts that don't already have an active job → worker picks them up on restart via `recoverOnStartup()`
 
-**Tests:** 705 passing, 3 pre-existing failures (binance-connector WS URL + 2 okx-connector WS messages)
+**Tests:** 672 passing, 2 pre-existing failures (binance-connector WS URL tests)
 
 ---
 
@@ -134,14 +139,21 @@ crypto-dashboard/          ← project root (NOT src/)
 │           └── transactions-backfill/
 │
 ├── worker/
-│   ├── index.ts           ← entry; starts ConnectorManager + FullHistorySyncer + BalancePoller
-│   ├── full-history-syncer.ts ← BRPOP consumer; Redis lock; stuck-job recovery
-│   ├── position-reconstructor.ts ← rebuilds trades from raw_fills; dedup before upsert
-│   ├── connector-manager.ts ← manages WS connectors
-│   ├── connectors/        ← per-exchange WS connectors
-│   ├── fill-processor.ts  ← WS fills → raw_fills
-│   ├── balance-poller.ts  ← periodic balance polling
+│   ├── index.ts               ← entry; starts ConnectorManager + FullHistorySyncer + BalancePoller + ReconciliationScheduler; heartbeat every 5 min
+│   ├── full-history-syncer.ts ← BRPOP consumer; Redis lock; stuck-job recovery; auto-retry ≤3× with 1h backoff
+│   ├── reconciliation-scheduler.ts ← REST reconciliation every 6h (non-Binance) + 24h (Binance); ban-guard checked
+│   ├── binance-ban-guard.ts   ← singleton; detects 418 bans; persists to worker_status; blocks in-process
+│   ├── position-reconstructor.ts ← rebuilds trades from raw_fills; dedup + ignoreDuplicates:true upsert
+│   ├── connector-manager.ts   ← manages WS connectors
+│   ├── connectors/            ← per-exchange WS connectors; startup gap fill + lastFillTime watermark
+│   ├── fill-processor.ts      ← WS fills → raw_fills
+│   ├── balance-poller.ts      ← non-Binance every 15 min parallel; Binance every 60 min sequential + ban-guard
 │   └── tsconfig.json
+│
+├── supabase/
+│   ├── migrations/            ← 031 migrations applied
+│   └── functions/
+│       └── watchdog/index.ts  ← Edge Function; checks heartbeat; creates recovery jobs when worker stale
 │
 ├── components/
 │   ├── auth/LoginForm.tsx
@@ -164,7 +176,6 @@ crypto-dashboard/          ← project root (NOT src/)
 │   ├── adapters/binance.ts, bybit.ts, okx.ts, mexc.ts, ccxt-utils.ts, types.ts
 │   └── __tests__/calculations.test.ts, regression.test.ts, crypto.test.ts, supabase.test.ts
 │
-├── supabase/migrations/   ← 030 migrations applied
 ├── ecosystem.config.js    ← PM2 config (Hetzner)
 └── .github/workflows/deploy.yml ← CI/CD auto-deploy
 ```
@@ -184,18 +195,24 @@ crypto-dashboard/          ← project root (NOT src/)
 | Binance discover | PM: 2 paginated PAPI requests; regular: 6×30d windows | PM was doing 360 requests (52 windows × 7 symbols) |
 | raw_fills layer | Separate table before trade reconstruction | Allows re-running reconstruction without re-fetching API |
 | Position reconstruction | PositionReconstructor reads raw_fills, writes trades | Separates fill ingestion from trade logic |
-| Deduplication | Map by (symbol, openedAt, closedAt) before upsert | Prevents Postgres "ON CONFLICT affect row a second time" |
+| Deduplication | Map by (symbol, openedAt, closedAt) before upsert + `ignoreDuplicates: true` | Prevents Postgres "ON CONFLICT DO UPDATE affect row a second time" even when batch has duplicate keys |
 | Instrument default | `unified` for all new accounts | Bybit/OKX are always unified; Binance auto-detected |
 | Cron | Removed from Vercel; incremental sync handled by worker | Vercel cron has 30s timeout; worker has no limit |
 | Styling | Tailwind v4 + CSS variables in globals.css | No tailwind.config.js needed |
 | Color palette (dark) | bg-primary `#0A0A0F`, profit `#00FF88`, loss `#FF3B3B`, gold `#FFD700` | Bloomberg-terminal aesthetic |
 | Exchange colors | Binance `#F0B90B`, Bybit `#FF6B2C`, OKX `#4F8EF7` | Official brand colors |
+| Binance polling | Sequential, every 60 min, ban-guard checked | Parallel polling + aggressive reconciliation triggered IP bans |
+| Binance reconciliation | Separate 24h timer, 500ms delay between symbols | Keeps rate well below ban threshold |
+| BinanceBanGuard | Singleton; parses "banned until <ms>" from 418; persists to DB | Single place to detect + block; survives reconnects and new reconcile runs |
+| Worker observability | `worker_status` singleton table + `/api/worker-status` + UI panel | Real-time visibility of worker health and data freshness per account |
+| Supabase watchdog | Edge Function + pg_cron every 30 min | Independent of Hetzner; creates recovery jobs when worker is stale |
 
 ---
 
 ### Known limitations
 
-- **Binance IP ban risk**: aggressive syncs can trigger temporary IP bans (418 error). Worker processes one account at a time which reduces frequency.
+- **Binance IP ban**: handled via `BinanceBanGuard` — detects 418 "banned until <ms>", blocks in-process, persists to DB. Balance polling is sequential 1h, reconciliation is 24h with 500ms delays. Ban state visible in `/api-settings` UI.
+- **Single Hetzner server**: no redundancy. Edge Function watchdog creates recovery jobs if worker goes offline; `recoverOnStartup()` processes them on restart.
 - **Hyperliquid**: integration planned (wallet-based auth, CCXT confirmed); waiting for fund to go live.
 - **Mock data** (`lib/mock-data.ts`): still present for fallback/dev; pages use real API data in production.
 
@@ -295,7 +312,7 @@ All functions in `lib/calculations.ts` must be developed test-first using Jest.
 
 ```
 [ ] npx tsc --noEmit   → exit 0
-[ ] npm test           → exit 0, no failures (3 pre-existing WS failures allowed)
+[ ] npm test           → exit 0, no failures (2 pre-existing WS failures allowed: binance-connector WS URL)
 [ ] New enum value? → DB migration written
 [ ] New instrument? → grep "=== 'futures'" in sync routes and update
 [ ] New supabaseAdmin query returning >1000 rows? → pagination loop added

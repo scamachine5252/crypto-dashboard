@@ -7,9 +7,12 @@ import { BybitConnector } from './connectors/bybit-connector'
 import { BinanceConnector } from './connectors/binance-connector'
 import { OkxConnector } from './connectors/okx-connector'
 import { MexcConnector } from './connectors/mexc-connector'
+import { BybitAdapter } from '@/lib/adapters/bybit'
+import { OkxAdapter } from '@/lib/adapters/okx'
 import { MexcAdapter } from '@/lib/adapters/mexc'
 import type { RawFill } from './fill-processor'
 import type { DateRange } from '@/lib/types'
+import type { RawExecution } from '@/lib/adapters/bybit'
 
 export interface AccountRow {
   id:              string
@@ -71,14 +74,46 @@ export class ConnectorManager {
     this.redis.disconnect()
   }
 
+  async stopAndWait(timeoutMs = 30_000): Promise<void> {
+    this.stop()
+    // Give connectors up to timeoutMs to finish in-flight gap fills / writes
+    await Promise.race([
+      new Promise<void>(resolve => setTimeout(resolve, timeoutMs)),
+      // Connectors have no explicit "done" signal — the timeout is the backstop
+    ])
+  }
+
   private async startConnector(acct: AccountRow, lastFillTime: number): Promise<void> {
     const apiKey    = decrypt(acct.api_key)
     const apiSecret = decrypt(acct.api_secret)
 
     if (acct.exchange === 'bybit') {
+      const adapter = new BybitAdapter({ apiKey, apiSecret })
+      const fetchGapFills = async (since: number, until: number): Promise<RawFill[]> => {
+        const { rawExecutions } = await adapter.getTradesForChunk(since, until)
+        return rawExecutions.flatMap(({ category, executions }: { category: string; executions: RawExecution[] }) =>
+          executions.map((exec: RawExecution) => ({
+            account_id:   acct.id,
+            exchange:     'bybit',
+            exec_id:      `${exec.orderId}_${exec.execTime}_${exec.execQty}`,
+            symbol:       exec.symbol,
+            category,
+            exec_time:    new Date(Number(exec.execTime)),
+            side:         exec.side,
+            exec_qty:     Number(exec.execQty),
+            exec_price:   Number(exec.execPrice),
+            exec_pnl:     Number(exec.execPnl) || null,
+            exec_fee:     Math.abs(Number(exec.execFee)),
+            closed_size:  Number(exec.closedSize) || null,
+            position_idx: exec.positionIdx ? Number(exec.positionIdx) : null,
+            raw_data:     exec,
+            source:       'rest' as const,
+          }))
+        )
+      }
       const connector = new BybitConnector({
         apiKey, apiSecret, accountId: acct.id, lastFillTime,
-        fillProcessor: this.processor,
+        fillProcessor: this.processor, fetchGapFills,
       })
       this.connectors.push(connector)
       void connector.connect()  // runs its own reconnect loop — do not await
@@ -86,6 +121,8 @@ export class ConnectorManager {
     }
 
     if (acct.exchange === 'binance') {
+      // Binance gap fill requires symbol discovery — handled by ReconciliationScheduler every 24h.
+      // WS connector gets no fetchGapFills; the 24h REST reconciliation covers missed fills.
       const connector = new BinanceConnector({
         apiKey, apiSecret, accountId: acct.id, lastFillTime,
         portfolioMargin: acct.instrument === 'portfolio_margin',
@@ -98,9 +135,30 @@ export class ConnectorManager {
 
     if (acct.exchange === 'okx') {
       const passphrase = acct.passphrase ? decrypt(acct.passphrase) : ''
+      const adapter    = new OkxAdapter({ apiKey, apiSecret, passphrase })
+      const fetchGapFills = async (since: number, until: number): Promise<RawFill[]> => {
+        const trades = await adapter.getTrades('', {} as DateRange, since, 1000, until)
+        return trades.map(t => ({
+          account_id:   acct.id,
+          exchange:     'okx',
+          exec_id:      t.id,
+          symbol:       t.symbol,
+          category:     t.tradeType,
+          exec_time:    new Date(t.closedAt),
+          side:         t.side === 'long' ? 'buy' : 'sell',
+          exec_qty:     t.quantity,
+          exec_price:   t.exitPrice,
+          exec_pnl:     t.pnl || null,
+          exec_fee:     Math.abs(t.fee),
+          closed_size:  null,
+          position_idx: null,
+          raw_data:     { id: t.id, symbol: t.symbol, pnl: t.pnl },
+          source:       'rest' as const,
+        }))
+      }
       const connector = new OkxConnector({
         apiKey, apiSecret, passphrase, accountId: acct.id, lastFillTime,
-        fillProcessor: this.processor,
+        fillProcessor: this.processor, fetchGapFills,
       })
       this.connectors.push(connector)
       void connector.connect()  // runs its own reconnect loop — do not await

@@ -1,6 +1,6 @@
 import { supabaseAdmin } from '@/lib/supabase/server'
 
-class BinanceBanGuard {
+export class BinanceBanGuard {
   private banUntilMs = 0
 
   async recordIfBanned(err: unknown): Promise<void> {
@@ -8,6 +8,11 @@ class BinanceBanGuard {
     const match = msg.match(/banned until (\d+)/)
     if (!match) return
     const until = Number(match[1])
+    // Sanity: Binance always sends milliseconds (>1e12 = year 2001+). Ignore if looks like seconds.
+    if (until < 1e12) {
+      console.warn(`[binance-ban-guard] suspicious ban timestamp ${until} — ignoring (expected ms, got seconds?)`)
+      return
+    }
     if (until <= this.banUntilMs) return
     this.banUntilMs = until
     const untilIso = new Date(until).toISOString()
@@ -21,6 +26,11 @@ class BinanceBanGuard {
 
   isBanned(): boolean {
     return Date.now() < this.banUntilMs
+  }
+
+  /** Reset ban state — for use in tests only. */
+  reset(): void {
+    this.banUntilMs = 0
   }
 }
 

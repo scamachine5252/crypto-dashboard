@@ -192,6 +192,7 @@ export class ReconciliationScheduler {
     }
 
     let total = 0
+    let caughtError: unknown = null
     for (const { rawSymbol } of symbols) {
       if (binanceBanGuard.isBanned()) break
       try {
@@ -210,9 +211,19 @@ export class ReconciliationScheduler {
         total += await this.upsert('binance', rows)
       } catch (e) {
         await binanceBanGuard.recordIfBanned(e)
-        throw e
+        caughtError = e
+        break  // stop fetching further symbols, but still trigger reconstruction for what succeeded
       }
       await new Promise(r => setTimeout(r, BINANCE_DELAY_MS))
+    }
+
+    if (caughtError) {
+      // Partial run: some fills were written before the ban/error — reconstruct what we have
+      if (total > 0) {
+        await new PositionReconstructor().reconstruct(account.id, 'binance')
+          .catch(e => console.error('[reconciliation] binance partial reconstruction failed:', e))
+      }
+      throw caughtError
     }
     return total
   }
