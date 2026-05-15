@@ -212,6 +212,26 @@ describe('BybitConnector — startup gap fill', () => {
     expect(callOrder[0]).toBe('gapFill')
     expect(callOrder[1]).toBe('connectOnce')
   })
+
+  it('does NOT crash when startup gap fill throws — connector still connects', async () => {
+    const mockGapFills = jest.fn().mockRejectedValue(new Error('API timeout'))
+    const fp = { store: mockFillProcessorStore, storeBatch: mockFillProcessorBatch } as unknown as FillProcessor
+    const conn = new BybitConnector({ ...CREDS, fillProcessor: fp, fetchGapFills: mockGapFills })
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {})
+    let connectOnceCalled = false
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    jest.spyOn(conn as any, 'connectOnce')
+      .mockImplementation(async () => { connectOnceCalled = true; conn.disconnect() })
+
+    await conn.connect()  // must not throw
+
+    expect(connectOnceCalled).toBe(true)
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('startup gap fill failed'),
+      expect.any(Error),
+    )
+    consoleSpy.mockRestore()
+  })
 })
 
 // ── runGapFill updates lastFillTime ──────────────────────────────────────────
@@ -257,5 +277,149 @@ describe('BybitConnector — gap fill', () => {
     expect(mockFillProcessorBatch).toHaveBeenCalledWith(expect.arrayContaining([
       expect.objectContaining({ exec_id: 'gap-fill-1' }),
     ]))
+  })
+})
+
+// ── exec_pnl null invariant ──────────────────────────────────────────────────
+
+describe('bybit-connector — exec_pnl null invariant', () => {
+  it('exec_pnl is null when execPnl field is "0" (opening fill)', async () => {
+    const connector = makeConnector()
+    mockFillProcessorStore.mockResolvedValue(undefined)
+
+    await connector.handleMessage({
+      topic: 'execution.linear',
+      data: [{
+        orderId: 'ord-1', execTime: '1735689600000', execQty: '0.1',
+        symbol: 'BTCUSDT', side: 'Buy', execType: 'Trade',
+        execPrice: '50000', execPnl: '0', execFee: '0.5', closedSize: '0',
+      }],
+    })
+
+    const fill = mockFillProcessorStore.mock.calls[0][0]
+    expect(fill.exec_pnl).toBeNull()
+  })
+
+  it('exec_pnl is null when execPnl field is "" or "NaN"', async () => {
+    const connector = makeConnector()
+    mockFillProcessorStore.mockResolvedValue(undefined)
+
+    // Empty string
+    await connector.handleMessage({
+      topic: 'execution.linear',
+      data: [{
+        orderId: 'ord-empty', execTime: '1735689600001', execQty: '0.1',
+        symbol: 'BTCUSDT', side: 'Buy', execType: 'Trade',
+        execPrice: '50000', execPnl: '', execFee: '0.5', closedSize: '0',
+      }],
+    })
+    expect(mockFillProcessorStore.mock.calls[0][0].exec_pnl).toBeNull()
+
+    mockFillProcessorStore.mockClear()
+
+    // "NaN" string
+    await connector.handleMessage({
+      topic: 'execution.linear',
+      data: [{
+        orderId: 'ord-nan', execTime: '1735689600002', execQty: '0.1',
+        symbol: 'BTCUSDT', side: 'Buy', execType: 'Trade',
+        execPrice: '50000', execPnl: 'NaN', execFee: '0.5', closedSize: '0',
+      }],
+    })
+    expect(mockFillProcessorStore.mock.calls[0][0].exec_pnl).toBeNull()
+  })
+
+  it('exec_pnl is non-null when execPnl is a non-zero string like "100.5"', async () => {
+    const connector = makeConnector()
+    mockFillProcessorStore.mockResolvedValue(undefined)
+
+    await connector.handleMessage({
+      topic: 'execution.linear',
+      data: [{
+        orderId: 'ord-2', execTime: '1735689600000', execQty: '0.1',
+        symbol: 'BTCUSDT', side: 'Sell', execType: 'Trade',
+        execPrice: '51000', execPnl: '100.5', execFee: '0.5', closedSize: '0.1',
+      }],
+    })
+
+    const fill = mockFillProcessorStore.mock.calls[0][0]
+    expect(fill.exec_pnl).toBe(100.5)
+  })
+})
+
+// ── lastFillTime watermark ───────────────────────────────────────────────────
+
+describe('bybit-connector — lastFillTime watermark', () => {
+  it('advances lastFillTime when a WS fill arrives with a later timestamp', async () => {
+    const connector = makeConnector(1000)
+    mockFillProcessorStore.mockResolvedValue(undefined)
+
+    const laterTs = 1735689600000
+    await connector.handleMessage({
+      topic: 'execution.linear',
+      data: [{
+        orderId: 'ord-later', execTime: String(laterTs), execQty: '0.1',
+        symbol: 'BTCUSDT', side: 'Buy', execType: 'Trade',
+        execPrice: '50000', execPnl: '0', execFee: '0.5', closedSize: '0',
+      }],
+    })
+
+    expect((connector as unknown as { lastFillTime: number }).lastFillTime).toBe(laterTs)
+  })
+
+  it('does not advance lastFillTime when fill timestamp is older than current lastFillTime', async () => {
+    const currentTime = 1735689600000
+    const connector = makeConnector(currentTime)
+    mockFillProcessorStore.mockResolvedValue(undefined)
+
+    const olderTs = currentTime - 10000
+    await connector.handleMessage({
+      topic: 'execution.linear',
+      data: [{
+        orderId: 'ord-older', execTime: String(olderTs), execQty: '0.1',
+        symbol: 'BTCUSDT', side: 'Buy', execType: 'Trade',
+        execPrice: '49000', execPnl: '0', execFee: '0.5', closedSize: '0',
+      }],
+    })
+
+    expect((connector as unknown as { lastFillTime: number }).lastFillTime).toBe(currentTime)
+  })
+})
+
+// ── category routing ─────────────────────────────────────────────────────────
+
+describe('bybit-connector — category routing', () => {
+  it('sets category="linear" for linear topic messages', async () => {
+    const connector = makeConnector()
+    mockFillProcessorStore.mockResolvedValue(undefined)
+
+    await connector.handleMessage({
+      topic: 'execution.linear',
+      data: [{
+        orderId: 'ord-lin', execTime: '1735689600000', execQty: '0.1',
+        symbol: 'BTCUSDT', side: 'Buy', execType: 'Trade',
+        execPrice: '50000', execPnl: '0', execFee: '0.5', closedSize: '0',
+      }],
+    })
+
+    const fill = mockFillProcessorStore.mock.calls[0][0]
+    expect(fill.category).toBe('linear')
+  })
+
+  it('sets category="inverse" for inverse topic messages', async () => {
+    const connector = makeConnector()
+    mockFillProcessorStore.mockResolvedValue(undefined)
+
+    await connector.handleMessage({
+      topic: 'execution.inverse',
+      data: [{
+        orderId: 'ord-inv', execTime: '1735689600000', execQty: '0.001',
+        symbol: 'BTCUSD', side: 'Buy', execType: 'Trade',
+        execPrice: '50000', execPnl: '0', execFee: '0.001', closedSize: '0',
+      }],
+    })
+
+    const fill = mockFillProcessorStore.mock.calls[0][0]
+    expect(fill.category).toBe('inverse')
   })
 })

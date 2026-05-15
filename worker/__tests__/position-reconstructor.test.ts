@@ -570,4 +570,54 @@ describe('PositionReconstructor', () => {
     // Second trade: accFee was reset to 0 after partial close, so fee=0+secondFee(5)=5
     expect(second).toMatchObject({ entry_price: 50000, exit_price: 52000, pnl: 100, fee: 5 })
   })
+
+  it('okx: two independent symbols produce two separate trades', async () => {
+    // BTC open + close
+    const btcOpen = makeOkxFillRow({ exec_id: 'b1', symbol: 'BTC-USDT-SWAP', side: 'buy',  exec_qty: 1, exec_price: 50000, exec_pnl: null, exec_fee: 5, exec_time: '2025-01-01T00:00:00.000Z' })
+    const btcClose = makeOkxFillRow({ exec_id: 'b2', symbol: 'BTC-USDT-SWAP', side: 'sell', exec_qty: 1, exec_price: 51000, exec_pnl: 100,  exec_fee: 5, exec_time: '2025-01-02T00:00:00.000Z' })
+    // ETH open + close
+    const ethOpen = makeOkxFillRow({ exec_id: 'e1', symbol: 'ETH-USDT-SWAP', side: 'buy',  exec_qty: 2, exec_price: 2000, exec_pnl: null, exec_fee: 1, exec_time: '2025-01-01T06:00:00.000Z' })
+    const ethClose = makeOkxFillRow({ exec_id: 'e2', symbol: 'ETH-USDT-SWAP', side: 'sell', exec_qty: 2, exec_price: 2100, exec_pnl: 200,  exec_fee: 1, exec_time: '2025-01-02T06:00:00.000Z' })
+
+    const { selectFn } = makeFlexibleSelectChain([[btcOpen, btcClose, ethOpen, ethClose], []])
+    mockFromSelect.mockImplementation(selectFn)
+    mockUpsert.mockResolvedValue({ error: null })
+
+    await reconstructor.reconstruct('acc-1', 'okx')
+
+    const rows = mockUpsert.mock.calls[0][0] as Record<string, unknown>[]
+    expect(rows).toHaveLength(2)
+    const symbols = rows.map(r => r.symbol)
+    expect(symbols).toContain('BTC-USDT-SWAP')
+    expect(symbols).toContain('ETH-USDT-SWAP')
+    const btcRow = rows.find(r => r.symbol === 'BTC-USDT-SWAP')!
+    const ethRow = rows.find(r => r.symbol === 'ETH-USDT-SWAP')!
+    expect(btcRow).toMatchObject({ entry_price: 50000, exit_price: 51000, pnl: 100 })
+    expect(ethRow).toMatchObject({ entry_price: 2000,  exit_price: 2100,  pnl: 200 })
+  })
+
+  it('okx: closing fill with no tracked position emits fallback trade (entry=exit)', async () => {
+    // Closing fill with pnl != null but no prior opening fill
+    const orphanClose = makeOkxFillRow({
+      exec_id:    'orphan-1',
+      symbol:     'SOL-USDT-SWAP',
+      side:       'sell',
+      exec_qty:   5,
+      exec_price: 150,
+      exec_pnl:   75,
+      exec_fee:   2,
+      exec_time:  '2025-01-01T12:00:00.000Z',
+    })
+
+    const { selectFn } = makeFlexibleSelectChain([[orphanClose], []])
+    mockFromSelect.mockImplementation(selectFn)
+    mockUpsert.mockResolvedValue({ error: null })
+
+    await reconstructor.reconstruct('acc-1', 'okx')
+
+    const rows = mockUpsert.mock.calls[0][0] as Record<string, unknown>[]
+    expect(rows).toHaveLength(1)
+    // Fallback: entryPrice = exitPrice = closing fill price
+    expect(rows[0]).toMatchObject({ entry_price: 150, exit_price: 150, pnl: 75 })
+  })
 })
