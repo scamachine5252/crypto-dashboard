@@ -513,7 +513,7 @@ export class BinanceAdapter implements ExchangeAdapter {
             }).catch(() => [] as Array<{ symbol: string; time: number }>)
             acc.push(...page)
             if (page.length < 1000) break
-            cursor = page[page.length - 1].time + 1
+            cursor = Number(page[page.length - 1].time) + 1
           }
           return acc
         }
