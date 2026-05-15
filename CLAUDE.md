@@ -5,7 +5,7 @@
 ## Project State
 *Update this section after every major change.*
 
-### Status: Phase 2 complete — data reliability layer, Binance IP ban protection, worker observability
+### Status: Phase 3 complete — OKX stateful reconstruction, Redis lock, test coverage overhaul
 
 ### What has been built
 
@@ -30,13 +30,13 @@
 **Sync architecture (Hetzner worker):**
 - `worker/index.ts` — entry point; starts ConnectorManager + FullHistorySyncer + BalancePoller + ReconciliationScheduler; writes heartbeat to `worker_status` every 5 min
 - `worker/full-history-syncer.ts` — BRPOP queue consumer; processes `full_sync_jobs` one at a time; Redis distributed lock per account; stuck-job recovery on start (>10 min in `processing` → reset to `pending`); auto-retry up to 3× with 1h backoff when `failed_items` or `failed` status
-- `worker/reconciliation-scheduler.ts` — REST reconciliation: non-Binance every 6h, Binance every 24h (500ms delay between symbols); checks BinanceBanGuard before Binance requests; writes to `raw_fills` + triggers reconstruction
+- `worker/reconciliation-scheduler.ts` — REST reconciliation: non-Binance every 6h, Binance every 24h (500ms delay between symbols); checks BinanceBanGuard before Binance requests; writes to `raw_fills` + triggers reconstruction; Binance delayed +5min on startup; stores full Trade object in OKX/MEXC `raw_data` (not sparse)
 - `worker/binance-ban-guard.ts` — singleton; detects 418 "banned until <ms>" errors; blocks all further Binance requests in-process; persists `binance_ban_until` to `worker_status` Supabase row; survives across reconcile/balance poll calls
-- `worker/connector-manager.ts` — manages WebSocket connectors per exchange
+- `worker/connector-manager.ts` — manages WebSocket connectors per exchange; **single batch RPC** (`latest_fill_per_account`) for lastFillTime on startup (not N per-account queries); **in-flight drain counter** for graceful shutdown; skips `is_suspended` accounts
 - `worker/connectors/` — per-exchange WS connectors (Bybit, Binance, OKX, MEXC); **startup gap fill before first connect**; `lastFillTime` watermark advances after each gap fill to prevent re-fetching on reconnect
-- `worker/balance-poller.ts` — split: non-Binance every 15 min (parallel), Binance every 60 min (sequential, ban-guard checked)
+- `worker/balance-poller.ts` — split: non-Binance every 15 min (parallel), Binance every 60 min (sequential, ban-guard checked); skips `is_suspended` accounts; Binance delayed +3min on startup to avoid burst
 - `worker/fill-processor.ts` — processes WebSocket fills into `raw_fills`
-- `worker/position-reconstructor.ts` — rebuilds `trades` from `raw_fills` per exchange; deduplicates before upsert; uses `ignoreDuplicates: true` to safely handle duplicate conflict keys in same batch
+- `worker/position-reconstructor.ts` — rebuilds `trades` from `raw_fills` per exchange; deduplicates before upsert; uses `ignoreDuplicates: true` to safely handle duplicate conflict keys in same batch; **Redis lock** (`recon:{accountId}:{exchange}`, TTL 120s) prevents concurrent reconstruction; skips if no new fills since `last_reconstructed_at`; OKX uses stateful position reconstruction (not 1:1 fill mapping)
 - PM2 on Hetzner: processes `next-app` (×2) + `sync-worker`; `ecosystem.config.js` at `/app/crypto-dashboard/`
 
 **Full History Sync flow:**
@@ -77,13 +77,13 @@
 - `mexc.ts` — 1×90d chunk
 - `ccxt-utils.ts` — `mapCcxtTrade()`: PnL from all exchange field names; NaN-safe; tradeType from symbol
 
-**Database (31 migrations applied):**
-- `accounts` — id, account_name, fund, exchange, instrument (`unified`/`futures`/`spot`/`portfolio_margin`/`margin`), api_key/secret/passphrase (AES-256-GCM encrypted), account_id_memo, last_full_sync_at, full_sync_failed_count, initial_aum, is_suspended
+**Database (32 migrations applied):**
+- `accounts` — id, account_name, fund, exchange, instrument (`unified`/`futures`/`spot`/`portfolio_margin`/`margin`), api_key/secret/passphrase (AES-256-GCM encrypted), account_id_memo, last_full_sync_at, full_sync_failed_count, initial_aum, is_suspended, **last_reconstructed_at** (timestamptz, added migration 032)
 - `balances` — daily snapshots per account; unique on `(account_id, token_symbol, DATE(snapshot_date))`
 - `trades` — reconstructed closed trades; unique on `(account_id, symbol, opened_at, closed_at)`
 - `raw_fills` — individual exchange fills; unique on `(account_id, exchange, exec_id)`
 - `full_sync_jobs` — id, account_id, exchange, status (pending/processing/completed/failed), current_step, total_steps, **retry_count** (int, default 0), failed_items (jsonb), error_message, started_at, completed_at
-- `worker_status` — singleton (id=1); last_heartbeat, started_at, **binance_ban_until** (timestamptz nullable); read by `/api/worker-status` and `BinanceBanGuard` on startup
+- `worker_status` — singleton (id=1); last_heartbeat, started_at, **binance_ban_until** (timestamptz nullable), **latest_fill_per_account** RPC (migration 031); read by `/api/worker-status` and `BinanceBanGuard` on startup
 - `transactions` — deposits/withdrawals
 - `risk_rules`, `risk_alerts`, `risk_monitor_snapshots`
 
@@ -93,10 +93,16 @@
 - `lib/supabase/client.ts` — browser client
 - `ecosystem.config.js` — PM2 config on Hetzner
 - `.github/workflows/deploy.yml` — CI/CD: `git pull && npx next build && pm2 reload all`
-- Redis: `REDIS_URL` in `.env.local`; keys `fullscan:queue` (job queue), `fullscan:lock:{accountId}` (distributed lock, TTL 3600s)
+- Redis: `REDIS_URL` in `.env.local`; keys `fullscan:queue` (job queue), `fullscan:lock:{accountId}` (distributed lock, TTL 3600s), `recon:{accountId}:{exchange}` (reconstruction lock, TTL 120s)
+- Post-deploy smoke check: `node scripts/smoke-check.mjs` — verifies migrations, RPC, DB writes, data freshness, worker heartbeat, Binance ban state
 - Supabase Edge Function: `supabase/functions/watchdog/index.ts` — deployed to Supabase; called by pg_cron every 30 min; if `worker_status.last_heartbeat` is stale (>30 min), creates `pending` `full_sync_jobs` for all accounts that don't already have an active job → worker picks them up on restart via `recoverOnStartup()`
 
-**Tests:** 672 passing, 2 pre-existing failures (binance-connector WS URL tests)
+**Tests:** 796 passing, 2 pre-existing failures (binance-connector + okx-connector WS URL tests — not fixable without live exchange)
+
+**Test coverage:**
+- `worker/` — full pipeline: connector-manager (RPC batch, suspended, drain), balance-poller (ban-guard, suspended), fill-processor (dedup, batch), position-reconstructor (Redis lock, OKX stateful: multi-symbol, partial close, orphan), bybit-connector (gap fill error path), reconciliation-scheduler, full-history-syncer, binance-ban-guard
+- `lib/` — calculations (all formulas), utils, crypto, regression invariants, risk/evaluate (all 9 rule types + computeAllMetricValues), binance reconstruction (stateful positions, same-ms merge), bybit reconstruction
+- `app/api/` — accounts, dashboard, sync (enqueue, job, reconstruct, route), worker-status, performance (IC priority, pnlPercent, overnight, duration), exchanges (ping, balance, trades)
 
 ---
 
@@ -151,7 +157,7 @@ crypto-dashboard/          ← project root (NOT src/)
 │   └── tsconfig.json
 │
 ├── supabase/
-│   ├── migrations/            ← 031 migrations applied
+│   ├── migrations/            ← 032 migrations applied
 │   └── functions/
 │       └── watchdog/index.ts  ← Edge Function; checks heartbeat; creates recovery jobs when worker stale
 │
@@ -174,7 +180,7 @@ crypto-dashboard/          ← project root (NOT src/)
 │   ├── crypto/encrypt.ts + decrypt.ts
 │   ├── supabase/client.ts + server.ts
 │   ├── adapters/binance.ts, bybit.ts, okx.ts, mexc.ts, ccxt-utils.ts, types.ts
-│   └── __tests__/calculations.test.ts, regression.test.ts, crypto.test.ts, supabase.test.ts
+│   └── __tests__/calculations.test.ts, regression.test.ts, crypto.test.ts, supabase.test.ts, utils.test.ts, risk-evaluate.test.ts, binance-reconstruction.test.ts, bybit-reconstruction.test.ts
 │
 ├── ecosystem.config.js    ← PM2 config (Hetzner)
 └── .github/workflows/deploy.yml ← CI/CD auto-deploy
@@ -206,6 +212,12 @@ crypto-dashboard/          ← project root (NOT src/)
 | BinanceBanGuard | Singleton; parses "banned until <ms>" from 418; persists to DB | Single place to detect + block; survives reconnects and new reconcile runs |
 | Worker observability | `worker_status` singleton table + `/api/worker-status` + UI panel | Real-time visibility of worker health and data freshness per account |
 | Supabase watchdog | Edge Function + pg_cron every 30 min | Independent of Hetzner; creates recovery jobs when worker is stale |
+| OKX reconstruction | Stateful position tracking (not 1:1 fill mapping) | 1:1 fills produced entryPrice=exitPrice, openedAt=closedAt — wrong trade records |
+| Reconstruction lock | Redis NX TTL 120s per (accountId, exchange) | Prevents concurrent reconstruction corrupting trades table mid-read |
+| last_reconstructed_at | Skip reconstruction when no new fills since last run | O(N/1000) fetch on every trigger was unnecessary; skip saves DB reads |
+| Startup burst prevention | Binance reconciler +5min, Binance balance-poller +3min | Without stagger: ~4,713 weight/min on restart vs 2,400 limit → immediate ban |
+| exec_pnl normalization | `Number(x) || null` everywhere (0 = opening fill, not a real PnL) | Inconsistency between connector and reconciler was writing 0 for opening fills |
+| stopAndWait drain | In-flight counter + Promise resolution | Old implementation was bare `setTimeout(30s)` — clean shutdown took 30s regardless |
 
 ---
 
@@ -224,6 +236,17 @@ No approved plan currently. Candidates:
 - Hyperliquid integration (when fund goes live)
 - Risk management page polish
 - Performance improvements (pagination in history, virtual scrolling)
+
+---
+
+### Pre-flight checklist addition (Phase 3)
+
+```
+[ ] After every deploy: node scripts/smoke-check.mjs
+[ ] New migration? → verify it's applied on prod before restarting worker
+[ ] Touching PositionReconstructor? → Redis lock key format: recon:{accountId}:{exchange}
+[ ] OKX reconstruction change? → test with multi-symbol fills (not just single symbol)
+```
 
 ---
 
