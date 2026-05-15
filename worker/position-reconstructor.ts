@@ -140,18 +140,22 @@ function rowToRawExecution(row: Record<string, unknown>): RawExecution {
 
 function rowToRawFapiTrade(row: Record<string, unknown>): RawFapiTrade {
   const raw = (row.raw_data ?? {}) as Record<string, unknown>
+  // Binance WS execution reports use single-letter keys; REST trades use full names.
+  // WS: s=symbol, S=side, L=lastPrice, l=lastQty, rp=realizedPnl, n=commission,
+  //     N=commissionAsset, T=transactTime, ps=positionSide, i=orderId, t=tradeId
+  const isWs = raw.rp !== undefined || raw.ps !== undefined
   return {
-    symbol:          String(raw.symbol          ?? row.symbol       ?? ''),
-    side:            String(raw.side            ?? row.side         ?? 'BUY'),
-    price:           String(raw.price           ?? row.exec_price   ?? '0'),
-    qty:             String(raw.qty             ?? row.exec_qty     ?? '0'),
-    realizedPnl:     String(raw.realizedPnl     ?? row.exec_pnl     ?? '0'),
-    commission:      String(raw.commission      ?? row.exec_fee     ?? '0'),
-    commissionAsset: String(raw.commissionAsset ?? 'USDT'),
-    time:            Number(raw.time            ?? new Date(String(row.exec_time ?? 0)).getTime()),
-    positionSide:    String(raw.positionSide    ?? row.category     ?? 'BOTH'),
-    orderId:         Number(raw.orderId         ?? 0),
-    id:              Number(raw.id              ?? 0),
+    symbol:          String(raw.symbol   ?? raw.s  ?? row.symbol      ?? ''),
+    side:            String(raw.side     ?? raw.S  ?? row.side        ?? 'BUY'),
+    price:           String(raw.price    ?? raw.L  ?? row.exec_price  ?? '0'),
+    qty:             String(raw.qty      ?? raw.l  ?? row.exec_qty    ?? '0'),
+    realizedPnl:     String(raw.realizedPnl ?? raw.rp ?? (isWs ? '0' : (row.exec_pnl ?? '0'))),
+    commission:      String(raw.commission  ?? raw.n  ?? row.exec_fee ?? '0'),
+    commissionAsset: String(raw.commissionAsset ?? raw.N ?? 'USDT'),
+    time:            Number(raw.time ?? raw.T ?? new Date(String(row.exec_time ?? 0)).getTime()),
+    positionSide:    String(raw.positionSide ?? raw.ps ?? row.category ?? 'BOTH'),
+    orderId:         Number(raw.orderId ?? raw.i ?? 0),
+    id:              Number(raw.id ?? raw.t ?? 0),
   }
 }
 
