@@ -34,28 +34,25 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const sinceDate = new Date(since).toISOString()
   const untilDate = new Date(until).toISOString()
 
-  // Supabase PostgREST caps at 1000 rows per request — paginate to fetch all
-  const PAGE = 1000
-  const allRows: DbTrade[] = []
-  let from = 0
-  while (true) {
-    const { data, error: pageErr } = await supabaseAdmin
-      .from('trades')
-      .select('id, account_id, exchange, symbol, direction, trade_type, entry_price, exit_price, quantity, pnl, fee, opened_at, closed_at')
-      .in('account_id', accountIds)
-      .gte('closed_at', sinceDate)
-      .lte('closed_at', untilDate)
-      .not('closed_at', 'is', null)
-      .neq('pnl', 0)
-      .order('closed_at', { ascending: false })
-      .order('id', { ascending: true })
-      .range(from, from + PAGE - 1)
-    if (pageErr) return NextResponse.json({ error: pageErr.message }, { status: 500 })
-    if (!data || data.length === 0) break
-    allRows.push(...(data as DbTrade[]))
-    if (data.length < PAGE) break
-    from += PAGE
-  }
+  // Server-side pagination — client sends ?page=0&page_size=500
+  const pageNum  = Math.max(0, Number(req.nextUrl.searchParams.get('page')      ?? '0'))
+  const pageSize = Math.min(1000, Math.max(1, Number(req.nextUrl.searchParams.get('page_size') ?? '500')))
+  const from     = pageNum * pageSize
+
+  const { data: pageData, error: pageErr, count } = await supabaseAdmin
+    .from('trades')
+    .select('id, account_id, exchange, symbol, direction, trade_type, entry_price, exit_price, quantity, pnl, fee, opened_at, closed_at', { count: 'exact' })
+    .in('account_id', accountIds)
+    .gte('closed_at', sinceDate)
+    .lte('closed_at', untilDate)
+    .not('closed_at', 'is', null)
+    .neq('pnl', 0)
+    .order('closed_at', { ascending: false })
+    .order('id', { ascending: true })
+    .range(from, from + pageSize - 1)
+  if (pageErr) return NextResponse.json({ error: pageErr.message }, { status: 500 })
+  const allRows = (pageData ?? []) as DbTrade[]
+  const total   = count ?? 0
 
   // Only closing fills (pnl≠0) — opening fills are filtered at DB level above.
   const trades: Trade[] = allRows.map((t) => {
@@ -88,5 +85,5 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     closedAt: t.closed_at,
   })})
 
-  return NextResponse.json({ trades, accounts })
+  return NextResponse.json({ trades, accounts, total, page: pageNum, pageSize, hasMore: from + allRows.length < total })
 }

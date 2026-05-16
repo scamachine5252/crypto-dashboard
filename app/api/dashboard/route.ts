@@ -70,28 +70,48 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const sinceDate = new Date(since).toISOString()
   const untilDate = new Date(until).toISOString()
 
-  type TradeRow = { account_id: string; pnl: number | null; fee: number | null; closed_at: string; quantity: number | null; entry_price: number | null }
-  const PAGE = 1000
-  const tradeRows: TradeRow[] = []
-  let from = 0
-  while (true) {
-    const { data, error: pageErr } = await supabaseAdmin
-      .from('trades')
-      .select('account_id, pnl, fee, closed_at, side, trade_type, quantity, entry_price')
-      .in('account_id', accountIds)
-      .gte('closed_at', sinceDate)
-      .lte('closed_at', untilDate)
-      .not('closed_at', 'is', null)
-      .neq('pnl', 0)
-      .order('closed_at', { ascending: true })
-      .order('id', { ascending: true })
-      .range(from, from + PAGE - 1)
-    if (pageErr) return NextResponse.json({ error: pageErr.message }, { status: 500 })
-    if (!data || data.length === 0) break
-    tradeRows.push(...(data as TradeRow[]))
-    if (data.length < PAGE) break
-    from += PAGE
+  // Single aggregate query instead of 38+ paginated SELECT loops
+  // Returns at most (accounts × days) rows — e.g. 10 × 180 = 1800 vs 37K raw trades
+  type StatRow = {
+    account_id: string; day: string
+    daily_pnl: number; daily_fee: number; daily_volume: number
+    win_count: number; loss_count: number; gross_profit: number; gross_loss: number
   }
+  const { data: statsData, error: statsErr } = await supabaseAdmin
+    .rpc('trade_stats_by_account_day', {
+      p_account_ids: accountIds,
+      p_since:       sinceDate,
+      p_until:       untilDate,
+    })
+  if (statsErr) return NextResponse.json({ error: statsErr.message }, { status: 500 })
+  const statsRows = (statsData ?? []) as StatRow[]
+
+  // Aggregate per-account and per-day from compact RPC result
+  const pnlByAccount:        Record<string, number> = {}
+  const tradeCountByAccount: Record<string, number> = {}
+  const dailyMap:            Record<string, number> = {}
+  let totalPnl = 0, totalFees = 0, totalVolume = 0
+  let totalWins = 0, totalLosses = 0, totalGrossProfit = 0, totalGrossLoss = 0
+
+  for (const row of statsRows) {
+    const day = String(row.day).slice(0, 10)
+    pnlByAccount[row.account_id]        = (pnlByAccount[row.account_id]        ?? 0) + row.daily_pnl
+    tradeCountByAccount[row.account_id] = (tradeCountByAccount[row.account_id] ?? 0) + Number(row.win_count) + Number(row.loss_count)
+    dailyMap[day]                        = (dailyMap[day]                        ?? 0) + row.daily_pnl
+    totalPnl          += row.daily_pnl
+    totalFees         += row.daily_fee
+    totalVolume       += row.daily_volume
+    totalWins         += Number(row.win_count)
+    totalLosses       += Number(row.loss_count)
+    totalGrossProfit  += row.gross_profit
+    totalGrossLoss    += row.gross_loss
+  }
+
+  const closedCount   = totalWins + totalLosses
+  const winRate       = closedCount > 0 ? (totalWins / closedCount) * 100 : 0
+  const avgWin        = totalWins   > 0 ? totalGrossProfit / totalWins   : 0
+  const avgLoss       = totalLosses > 0 ? totalGrossLoss   / totalLosses : 0
+  const profitFactor  = totalGrossLoss > 0 ? totalGrossProfit / totalGrossLoss : totalGrossProfit > 0 ? 999 : 0
 
   // Fund summaries
   const fundAccounts: Record<string, string[]> = {}
@@ -101,49 +121,21 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     fundAccounts[fund].push(acc.id)
   }
 
-  const pnlByAccount: Record<string, number> = {}
-  const tradeCountByAccount: Record<string, number> = {}
-  for (const t of tradeRows) {
-    pnlByAccount[t.account_id] = (pnlByAccount[t.account_id] ?? 0) + Number(t.pnl ?? 0)
-    if (Number(t.pnl ?? 0) !== 0) {
-      tradeCountByAccount[t.account_id] = (tradeCountByAccount[t.account_id] ?? 0) + 1
-    }
-  }
-
   const funds: FundSummary[] = Object.entries(fundAccounts).map(([fund, ids]) => {
     const aum = ids.reduce((s, id) => s + (latestBalance[id] ?? 0), 0)
-    const totalPnl = ids.reduce((s, id) => s + (pnlByAccount[id] ?? 0), 0)
-    const pnlPct = aum > 0 ? (totalPnl / aum) * 100 : 0
+    const totalFundPnl = ids.reduce((s, id) => s + (pnlByAccount[id] ?? 0), 0)
+    const pnlPct = aum > 0 ? (totalFundPnl / aum) * 100 : 0
     const tradeCount = ids.reduce((s, id) => s + (tradeCountByAccount[id] ?? 0), 0)
-    return { fund, aum, totalPnl, pnlPct, tradeCount }
+    return { fund, aum, totalPnl: totalFundPnl, pnlPct, tradeCount }
   })
 
   // Chart data
-  const dailyMap: Record<string, number> = {}
-  for (const t of tradeRows) {
-    const day = t.closed_at.slice(0, 10)
-    dailyMap[day] = (dailyMap[day] ?? 0) + Number(t.pnl ?? 0)
-  }
   const sortedDays = Object.keys(dailyMap).sort()
   let cumulative = 0
   const chartData: ChartDataPoint[] = sortedDays.map((day) => {
     cumulative += dailyMap[day]
     return { period: formatDay(day), pnl: dailyMap[day], cumulativePnl: cumulative }
   })
-
-  // Metrics — only count fills that realised PnL (pnl≠0) for trade-level stats.
-  // Opening fills (pnl=0) are stored but must not pollute winRate / profitFactor.
-  const wins   = tradeRows.filter((t) => Number(t.pnl ?? 0) > 0)
-  const losses = tradeRows.filter((t) => Number(t.pnl ?? 0) < 0)
-  const closedCount = wins.length + losses.length
-  const totalPnl  = tradeRows.reduce((s, t) => s + Number(t.pnl ?? 0), 0)
-  const totalFees = tradeRows.reduce((s, t) => s + Number(t.fee ?? 0), 0)
-  const winRate = closedCount > 0 ? (wins.length / closedCount) * 100 : 0
-  const avgWin = wins.length > 0 ? wins.reduce((s, t) => s + Number(t.pnl), 0) / wins.length : 0
-  const avgLoss = losses.length > 0 ? Math.abs(losses.reduce((s, t) => s + Number(t.pnl), 0) / losses.length) : 0
-  const grossProfit = wins.reduce((s, t) => s + Number(t.pnl), 0)
-  const grossLoss = Math.abs(losses.reduce((s, t) => s + Number(t.pnl), 0))
-  const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? 999 : 0
 
   // Time-series metrics derived from daily PnL
   const dailyValues = sortedDays.map((d) => dailyMap[d])
@@ -232,8 +224,6 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const annualYield: number | null = (initialCapital > 0 && years > 0)
     ? (totalPnl / initialCapital / years) * 100
     : null
-
-  const totalVolume = tradeRows.reduce((s, t) => s + Number(t.quantity ?? 0) * Number(t.entry_price ?? 0), 0)
 
   const metrics: DashboardMetrics = {
     totalPnl, totalFees, totalTrades: closedCount, winRate, profitFactor, avgWin, avgLoss,

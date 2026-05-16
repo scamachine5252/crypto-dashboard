@@ -28,6 +28,8 @@ export default function HistoryPage() {
   const [trades, setTrades]     = useState<Trade[]>([])
   const [accounts, setAccounts] = useState<AccountInfo[]>([])
   const [loading, setLoading]   = useState(true)
+  const [totalTrades, setTotalTrades] = useState(0)
+  const [hasMore, setHasMore]         = useState(false)
 
   const handleFilterChange = useCallback((patch: Partial<HistoryFilterState>) => {
     setFilter((prev) => ({ ...prev, ...patch }))
@@ -38,10 +40,12 @@ export default function HistoryPage() {
     const since = new Date(filter.dateRange.start).getTime()
     const until = new Date(filter.dateRange.end + 'T23:59:59Z').getTime()
     setLoading(true)
-    fetch(`/api/trades?since=${since}&until=${until}`)
+    fetch(`/api/trades?since=${since}&until=${until}&page=0&page_size=500`)
       .then((r) => r.json())
-      .then((data: { trades?: Trade[]; accounts?: { id: string; account_name: string; exchange: string }[] }) => {
+      .then((data: { trades?: Trade[]; accounts?: { id: string; account_name: string; exchange: string }[]; total?: number; hasMore?: boolean }) => {
         setTrades(data.trades ?? [])
+        setTotalTrades(data.total ?? 0)
+        setHasMore(data.hasMore ?? false)
         setAccounts(
           (data.accounts ?? []).map((a) => ({
             id: a.id,
@@ -113,6 +117,14 @@ export default function HistoryPage() {
         >
           <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
             {summary.count.toLocaleString()} trades
+            {hasMore && (
+              <span
+                className="ml-2 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider"
+                style={{ background: 'rgba(255,180,0,0.12)', color: '#FFB400', borderRadius: 2 }}
+              >
+                showing 500 of {totalTrades.toLocaleString()}
+              </span>
+            )}
           </span>
           <span className="text-xs flex items-center gap-1.5">
             <span style={{ color: 'var(--text-muted)' }}>Total PnL</span>

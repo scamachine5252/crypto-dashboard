@@ -2,9 +2,8 @@ import 'server-only'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/server'
 
-type BalRow   = { account_id: string; usdt_balance: number; total_equity_usdt: number | null; recorded_at: string }
-type TradeRow = { account_id: string; pnl: number | null; fee: number | null; closed_at: string }
-type TxRow    = { account_id: string; type: string; amount: number; recorded_at: string }
+type BalRow = { account_id: string; usdt_balance: number; total_equity_usdt: number | null; recorded_at: string }
+type TxRow  = { account_id: string; type: string; amount: number; recorded_at: string }
 type AccRow   = { id: string; account_name: string; exchange: string; fund: string; instrument: string; initial_aum?: number | null }
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
@@ -187,25 +186,19 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   }
 
-  // Fetch trades for PnL/fee aggregation in range — paginated
-  const tradeRows: TradeRow[] = []
-  let trFrom = 0
-  while (true) {
-    const { data, error: tradeErr } = await supabaseAdmin
-      .from('trades')
-      .select('account_id, pnl, fee, closed_at')
-      .in('account_id', accountIds)
-      .gte('closed_at', sinceDate)
-      .lte('closed_at', untilDate)
-      .not('closed_at', 'is', null)
-      .order('closed_at', { ascending: true })
-      .order('id', { ascending: true })
-      .range(trFrom, trFrom + PAGE - 1)
-    if (tradeErr) return NextResponse.json({ error: tradeErr.message }, { status: 500 })
-    if (!data || data.length === 0) break
-    tradeRows.push(...(data as TradeRow[]))
-    if (data.length < PAGE) break
-    trFrom += PAGE
+  // Aggregate PnL/fee per account in range — single SQL query (replaces 38+ paginated requests)
+  const { data: aggRows, error: aggErr } = await supabaseAdmin
+    .rpc('trade_aggregates', {
+      p_account_ids: accountIds,
+      p_since:       sinceDate,
+      p_until:       untilDate,
+    })
+  if (aggErr) return NextResponse.json({ error: aggErr.message }, { status: 500 })
+
+  type AggRow = { account_id: string; total_pnl: number; total_fee: number }
+  const tradeAggMap: Record<string, AggRow> = {}
+  for (const row of (aggRows ?? []) as AggRow[]) {
+    tradeAggMap[row.account_id] = row
   }
 
   // Net deposits + funding fees per account in range
@@ -231,6 +224,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     .is('token_symbol', null)
     .lt('recorded_at', sinceDate)
     .order('recorded_at', { ascending: false })
+    .limit(accountIds.length * 5)
 
   type PriorBalRow = { account_id: string; usdt_balance: number; total_equity_usdt: number | null }
   const startBalMap:   Record<string, number> = {}
@@ -267,9 +261,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const endUsdt    = lastDate ? rangeDayMap[acc.id][lastDate]   : 0
     const endSettled = lastDate ? (rangeDayMapSt[acc.id]?.[lastDate] ?? endUsdt) : 0
     const endEquity  = endUsdt  // equity = effectiveBal, same value
-    const accTrades = tradeRows.filter((t) => t.account_id === acc.id)
-    const totalFees = accTrades.reduce((s, t) => s + Number(t.fee ?? 0), 0)
-    const totalPnl  = accTrades.reduce((s, t) => s + Number(t.pnl ?? 0), 0)
+    const agg       = tradeAggMap[acc.id]
+    const totalFees = agg ? agg.total_fee : 0
+    const totalPnl  = agg ? agg.total_pnl : 0
     const netDeposits   = netDepositsMap[acc.id] ?? 0
     const totalFunding  = totalFundingMap[acc.id] ?? 0
     const deltaUsdt     = endUsdt - startUsdt

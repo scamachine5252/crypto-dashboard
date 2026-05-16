@@ -228,9 +228,12 @@ export default function ResultsPage() {
     [transactions, checkedIds]
   )
 
-  // Visible transactions for the table
+  // Visible transactions for the table — deposits, withdrawals, transfers only
   const visibleTx = useMemo(
-    () => transactions.filter(t => checkedIds.has(t.account_id)),
+    () => transactions.filter(t =>
+      checkedIds.has(t.account_id) &&
+      ['deposit', 'withdrawal', 'transfer'].includes(t.type)
+    ),
     [transactions, checkedIds]
   )
 
