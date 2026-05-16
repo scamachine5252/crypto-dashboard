@@ -48,6 +48,44 @@ export interface TransactionRecord {
   recorded_at: string
 }
 
+export interface FundingFeeRecord {
+  account_id:  string
+  exchange:    string
+  type:        'funding_fee'
+  asset:       string
+  amount:      number   // signed: positive = received, negative = paid
+  fee:         null
+  status:      string
+  tx_id:       string
+  recorded_at: string
+}
+
+/** Extracts perpetual funding fee settlements (type=SETTLEMENT) from a Bybit transaction log. */
+export function extractBybitFundingFees(
+  rows: BybitTxLogRow[],
+  accountId: string,
+): FundingFeeRecord[] {
+  const result: FundingFeeRecord[] = []
+  for (const row of rows) {
+    if (row.type !== 'SETTLEMENT') continue
+    if (!row.id) continue
+    const amount = Number(row.cashFlow ?? row.change ?? 0)
+    if (amount === 0) continue
+    result.push({
+      account_id:  accountId,
+      exchange:    'bybit',
+      type:        'funding_fee',
+      asset:       row.currency ?? 'USDT',
+      amount,
+      fee:         null,
+      status:      'completed',
+      tx_id:       `funding_${row.id}`,
+      recorded_at: new Date(Number(row.transactionTime ?? 0)).toISOString(),
+    })
+  }
+  return result
+}
+
 export function extractBybitTransfers(
   rows: BybitTxLogRow[],
   accountId: string,

@@ -205,14 +205,19 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     trFrom += PAGE
   }
 
-  // Net deposits per account in range
+  // Net deposits + funding fees per account in range
   const netDepositsMap: Record<string, number> = {}
+  const totalFundingMap: Record<string, number> = {}
   for (const tx of allTx) {
     if (tx.type === 'income') continue
     const txDate = tx.recorded_at.slice(0, 10)
     if (txDate < sinceDate.slice(0, 10) || txDate > untilDate.slice(0, 10)) continue
-    const sign = tx.type === 'deposit' ? 1 : -1
-    netDepositsMap[tx.account_id] = (netDepositsMap[tx.account_id] ?? 0) + sign * Number(tx.amount)
+    if (tx.type === 'funding_fee') {
+      totalFundingMap[tx.account_id] = (totalFundingMap[tx.account_id] ?? 0) + Number(tx.amount)
+    } else {
+      const sign = tx.type === 'deposit' ? 1 : -1
+      netDepositsMap[tx.account_id] = (netDepositsMap[tx.account_id] ?? 0) + sign * Number(tx.amount)
+    }
   }
 
   // Last balance per account strictly BEFORE sinceDate — used as startUsdt
@@ -256,6 +261,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const totalFees = accTrades.reduce((s, t) => s + Number(t.fee ?? 0), 0)
     const totalPnl  = accTrades.reduce((s, t) => s + Number(t.pnl ?? 0), 0)
     const netDeposits   = netDepositsMap[acc.id] ?? 0
+    const totalFunding  = totalFundingMap[acc.id] ?? 0
     const deltaUsdt     = endUsdt - startUsdt
     const tradingResult = deltaUsdt - netDeposits
     return {
@@ -270,6 +276,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       tradingResult,
       totalFees,
       totalPnl,
+      totalFunding,
     }
   })
 

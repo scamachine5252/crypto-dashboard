@@ -64,6 +64,7 @@ type AccountSummary = {
   tradingResult: number
   totalFees:     number
   totalPnl:      number
+  totalFunding:  number
 }
 
 type AccountInfo = { id: string; account_name: string; exchange: string; fund: string }
@@ -205,6 +206,7 @@ export default function ResultsPage() {
     fees:          visibleSummaries.reduce((s, r) => s + r.totalFees, 0),
     pnl:           visibleSummaries.reduce((s, r) => s + r.totalPnl, 0),
     netPnl:        visibleSummaries.reduce((s, r) => s + r.totalPnl + r.totalFees, 0),
+    funding:       visibleSummaries.reduce((s, r) => s + (r.totalFunding ?? 0), 0),
   }), [visibleSummaries])
 
   // Transaction markers (for potential future use on balance chart)
@@ -281,7 +283,7 @@ export default function ResultsPage() {
                       style={{ accentColor: 'var(--accent-blue)' }}
                     />
                   </th>
-                  {['Exchange', 'Account', 'Fund', 'Opening', 'Closing', 'Difference', 'Net Deposits', 'Trading Result', 'Fees', 'Gross PnL', 'Net PnL'].map((col) => (
+                  {['Exchange', 'Account', 'Fund', 'Opening', 'Closing', 'Difference', 'Net Deposits', 'Trading Result', 'Fees', 'Funding', 'Gross PnL', 'Net PnL'].map((col) => (
                     <th
                       key={col}
                       className="px-3 py-2 text-center text-[10px] uppercase tracking-widest font-semibold"
@@ -295,13 +297,13 @@ export default function ResultsPage() {
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan={12} className="px-4 py-8 text-center text-xs" style={{ color: 'var(--text-muted)' }}>
+                    <td colSpan={13} className="px-4 py-8 text-center text-xs" style={{ color: 'var(--text-muted)' }}>
                       Loading…
                     </td>
                   </tr>
                 ) : accountSummaries.length === 0 ? (
                   <tr>
-                    <td colSpan={12} className="px-4 py-8 text-center text-xs" style={{ color: 'var(--text-muted)' }}>
+                    <td colSpan={13} className="px-4 py-8 text-center text-xs" style={{ color: 'var(--text-muted)' }}>
                       No data for selected period. Run a sync first.
                     </td>
                   </tr>
@@ -350,6 +352,7 @@ export default function ResultsPage() {
                         <td className={numCell} style={{ ...cellBorder, color: 'var(--accent-loss)' }}>
                           {formatMoney(summary.totalFees)}
                         </td>
+                        <td className={numCell} style={cellBorder}><Delta value={summary.totalFunding ?? 0} /></td>
                         <td className={numCell} style={cellBorder}><Delta value={summary.totalPnl} /></td>
                         <td className={numCell} style={{ ...cellBorder, fontWeight: 600 }}><Delta value={summary.totalPnl + summary.totalFees} /></td>
                       </tr>
@@ -379,6 +382,9 @@ export default function ResultsPage() {
                     </td>
                     <td className="px-3 py-2 text-center font-mono tabular text-xs" style={{ color: 'var(--accent-loss)', borderRight: '1px solid var(--border-subtle)' }}>
                       {formatMoney(totals.fees)}
+                    </td>
+                    <td className="px-3 py-2 text-center" style={{ borderRight: '1px solid var(--border-subtle)' }}>
+                      <Delta value={totals.funding} />
                     </td>
                     <td className="px-3 py-2 text-center" style={{ borderRight: '1px solid var(--border-subtle)' }}>
                       <Delta value={totals.pnl} />

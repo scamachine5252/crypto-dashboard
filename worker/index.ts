@@ -4,6 +4,7 @@ import { ConnectorManager } from './connector-manager'
 import { FullHistorySyncer } from './full-history-syncer'
 import { ReconciliationScheduler } from './reconciliation-scheduler'
 import { startBalancePoller } from './balance-poller'
+import { TransactionSyncer } from './transaction-syncer'
 import { supabaseAdmin } from '@/lib/supabase/server'
 
 function assertEnv() {
@@ -28,12 +29,14 @@ async function main() {
   const manager    = new ConnectorManager(redisUrl)
   const syncer     = new FullHistorySyncer(redisUrl)
   const reconciler = new ReconciliationScheduler(redisUrl)
+  const txSyncer   = new TransactionSyncer()
 
   startBalancePoller()
 
   await manager.start()
   await syncer.start()
   reconciler.start()
+  txSyncer.start()
 
   console.log('[worker] all connectors + full-history syncer + reconciler started')
 
@@ -67,6 +70,7 @@ async function main() {
     console.log('[worker] shutting down...')
     clearInterval(heartbeatTimer)
     reconciler.stop()
+    txSyncer.stop()
     await syncer.shutdown()
     // Wait up to 30s for in-flight WS gap fills / writes to complete before exit
     await manager.stopAndWait(30_000)
