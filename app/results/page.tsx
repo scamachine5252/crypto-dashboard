@@ -204,6 +204,7 @@ export default function ResultsPage() {
     tradingResult: visibleSummaries.reduce((s, r) => s + r.tradingResult, 0),
     fees:          visibleSummaries.reduce((s, r) => s + r.totalFees, 0),
     pnl:           visibleSummaries.reduce((s, r) => s + r.totalPnl, 0),
+    netPnl:        visibleSummaries.reduce((s, r) => s + r.totalPnl + r.totalFees, 0),
   }), [visibleSummaries])
 
   // Transaction markers (for potential future use on balance chart)
@@ -280,7 +281,7 @@ export default function ResultsPage() {
                       style={{ accentColor: 'var(--accent-blue)' }}
                     />
                   </th>
-                  {['Exchange', 'Account', 'Fund', 'Opening', 'Closing', 'Difference', 'Net Deposits', 'Trading Result', 'Fees', 'PnL'].map((col) => (
+                  {['Exchange', 'Account', 'Fund', 'Opening', 'Closing', 'Difference', 'Net Deposits', 'Trading Result', 'Fees', 'Gross PnL', 'Net PnL'].map((col) => (
                     <th
                       key={col}
                       className="px-3 py-2 text-center text-[10px] uppercase tracking-widest font-semibold"
@@ -294,13 +295,13 @@ export default function ResultsPage() {
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan={11} className="px-4 py-8 text-center text-xs" style={{ color: 'var(--text-muted)' }}>
+                    <td colSpan={12} className="px-4 py-8 text-center text-xs" style={{ color: 'var(--text-muted)' }}>
                       Loading…
                     </td>
                   </tr>
                 ) : accountSummaries.length === 0 ? (
                   <tr>
-                    <td colSpan={11} className="px-4 py-8 text-center text-xs" style={{ color: 'var(--text-muted)' }}>
+                    <td colSpan={12} className="px-4 py-8 text-center text-xs" style={{ color: 'var(--text-muted)' }}>
                       No data for selected period. Run a sync first.
                     </td>
                   </tr>
@@ -350,6 +351,7 @@ export default function ResultsPage() {
                           {formatMoney(summary.totalFees)}
                         </td>
                         <td className={numCell} style={cellBorder}><Delta value={summary.totalPnl} /></td>
+                        <td className={numCell} style={{ ...cellBorder, fontWeight: 600 }}><Delta value={summary.totalPnl + summary.totalFees} /></td>
                       </tr>
                     )
                   })
@@ -378,8 +380,11 @@ export default function ResultsPage() {
                     <td className="px-3 py-2 text-center font-mono tabular text-xs" style={{ color: 'var(--accent-loss)', borderRight: '1px solid var(--border-subtle)' }}>
                       {formatMoney(totals.fees)}
                     </td>
-                    <td className="px-3 py-2 text-center">
+                    <td className="px-3 py-2 text-center" style={{ borderRight: '1px solid var(--border-subtle)' }}>
                       <Delta value={totals.pnl} />
+                    </td>
+                    <td className="px-3 py-2 text-center" style={{ fontWeight: 600 }}>
+                      <Delta value={totals.netPnl} />
                     </td>
                   </tr>
                 )}
