@@ -502,25 +502,29 @@ export class BinanceAdapter implements ExchangeAdapter {
         // Single paginated fetch (UM + CM in parallel) — 2 base requests total.
         // Time-based pagination handles accounts with >1000 income events in 180 days.
         const fetchPaginated = async (
+          label: string,
           fetchFn: (p: Record<string, unknown>) => Promise<Array<{ symbol: string; time: number }>>,
         ): Promise<Array<{ symbol: string; time: number }>> => {
           const acc: Array<{ symbol: string; time: number }> = []
           const endTime = Date.now()
           let cursor = scanStart
+          let pages = 0
           while (cursor <= endTime) {
             const page = await fetchFn({
               incomeType: 'REALIZED_PNL', startTime: cursor, endTime, limit: 1000,
             })
+            pages++
             acc.push(...page)
             if (page.length < 1000) break
             cursor = Number(page[page.length - 1].time) + 1
           }
+          console.log(`[discoverTradedSymbols] ${label}: ${pages} pages, ${acc.length} events`)
           return acc
         }
 
         const [umRows, cmRows] = await Promise.all([
-          fetchPaginated((p) => fapi.papiGetUmIncome(p)),
-          fetchPaginated((p) => fapi.papiGetCmIncome(p)),
+          fetchPaginated('UM', (p) => fapi.papiGetUmIncome(p)),
+          fetchPaginated('CM', (p) => fapi.papiGetCmIncome(p)),
         ])
         rows = [...umRows, ...cmRows]
       } else {
@@ -552,14 +556,15 @@ export class BinanceAdapter implements ExchangeAdapter {
         symbolWeeks.get(row.symbol)!.add(clamped)
       }
 
-      return Array.from(symbolWeeks.entries()).map(([rawSymbol, weeks]) => {
-        // weeks is non-empty by construction (only populated symbols reach here)
+      const result = Array.from(symbolWeeks.entries()).map(([rawSymbol, weeks]) => {
         const maxWeek = weeks.size === 0 ? 0 : Math.max(...weeks)
         return {
           rawSymbol,
           weekIndices: Array.from({ length: maxWeek + 1 }, (_, i) => i),
         }
       })
+      console.log(`[discoverTradedSymbols] found ${result.length} symbols: ${result.map(s => s.rawSymbol).join(', ')}`)
+      return result
     } catch (err) {
       throw new Error(`discoverTradedSymbols failed: ${err instanceof Error ? err.message : String(err)}`)
     }
