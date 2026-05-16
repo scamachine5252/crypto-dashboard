@@ -546,14 +546,15 @@ describe('BinanceAdapter', () => {
       expect(eth?.weekIndices).toContain(2)
     })
 
-    it('returns empty array if income API throws', async () => {
+    it('throws if income API throws', async () => {
+      // Error must propagate so the sync job fails loudly rather than silently
+      // returning an empty symbol list and writing zero fills.
       mockFapiGetIncome.mockRejectedValue(new Error('network error'))
 
       const { BinanceAdapter } = await import('../binance')
       const adapter = new BinanceAdapter({ apiKey: 'key', apiSecret: 'secret' })
-      const result = await adapter.discoverTradedSymbols()
 
-      expect(result).toEqual([])
+      await expect(adapter.discoverTradedSymbols()).rejects.toThrow('discoverTradedSymbols failed')
     })
 
     it('returns empty array if no income events', async () => {

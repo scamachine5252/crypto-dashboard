@@ -107,13 +107,14 @@ describe('BinanceAdapter.discoverTradedSymbols()', () => {
     expect(result[0].rawSymbol).toBe('ETHUSDT')
   })
 
-  it('returns empty array if both UM and CM PAPI calls fail (PM mode)', async () => {
+  it('throws if both UM and CM PAPI calls fail (PM mode)', async () => {
+    // Errors must propagate so the sync job fails loudly rather than silently
+    // returning an empty symbol list and writing zero fills.
     const { adapter, fns } = buildAdapter(true)
     fns.papiGetUmIncome.mockRejectedValue(new Error('unauthorized'))
     fns.papiGetCmIncome.mockRejectedValue(new Error('unauthorized'))
 
-    const result = await adapter.discoverTradedSymbols()
-    expect(result).toEqual([])
+    await expect(adapter.discoverTradedSymbols()).rejects.toThrow('discoverTradedSymbols failed')
   })
 
   it('non-PM: returns [0..max] when income events are sparse', async () => {
