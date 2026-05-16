@@ -45,11 +45,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     balFrom += PAGE
   }
 
-  // Effective balance helper (equity-first for non-PM; usdt_balance for PM)
-  const effectiveBal = (row: BalRow) =>
-    pmAccountIds.has(row.account_id)
-      ? Number(row.usdt_balance)
-      : Number(row.total_equity_usdt ?? row.usdt_balance)
+  // Effective balance = total_equity_usdt (full portfolio including unrealized PnL).
+  // PM accounts now write total_equity_usdt = actualEquity via PAPI (fixed in balance-poller).
+  const effectiveBal = (row: BalRow) => Number(row.total_equity_usdt ?? row.usdt_balance)
 
   // First snapshot per account — used as fallback initial capital
   const firstBalMap: Record<string, number> = {}
@@ -60,11 +58,16 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   // Group by (account_id, date) — last snapshot per day wins
-  const allDayMap: Record<string, Record<string, number>> = {}
+  // allDayMap   = equity (total_equity_usdt)
+  // allDayMapSt = settled cash (usdt_balance only)
+  const allDayMap:   Record<string, Record<string, number>> = {}
+  const allDayMapSt: Record<string, Record<string, number>> = {}
   for (const row of allBalances) {
     const date = row.recorded_at.slice(0, 10)
-    if (!allDayMap[row.account_id]) allDayMap[row.account_id] = {}
-    allDayMap[row.account_id][date] = effectiveBal(row)
+    if (!allDayMap[row.account_id])   allDayMap[row.account_id]   = {}
+    if (!allDayMapSt[row.account_id]) allDayMapSt[row.account_id] = {}
+    allDayMap[row.account_id][date]   = effectiveBal(row)
+    allDayMapSt[row.account_id][date] = Number(row.usdt_balance)
   }
 
   // Balance history for the requested range (for the USDT balance line chart)
@@ -230,33 +233,40 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     .order('recorded_at', { ascending: false })
 
   type PriorBalRow = { account_id: string; usdt_balance: number; total_equity_usdt: number | null }
-  const startBalMap: Record<string, number> = {}
+  const startBalMap:   Record<string, number> = {}
+  const startBalMapSt: Record<string, number> = {}
   const seenPrior = new Set<string>()
   for (const row of (priorBals ?? []) as PriorBalRow[]) {
     if (!seenPrior.has(row.account_id)) {
-      startBalMap[row.account_id] = pmAccountIds.has(row.account_id)
-        ? Number(row.usdt_balance)
-        : Number(row.total_equity_usdt ?? row.usdt_balance)
+      startBalMap[row.account_id]   = Number(row.total_equity_usdt ?? row.usdt_balance)
+      startBalMapSt[row.account_id] = Number(row.usdt_balance)
       seenPrior.add(row.account_id)
     }
   }
 
-  // Balance day map restricted to the requested date range (for endUsdt)
-  const rangeDayMap: Record<string, Record<string, number>> = {}
+  // Balance day maps restricted to the requested date range
+  const rangeDayMap:   Record<string, Record<string, number>> = {}
+  const rangeDayMapSt: Record<string, Record<string, number>> = {}
   for (const [accountId, dateMap] of Object.entries(allDayMap)) {
     for (const [date, val] of Object.entries(dateMap)) {
       if (date >= sinceDate.slice(0, 10) && date <= untilDate.slice(0, 10)) {
-        if (!rangeDayMap[accountId]) rangeDayMap[accountId] = {}
-        rangeDayMap[accountId][date] = val
+        if (!rangeDayMap[accountId])   rangeDayMap[accountId]   = {}
+        if (!rangeDayMapSt[accountId]) rangeDayMapSt[accountId] = {}
+        rangeDayMap[accountId][date]   = val
+        rangeDayMapSt[accountId][date] = allDayMapSt[accountId]?.[date] ?? val
       }
     }
   }
 
   // Account summaries
   const accountSummaries = (accounts as AccRow[]).map((acc) => {
-    const accDates = Object.keys(rangeDayMap[acc.id] ?? {}).sort()
-    const startUsdt = startBalMap[acc.id] ?? (acc.initial_aum != null ? Number(acc.initial_aum) : 0)
-    const endUsdt   = accDates.length > 0 ? rangeDayMap[acc.id][accDates[accDates.length - 1]] : 0
+    const accDates    = Object.keys(rangeDayMap[acc.id] ?? {}).sort()
+    const lastDate    = accDates[accDates.length - 1]
+    const startUsdt   = startBalMap[acc.id]   ?? (acc.initial_aum != null ? Number(acc.initial_aum) : 0)
+    const startSettled = startBalMapSt[acc.id] ?? startUsdt
+    const endUsdt    = lastDate ? rangeDayMap[acc.id][lastDate]   : 0
+    const endSettled = lastDate ? (rangeDayMapSt[acc.id]?.[lastDate] ?? endUsdt) : 0
+    const endEquity  = endUsdt  // equity = effectiveBal, same value
     const accTrades = tradeRows.filter((t) => t.account_id === acc.id)
     const totalFees = accTrades.reduce((s, t) => s + Number(t.fee ?? 0), 0)
     const totalPnl  = accTrades.reduce((s, t) => s + Number(t.pnl ?? 0), 0)
@@ -270,7 +280,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       exchange:    acc.exchange,
       fund:        acc.fund,
       startUsdt,
+      startSettled,
       endUsdt,
+      endSettled,
+      endEquity,
       deltaUsdt,
       netDeposits,
       tradingResult,

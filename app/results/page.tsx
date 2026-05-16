@@ -58,7 +58,10 @@ type AccountSummary = {
   exchange:      string
   fund:          string
   startUsdt:     number
+  startSettled:  number
   endUsdt:       number
+  endSettled:    number
+  endEquity:     number
   deltaUsdt:     number
   netDeposits:   number
   tradingResult: number
@@ -200,6 +203,9 @@ export default function ResultsPage() {
   )
 
   const totals = useMemo(() => ({
+    startUsdt:     visibleSummaries.reduce((s, r) => s + r.startUsdt, 0),
+    endSettled:    visibleSummaries.reduce((s, r) => s + (r.endSettled ?? r.endUsdt), 0),
+    endEquity:     visibleSummaries.reduce((s, r) => s + (r.endEquity  ?? r.endUsdt), 0),
     deltaUsdt:     visibleSummaries.reduce((s, r) => s + r.deltaUsdt, 0),
     netDeposits:   visibleSummaries.reduce((s, r) => s + r.netDeposits, 0),
     tradingResult: visibleSummaries.reduce((s, r) => s + r.tradingResult, 0),
@@ -283,7 +289,7 @@ export default function ResultsPage() {
                       style={{ accentColor: 'var(--accent-blue)' }}
                     />
                   </th>
-                  {['Exchange', 'Account', 'Fund', 'Opening', 'Closing', 'Difference', 'Net Deposits', 'Trading Result', 'Fees', 'Funding', 'Gross PnL', 'Net PnL'].map((col) => (
+                  {['Exchange', 'Account', 'Fund', 'Opening', 'Settled', 'Equity', 'Unrealized', 'Difference', 'Net Deposits', 'Trading Result', 'Fees', 'Funding', 'Gross PnL', 'Net PnL'].map((col) => (
                     <th
                       key={col}
                       className="px-3 py-2 text-center text-[10px] uppercase tracking-widest font-semibold"
@@ -297,13 +303,13 @@ export default function ResultsPage() {
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan={13} className="px-4 py-8 text-center text-xs" style={{ color: 'var(--text-muted)' }}>
+                    <td colSpan={15} className="px-4 py-8 text-center text-xs" style={{ color: 'var(--text-muted)' }}>
                       Loading…
                     </td>
                   </tr>
                 ) : accountSummaries.length === 0 ? (
                   <tr>
-                    <td colSpan={13} className="px-4 py-8 text-center text-xs" style={{ color: 'var(--text-muted)' }}>
+                    <td colSpan={15} className="px-4 py-8 text-center text-xs" style={{ color: 'var(--text-muted)' }}>
                       No data for selected period. Run a sync first.
                     </td>
                   </tr>
@@ -343,8 +349,14 @@ export default function ResultsPage() {
                         <td className={numCell} style={{ ...cellBorder, color: 'var(--text-secondary)' }}>
                           {formatMoney(summary.startUsdt)}
                         </td>
+                        <td className={numCell} style={{ ...cellBorder, color: 'var(--text-secondary)' }}>
+                          {formatMoney(summary.endSettled ?? summary.endUsdt)}
+                        </td>
                         <td className={numCell} style={{ ...cellBorder, color: 'var(--text-primary)' }}>
-                          {formatMoney(summary.endUsdt)}
+                          {formatMoney(summary.endEquity ?? summary.endUsdt)}
+                        </td>
+                        <td className={numCell} style={cellBorder}>
+                          <Delta value={(summary.endEquity ?? summary.endUsdt) - (summary.endSettled ?? summary.endUsdt)} />
                         </td>
                         <td className={numCell} style={cellBorder}><Delta value={summary.deltaUsdt} /></td>
                         <td className={numCell} style={cellBorder}><Delta value={summary.netDeposits} /></td>
@@ -365,11 +377,20 @@ export default function ResultsPage() {
                   <tr style={{ background: 'var(--bg-elevated)', borderTop: '1px solid var(--border-medium)' }}>
                     <td style={{ borderRight: '1px solid var(--border-subtle)' }} />
                     <td
-                      colSpan={5}
+                      colSpan={4}
                       className="px-3 py-2 text-[10px] uppercase tracking-widest font-bold"
                       style={{ color: 'var(--text-muted)', borderRight: '1px solid var(--border-subtle)' }}
                     >
                       Total — {visibleSummaries.length} account{visibleSummaries.length !== 1 ? 's' : ''} selected
+                    </td>
+                    <td className="px-3 py-2 text-center font-mono tabular text-xs" style={{ color: 'var(--text-secondary)', borderRight: '1px solid var(--border-subtle)' }}>
+                      {formatMoney(totals.endSettled)}
+                    </td>
+                    <td className="px-3 py-2 text-center font-mono tabular text-xs" style={{ color: 'var(--text-primary)', borderRight: '1px solid var(--border-subtle)' }}>
+                      {formatMoney(totals.endEquity)}
+                    </td>
+                    <td className="px-3 py-2 text-center" style={{ borderRight: '1px solid var(--border-subtle)' }}>
+                      <Delta value={totals.endEquity - totals.endSettled} />
                     </td>
                     <td className="px-3 py-2 text-center" style={{ borderRight: '1px solid var(--border-subtle)' }}>
                       <Delta value={totals.deltaUsdt} />
