@@ -48,3 +48,6 @@ crypto-dashboard/
 scripts/*-deep-audit.*
 scripts/live-test-*.mjs
 scripts/diagnose-*.mjs
+
+# compiled worker binary — generated on deploy
+/dist/
