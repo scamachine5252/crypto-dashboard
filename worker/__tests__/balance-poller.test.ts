@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // Mocks — must be declared before any imports
 // ---------------------------------------------------------------------------
-const mockUpsert = jest.fn()
+const mockRpc    = jest.fn()
 const mockSelect = jest.fn()
 const mockFrom   = jest.fn()
 
@@ -21,7 +21,10 @@ const mockBanGuard = {
 jest.mock('server-only', () => ({}))
 
 jest.mock('@/lib/supabase/server', () => ({
-  supabaseAdmin: { from: mockFrom },
+  supabaseAdmin: {
+    from: mockFrom,
+    rpc:  mockRpc,
+  },
 }))
 
 jest.mock('@/lib/crypto/decrypt', () => ({
@@ -75,7 +78,7 @@ function makeAccount(exchange: string, opts: Partial<AccountRow> = {}): AccountR
   }
 }
 
-/** Set up mockFrom to return different data depending on call order or filter. */
+/** Set up mockFrom to return accounts based on query filters. */
 function setupAccountsMock(accounts: AccountRow[]) {
   mockFrom.mockImplementation(() => ({
     select: jest.fn().mockImplementation(() => ({
@@ -89,7 +92,6 @@ function setupAccountsMock(accounts: AccountRow[]) {
         }),
       })),
     })),
-    upsert: mockUpsert,
   }))
 }
 
@@ -99,7 +101,7 @@ beforeEach(() => {
   jest.useFakeTimers()
   mockBanGuard.isBanned.mockReturnValue(false)
   mockBanGuard.recordIfBanned.mockResolvedValue(undefined)
-  mockUpsert.mockResolvedValue({ error: null })
+  mockRpc.mockResolvedValue({ error: null })
 })
 
 afterEach(() => {
@@ -117,7 +119,6 @@ describe('pollNonBinance — startup immediate call', () => {
     mockBybitFetchBalance.mockResolvedValue({ usdt: 5000 })
 
     startBalancePoller()
-    // flush the immediately-called pollNonBinance()
     await jest.runAllTimersAsync()
 
     expect(MockBybitAdapter).toHaveBeenCalledWith({
@@ -125,10 +126,11 @@ describe('pollNonBinance — startup immediate call', () => {
       apiSecret: 'api_secret_decrypted',
     })
     expect(mockBybitFetchBalance).toHaveBeenCalledTimes(1)
-    expect(mockUpsert).toHaveBeenCalledWith(
-      expect.objectContaining({ account_id: 'acc-bybit-1', usdt_balance: 5000 }),
-      expect.objectContaining({ onConflict: 'account_id,snapshot_date' }),
-    )
+    expect(mockRpc).toHaveBeenCalledWith('upsert_main_balance', expect.objectContaining({
+      p_account_id:        'acc-bybit-1',
+      p_usdt_balance:      5000,
+      p_total_equity_usdt: null,
+    }))
   })
 
   it('calls OkxAdapter.fetchBalance for okx accounts with decrypted passphrase', async () => {
@@ -145,10 +147,10 @@ describe('pollNonBinance — startup immediate call', () => {
       passphrase: 'pass123_decrypted',
     })
     expect(mockOkxFetchBalance).toHaveBeenCalledTimes(1)
-    expect(mockUpsert).toHaveBeenCalledWith(
-      expect.objectContaining({ account_id: 'acc-okx-1', usdt_balance: 3000 }),
-      expect.objectContaining({ onConflict: 'account_id,snapshot_date' }),
-    )
+    expect(mockRpc).toHaveBeenCalledWith('upsert_main_balance', expect.objectContaining({
+      p_account_id:   'acc-okx-1',
+      p_usdt_balance: 3000,
+    }))
   })
 
   it('does NOT call BinanceAdapter for non-binance accounts', async () => {
@@ -177,11 +179,10 @@ describe('pollNonBinance — startup immediate call', () => {
     await jest.runAllTimersAsync()
 
     // Second account still saved despite first throwing
-    expect(mockUpsert).toHaveBeenCalledTimes(1)
-    expect(mockUpsert).toHaveBeenCalledWith(
-      expect.objectContaining({ account_id: 'acc-bybit-4' }),
-      expect.anything(),
-    )
+    expect(mockRpc).toHaveBeenCalledTimes(1)
+    expect(mockRpc).toHaveBeenCalledWith('upsert_main_balance', expect.objectContaining({
+      p_account_id: 'acc-bybit-4',
+    }))
 
     consoleSpy.mockRestore()
   })
@@ -194,26 +195,24 @@ describe('pollNonBinance — startup immediate call', () => {
     startBalancePoller()
     await jest.runAllTimersAsync()
 
-    expect(mockUpsert).not.toHaveBeenCalled()
+    expect(mockRpc).not.toHaveBeenCalled()
   })
 
   it('filters out suspended accounts (is_suspended=true)', async () => {
     // The DB query itself filters via .eq('is_suspended', false),
     // so the mock returns only non-suspended accounts
     const activeAcct = makeAccount('bybit', { id: 'acc-active' })
-    // Return only active; suspended filtered at DB query level
     setupAccountsMock([activeAcct])
     mockBybitFetchBalance.mockResolvedValue({ usdt: 2000 })
 
     startBalancePoller()
     await jest.runAllTimersAsync()
 
-    // Only one upsert — the suspended account was not in the returned list
-    expect(mockUpsert).toHaveBeenCalledTimes(1)
-    expect(mockUpsert).toHaveBeenCalledWith(
-      expect.objectContaining({ account_id: 'acc-active' }),
-      expect.anything(),
-    )
+    // Only one RPC call — the suspended account was not in the returned list
+    expect(mockRpc).toHaveBeenCalledTimes(1)
+    expect(mockRpc).toHaveBeenCalledWith('upsert_main_balance', expect.objectContaining({
+      p_account_id: 'acc-active',
+    }))
   })
 })
 
@@ -230,7 +229,6 @@ describe('pollBinance', () => {
     const consoleSpy = jest.spyOn(console, 'warn').mockImplementation(() => {})
 
     startBalancePoller()
-    // Advance 3 minutes to trigger pollBinance
     await jest.advanceTimersByTimeAsync(3 * 60 * 1000)
 
     expect(MockBinanceAdapter).not.toHaveBeenCalled()
@@ -241,8 +239,6 @@ describe('pollBinance', () => {
     const acct1 = makeAccount('binance', { id: 'acc-binance-2' })
     const acct2 = makeAccount('binance', { id: 'acc-binance-3' })
 
-    // First call (from startBalancePoller immediate pollNonBinance) returns empty non-Binance
-    // Then the 3-min timer fires pollBinance which returns Binance accounts
     mockFrom.mockImplementation(() => ({
       select: jest.fn().mockImplementation(() => ({
         not: jest.fn().mockImplementation(() => ({
@@ -252,18 +248,16 @@ describe('pollBinance', () => {
           eq: jest.fn().mockResolvedValue({ data: [acct1, acct2], error: null }),
         })),
       })),
-      upsert: mockUpsert,
     }))
 
     mockBinanceFetchBalance.mockResolvedValue({ usdt: 10000 })
 
     startBalancePoller()
-    // First flush immediate pollNonBinance
     await jest.runAllTimersAsync()
 
     expect(MockBinanceAdapter).toHaveBeenCalledTimes(2)
     expect(mockBinanceFetchBalance).toHaveBeenCalledTimes(2)
-    expect(mockUpsert).toHaveBeenCalledTimes(2)
+    expect(mockRpc).toHaveBeenCalledTimes(2)
   })
 
   it('calls banGuard.recordIfBanned when adapter throws', async () => {
@@ -278,7 +272,6 @@ describe('pollBinance', () => {
           eq: jest.fn().mockResolvedValue({ data: [acct], error: null }),
         })),
       })),
-      upsert: mockUpsert,
     }))
 
     const err = new Error('418 banned')
@@ -306,7 +299,6 @@ describe('pollBinance', () => {
           eq: jest.fn().mockResolvedValue({ data: [acct1, acct2], error: null }),
         })),
       })),
-      upsert: mockUpsert,
     }))
 
     mockBinanceFetchBalance
@@ -319,21 +311,20 @@ describe('pollBinance', () => {
     await jest.runAllTimersAsync()
 
     // Despite first account failing, second account's balance is saved
-    expect(mockUpsert).toHaveBeenCalledTimes(1)
-    expect(mockUpsert).toHaveBeenCalledWith(
-      expect.objectContaining({ account_id: 'acc-binance-6' }),
-      expect.anything(),
-    )
+    expect(mockRpc).toHaveBeenCalledTimes(1)
+    expect(mockRpc).toHaveBeenCalledWith('upsert_main_balance', expect.objectContaining({
+      p_account_id: 'acc-binance-6',
+    }))
     consoleSpy.mockRestore()
   })
 })
 
 // ---------------------------------------------------------------------------
-// saveBalance
+// saveBalance — RPC-based upsert
 // ---------------------------------------------------------------------------
 
 describe('saveBalance', () => {
-  it('upserts with onConflict: account_id,snapshot_date', async () => {
+  it('calls upsert_main_balance RPC with correct params', async () => {
     const acct = makeAccount('bybit', { id: 'acc-save-1' })
     setupAccountsMock([acct])
     mockBybitFetchBalance.mockResolvedValue({ usdt: 999 })
@@ -341,32 +332,33 @@ describe('saveBalance', () => {
     startBalancePoller()
     await jest.runAllTimersAsync()
 
-    expect(mockUpsert).toHaveBeenCalledWith(
-      expect.objectContaining({ account_id: 'acc-save-1', usdt_balance: 999 }),
-      { onConflict: 'account_id,snapshot_date' },
-    )
+    expect(mockRpc).toHaveBeenCalledWith('upsert_main_balance', expect.objectContaining({
+      p_account_id:        'acc-save-1',
+      p_usdt_balance:      999,
+      p_total_equity_usdt: null,
+      p_recorded_at:       expect.any(String),
+    }))
   })
 
-  it('logs warning (does not throw) when upsert returns an error', async () => {
+  it('logs warning (does not throw) when RPC returns an error', async () => {
     const acct = makeAccount('bybit', { id: 'acc-save-2' })
     setupAccountsMock([acct])
     mockBybitFetchBalance.mockResolvedValue({ usdt: 500 })
-    mockUpsert.mockResolvedValue({ error: { message: 'constraint violation' } })
+    mockRpc.mockResolvedValue({ error: { message: 'function not found' } })
 
     const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {})
 
     startBalancePoller()
     await jest.runAllTimersAsync()
 
-    // Should have warned, not thrown
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('upsert failed'),
+      expect.stringContaining('save failed'),
       expect.any(String),
     )
     warnSpy.mockRestore()
   })
 
-  it('writes total_equity_usdt when adapter returns totalEquityUsdt (Bybit)', async () => {
+  it('writes p_total_equity_usdt when adapter returns totalEquityUsdt (Bybit)', async () => {
     const acct = makeAccount('bybit', { id: 'acc-equity-bybit' })
     setupAccountsMock([acct])
     mockBybitFetchBalance.mockResolvedValue({ usdt: 1000, totalEquityUsdt: 85000 })
@@ -374,17 +366,14 @@ describe('saveBalance', () => {
     startBalancePoller()
     await jest.runAllTimersAsync()
 
-    expect(mockUpsert).toHaveBeenCalledWith(
-      expect.objectContaining({
-        account_id:        'acc-equity-bybit',
-        usdt_balance:      1000,
-        total_equity_usdt: 85000,
-      }),
-      expect.objectContaining({ onConflict: 'account_id,snapshot_date' }),
-    )
+    expect(mockRpc).toHaveBeenCalledWith('upsert_main_balance', expect.objectContaining({
+      p_account_id:        'acc-equity-bybit',
+      p_usdt_balance:      1000,
+      p_total_equity_usdt: 85000,
+    }))
   })
 
-  it('writes total_equity_usdt: null when adapter returns no totalEquityUsdt (USDT-only account)', async () => {
+  it('writes p_total_equity_usdt: null when adapter returns no totalEquityUsdt', async () => {
     const acct = makeAccount('bybit', { id: 'acc-equity-null' })
     setupAccountsMock([acct])
     mockBybitFetchBalance.mockResolvedValue({ usdt: 5000 })
@@ -392,17 +381,14 @@ describe('saveBalance', () => {
     startBalancePoller()
     await jest.runAllTimersAsync()
 
-    expect(mockUpsert).toHaveBeenCalledWith(
-      expect.objectContaining({
-        account_id:        'acc-equity-null',
-        usdt_balance:      5000,
-        total_equity_usdt: null,
-      }),
-      expect.anything(),
-    )
+    expect(mockRpc).toHaveBeenCalledWith('upsert_main_balance', expect.objectContaining({
+      p_account_id:        'acc-equity-null',
+      p_usdt_balance:      5000,
+      p_total_equity_usdt: null,
+    }))
   })
 
-  it('writes total_equity_usdt when Binance adapter returns totalEquityUsdt', async () => {
+  it('writes p_total_equity_usdt when Binance adapter returns totalEquityUsdt', async () => {
     const acct = makeAccount('binance', { id: 'acc-equity-binance' })
     mockFrom.mockImplementation(() => ({
       select: jest.fn().mockImplementation(() => ({
@@ -413,20 +399,16 @@ describe('saveBalance', () => {
           eq: jest.fn().mockResolvedValue({ data: [acct], error: null }),
         })),
       })),
-      upsert: mockUpsert,
     }))
     mockBinanceFetchBalance.mockResolvedValue({ usdt: 200, totalEquityUsdt: 95000 })
 
     startBalancePoller()
     await jest.runAllTimersAsync()
 
-    expect(mockUpsert).toHaveBeenCalledWith(
-      expect.objectContaining({
-        account_id:        'acc-equity-binance',
-        usdt_balance:      200,
-        total_equity_usdt: 95000,
-      }),
-      expect.anything(),
-    )
+    expect(mockRpc).toHaveBeenCalledWith('upsert_main_balance', expect.objectContaining({
+      p_account_id:        'acc-equity-binance',
+      p_usdt_balance:      200,
+      p_total_equity_usdt: 95000,
+    }))
   })
 })
