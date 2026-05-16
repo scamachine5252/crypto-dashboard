@@ -353,6 +353,9 @@ All functions in `lib/calculations.ts` must be developed test-first using Jest.
 [ ] Tests cover "field absent / undefined / null" case — not just happy-path
 [ ] Promise.allSettled rejections are propagated to caller, not silently → []
 [ ] reconstruct res.ok checked — never silently ignore reconstruct failure
+[ ] Touching any upsert with onConflict? → open the migration and verify the index is
+    NOT partial (no WHERE clause). Partial indexes require ON CONFLICT ... WHERE <predicate>
+    or an RPC — plain onConflict: 'col1,col2' silently fails in Postgres.
 ```
 
 ### Exchange API field mapping rules (added after A28)
