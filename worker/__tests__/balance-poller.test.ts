@@ -365,4 +365,68 @@ describe('saveBalance', () => {
     )
     warnSpy.mockRestore()
   })
+
+  it('writes total_equity_usdt when adapter returns totalEquityUsdt (Bybit)', async () => {
+    const acct = makeAccount('bybit', { id: 'acc-equity-bybit' })
+    setupAccountsMock([acct])
+    mockBybitFetchBalance.mockResolvedValue({ usdt: 1000, totalEquityUsdt: 85000 })
+
+    startBalancePoller()
+    await jest.runAllTimersAsync()
+
+    expect(mockUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        account_id:        'acc-equity-bybit',
+        usdt_balance:      1000,
+        total_equity_usdt: 85000,
+      }),
+      expect.objectContaining({ onConflict: 'account_id,snapshot_date' }),
+    )
+  })
+
+  it('writes total_equity_usdt: null when adapter returns no totalEquityUsdt (USDT-only account)', async () => {
+    const acct = makeAccount('bybit', { id: 'acc-equity-null' })
+    setupAccountsMock([acct])
+    mockBybitFetchBalance.mockResolvedValue({ usdt: 5000 })
+
+    startBalancePoller()
+    await jest.runAllTimersAsync()
+
+    expect(mockUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        account_id:        'acc-equity-null',
+        usdt_balance:      5000,
+        total_equity_usdt: null,
+      }),
+      expect.anything(),
+    )
+  })
+
+  it('writes total_equity_usdt when Binance adapter returns totalEquityUsdt', async () => {
+    const acct = makeAccount('binance', { id: 'acc-equity-binance' })
+    mockFrom.mockImplementation(() => ({
+      select: jest.fn().mockImplementation(() => ({
+        not: jest.fn().mockImplementation(() => ({
+          eq: jest.fn().mockResolvedValue({ data: [], error: null }),
+        })),
+        eq: jest.fn().mockImplementation(() => ({
+          eq: jest.fn().mockResolvedValue({ data: [acct], error: null }),
+        })),
+      })),
+      upsert: mockUpsert,
+    }))
+    mockBinanceFetchBalance.mockResolvedValue({ usdt: 200, totalEquityUsdt: 95000 })
+
+    startBalancePoller()
+    await jest.runAllTimersAsync()
+
+    expect(mockUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        account_id:        'acc-equity-binance',
+        usdt_balance:      200,
+        total_equity_usdt: 95000,
+      }),
+      expect.anything(),
+    )
+  })
 })

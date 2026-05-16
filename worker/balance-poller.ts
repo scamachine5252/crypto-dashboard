@@ -15,12 +15,13 @@ type AccountRow = {
   instrument?: string
 }
 
-async function saveBalance(acctId: string, usdt: number): Promise<void> {
+async function saveBalance(acctId: string, usdt: number, totalEquityUsdt?: number): Promise<void> {
   const { error } = await supabaseAdmin.from('balances').upsert(
     {
-      account_id:   acctId,
-      usdt_balance: usdt,
-      recorded_at:  new Date().toISOString(),
+      account_id:        acctId,
+      usdt_balance:      usdt,
+      total_equity_usdt: totalEquityUsdt ?? null,
+      recorded_at:       new Date().toISOString(),
     },
     { onConflict: 'account_id,snapshot_date' },
   )
@@ -41,7 +42,7 @@ async function pollNonBinance(): Promise<void> {
       try {
         const apiKey    = decrypt(acct.api_key)
         const apiSecret = decrypt(acct.api_secret)
-        let balance: { usdt: number } | null = null
+        let balance: { usdt: number; totalEquityUsdt?: number } | null = null
 
         if (acct.exchange === 'bybit') {
           balance = await new BybitAdapter({ apiKey, apiSecret }).fetchBalance()
@@ -50,7 +51,7 @@ async function pollNonBinance(): Promise<void> {
           balance = await new OkxAdapter({ apiKey, apiSecret, passphrase }).fetchBalance()
         }
 
-        if (balance) await saveBalance(acct.id, balance.usdt)
+        if (balance) await saveBalance(acct.id, balance.usdt, balance.totalEquityUsdt)
       } catch (e) {
         console.error(`[balance-poller] error for account ${acct.id}:`, (e as Error).message)
       }
@@ -81,7 +82,7 @@ async function pollBinance(): Promise<void> {
         portfolioMargin: acct.instrument === 'portfolio_margin',
       })
       const balance = await adapter.fetchBalance()
-      if (balance) await saveBalance(acct.id, balance.usdt)
+      if (balance) await saveBalance(acct.id, balance.usdt, balance.totalEquityUsdt)
     } catch (e) {
       await binanceBanGuard.recordIfBanned(e)
       console.error(`[balance-poller] error for account ${acct.id}:`, (e as Error).message)
