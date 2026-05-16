@@ -5,7 +5,7 @@
 ## Project State
 *Update this section after every major change.*
 
-### Status: Phase 3 complete — OKX stateful reconstruction, Redis lock, test coverage overhaul
+### Status: Phase 3 + Binance discover data quality fixes — 3 bugs patched, 14 regression tests added
 
 ### What has been built
 
@@ -71,7 +71,7 @@
 - `app/api/worker-status/route.ts` — GET: worker heartbeat age + alive/stale status; Binance ban state from `worker_status`; per-account last fill timestamp + stale flag (>24h)
 
 **Adapters (`lib/adapters/`):**
-- `binance.ts` — `BinanceAdapter`; `discoverTradedSymbols()` (PM: 2 paginated PAPI requests; regular: 6×30d fapiPrivateGetIncome); `getFullTrades(symbol, weekIndices)` — fetches fills for specified weeks only; throws on exchange errors (no silent `[]`)
+- `binance.ts` — `BinanceAdapter`; `discoverTradedSymbols()` (PM: 2 paginated PAPI requests; regular: 6×30d fapiPrivateGetIncome); `getFullTrades(symbol, weekIndices)` — fetches fills for specified weeks only; **errors propagate — no silent `.catch(() => [])`**; cursor uses `Number(time) + 1` (PAPI returns `time` as string at runtime despite TypeScript typing it as number)
 - `bybit.ts` — chunks 26×7d; `raw_fills` via CCXT `fetchMyTrades`; 4 categories (spot/linear/inverse/option)
 - `okx.ts` — chunks 6×30d; 5 instTypes; `reference_timestamp` anchors chunk boundaries
 - `mexc.ts` — 1×90d chunk
@@ -97,11 +97,11 @@
 - Post-deploy smoke check: `node scripts/smoke-check.mjs` — verifies migrations, RPC, DB writes, data freshness, worker heartbeat, Binance ban state
 - Supabase Edge Function: `supabase/functions/watchdog/index.ts` — deployed to Supabase; called by pg_cron every 30 min; if `worker_status.last_heartbeat` is stale (>30 min), creates `pending` `full_sync_jobs` for all accounts that don't already have an active job → worker picks them up on restart via `recoverOnStartup()`
 
-**Tests:** 796 passing, 2 pre-existing failures (binance-connector + okx-connector WS URL tests — not fixable without live exchange)
+**Tests:** 810 passing, 2 pre-existing failures (binance-connector + okx-connector WS URL tests — not fixable without live exchange)
 
 **Test coverage:**
 - `worker/` — full pipeline: connector-manager (RPC batch, suspended, drain), balance-poller (ban-guard, suspended), fill-processor (dedup, batch), position-reconstructor (Redis lock, OKX stateful: multi-symbol, partial close, orphan), bybit-connector (gap fill error path), reconciliation-scheduler, full-history-syncer, binance-ban-guard
-- `lib/` — calculations (all formulas), utils, crypto, regression invariants, risk/evaluate (all 9 rule types + computeAllMetricValues), binance reconstruction (stateful positions, same-ms merge), bybit reconstruction
+- `lib/` — calculations (all formulas), utils, crypto, regression invariants, risk/evaluate (all 9 rule types + computeAllMetricValues), binance reconstruction (stateful positions, same-ms merge), bybit reconstruction, **binance-adapter (14 tests: pagination multi-page, string-time bug regression, silent-catch bug regression, cursor advance, week indices, UM+CM parallel, regular account 6 windows)**
 - `app/api/` — accounts, dashboard, sync (enqueue, job, reconstruct, route), worker-status, performance (IC priority, pnlPercent, overnight, duration), exchanges (ping, balance, trades)
 
 ---
@@ -180,7 +180,7 @@ crypto-dashboard/          ← project root (NOT src/)
 │   ├── crypto/encrypt.ts + decrypt.ts
 │   ├── supabase/client.ts + server.ts
 │   ├── adapters/binance.ts, bybit.ts, okx.ts, mexc.ts, ccxt-utils.ts, types.ts
-│   └── __tests__/calculations.test.ts, regression.test.ts, crypto.test.ts, supabase.test.ts, utils.test.ts, risk-evaluate.test.ts, binance-reconstruction.test.ts, bybit-reconstruction.test.ts
+│   └── __tests__/calculations.test.ts, regression.test.ts, crypto.test.ts, supabase.test.ts, utils.test.ts, risk-evaluate.test.ts, binance-reconstruction.test.ts, bybit-reconstruction.test.ts, binance-adapter.test.ts
 │
 ├── ecosystem.config.js    ← PM2 config (Hetzner)
 └── .github/workflows/deploy.yml ← CI/CD auto-deploy
@@ -218,6 +218,9 @@ crypto-dashboard/          ← project root (NOT src/)
 | Startup burst prevention | Binance reconciler +5min, Binance balance-poller +3min | Without stagger: ~4,713 weight/min on restart vs 2,400 limit → immediate ban |
 | exec_pnl normalization | `Number(x) || null` everywhere (0 = opening fill, not a real PnL) | Inconsistency between connector and reconciler was writing 0 for opening fills |
 | stopAndWait drain | In-flight counter + Promise resolution | Old implementation was bare `setTimeout(30s)` — clean shutdown took 30s regardless |
+| Binance discover silent catch | Removed `.catch(() => [])` from each paginated PAPI page | Silently returned partial symbol set when any page hit a rate limit; Continum lost 11 symbols (38 found vs 49 actual) |
+| Binance PAPI `time` is string | `cursor = Number(page[last].time) + 1` | PAPI returns `time` as JSON string; without `Number()`, cursor became `"1742256000000" + 1 = "17422560000001"` (10× too large) → only 1 page fetched |
+| Worker build pipeline | Two separate compilation systems: `next build` (API routes) and `tsc -p worker/tsconfig.json` (worker binary) | Manual deploys only ran `next build`; worker binary in `dist/worker/` ran stale compiled JS — fixes to `lib/adapters/binance.ts` never reached the worker |
 
 ---
 
@@ -246,6 +249,8 @@ No approved plan currently. Candidates:
 [ ] New migration? → verify it's applied on prod before restarting worker
 [ ] Touching PositionReconstructor? → Redis lock key format: recon:{accountId}:{exchange}
 [ ] OKX reconstruction change? → test with multi-symbol fills (not just single symbol)
+[ ] Touching lib/adapters/binance.ts or worker/**? → must recompile worker: npx tsc -p worker/tsconfig.json && npx tsc-alias -p worker/tsconfig.json
+[ ] New paginated PAPI/API call? → no .catch(() => []) — errors must propagate so partial results are never silently accepted
 ```
 
 ---
@@ -255,11 +260,13 @@ No approved plan currently. Candidates:
 ```bash
 # Local → production
 git push origin main
-# GitHub Actions runs: git pull && npx next build && pm2 reload all
+# GitHub Actions runs: git pull && npx next build && npx tsc -p worker/tsconfig.json && npx tsc-alias -p worker/tsconfig.json && pm2 reload all
 
 # Manual deploy on server
 ssh root@116.203.244.97
-cd /app/crypto-dashboard && git pull && npx next build && pm2 reload all
+cd /app/crypto-dashboard && git pull && npx next build && npx tsc -p worker/tsconfig.json && npx tsc-alias -p worker/tsconfig.json && pm2 reload all
+# IMPORTANT: next build alone does NOT recompile the worker — worker runs from dist/worker/ (compiled TypeScript)
+# Skipping the tsc step means worker changes never reach production
 
 # Check worker logs
 pm2 logs sync-worker --lines 50 --nostream
