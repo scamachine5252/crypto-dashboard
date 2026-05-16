@@ -510,7 +510,7 @@ export class BinanceAdapter implements ExchangeAdapter {
           while (cursor <= endTime) {
             const page = await fetchFn({
               incomeType: 'REALIZED_PNL', startTime: cursor, endTime, limit: 1000,
-            }).catch(() => [] as Array<{ symbol: string; time: number }>)
+            })
             acc.push(...page)
             if (page.length < 1000) break
             cursor = Number(page[page.length - 1].time) + 1
@@ -536,7 +536,7 @@ export class BinanceAdapter implements ExchangeAdapter {
             startTime:  wStart,
             endTime:    wEnd,
             limit:      1000,
-          }).catch(() => [] as Array<{ symbol: string; time: number }>)
+          })
           allRows30.push(...chunk)
         }
         rows = allRows30
