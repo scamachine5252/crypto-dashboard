@@ -87,19 +87,20 @@ await check('retry_count column exists on full_sync_jobs (migration 031)', async
 
 console.log('\n=== Data writes ===')
 
-await check('balances upsert with onConflict account_id,snapshot_date works', async () => {
-  // Use a sentinel account ID that won't match real data; we just need the constraint to resolve
-  const testRow = {
-    account_id:   '00000000-0000-0000-0000-000000000001',
-    usdt_balance: 0,
-    recorded_at:  new Date().toISOString(),
-  }
-  const { error } = await sb.from('balances')
-    .upsert(testRow, { onConflict: 'account_id,snapshot_date' })
+await check('upsert_main_balance RPC works (migration 034)', async () => {
+  // balances_daily_unique is a partial index (WHERE token_symbol IS NULL)
+  // so onConflict via Supabase JS doesn't work — we use the upsert_main_balance RPC instead.
+  // Use a real account_id to satisfy the FK constraint (upserts today's row idempotently).
+  const { data: accts } = await sb.from('accounts').select('id').limit(1).single()
+  if (!accts) throw new Error('no accounts found for FK test')
+  const { error } = await sb.rpc('upsert_main_balance', {
+    p_account_id:        accts.id,
+    p_usdt_balance:      0,
+    p_total_equity_usdt: null,
+    p_recorded_at:       new Date().toISOString(),
+  })
   if (error) throw new Error(error.message)
-  // Clean up sentinel row
-  await sb.from('balances').delete().eq('account_id', '00000000-0000-0000-0000-000000000001')
-  return 'insert + conflict resolution OK'
+  return 'upsert_main_balance RPC callable, conflict resolution OK'
 })
 
 await check('raw_fills RPC returns data for real accounts', async () => {
