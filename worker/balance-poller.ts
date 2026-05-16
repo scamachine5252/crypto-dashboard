@@ -16,15 +16,13 @@ type AccountRow = {
 }
 
 async function saveBalance(acctId: string, usdt: number, totalEquityUsdt?: number): Promise<void> {
-  // balances_daily_unique is a partial index (WHERE token_symbol IS NULL).
-  // Supabase JS cannot do ON CONFLICT on partial indexes, so we use an RPC.
   const { error } = await supabaseAdmin.rpc('upsert_main_balance', {
     p_account_id:        acctId,
     p_usdt_balance:      usdt,
     p_total_equity_usdt: totalEquityUsdt ?? null,
     p_recorded_at:       new Date().toISOString(),
   })
-  if (error) console.warn(`[balance-poller] upsert failed for ${acctId}:`, error.message)
+  if (error) console.warn(`[balance-poller] save failed for ${acctId}:`, error.message)
 }
 
 async function pollNonBinance(): Promise<void> {
