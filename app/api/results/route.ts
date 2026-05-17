@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/server'
 
 type BalRow = { account_id: string; usdt_balance: number; total_equity_usdt: number | null; recorded_at: string }
-type TxRow  = { account_id: string; type: string; amount: number; recorded_at: string }
+type TxRow  = { account_id: string; type: string; amount: number; asset: string | null; recorded_at: string }
 type AccRow   = { id: string; account_name: string; exchange: string; fund: string; instrument: string; initial_aum?: number | null }
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
@@ -104,7 +104,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   while (true) {
     const { data, error: txErr } = await supabaseAdmin
       .from('transactions')
-      .select('account_id, type, amount, recorded_at')
+      .select('account_id, type, amount, asset, recorded_at')
       .in('account_id', accountIds)
       .order('recorded_at', { ascending: true })
       .range(txFrom, txFrom + PAGE - 1)
@@ -115,10 +115,12 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     txFrom += PAGE
   }
 
-  // Group transactions by account, sorted ascending (already ordered)
+  // Group transactions by account, sorted ascending (already ordered).
+  // Exclude non-USDT assets — NAV denominator is USDT equity; mixing BTC quantities distorts it.
   const txByAccount: Record<string, TxRow[]> = {}
   for (const tx of allTx) {
     if (tx.type === 'income') continue
+    if (tx.asset !== null && tx.asset !== 'USDT') continue
     if (!txByAccount[tx.account_id]) txByAccount[tx.account_id] = []
     txByAccount[tx.account_id].push(tx)
   }
@@ -230,6 +232,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     if (tx.type === 'funding_fee') {
       totalFundingMap[tx.account_id] = (totalFundingMap[tx.account_id] ?? 0) + Number(tx.amount)
     } else {
+      // Skip non-USDT deposits/withdrawals — their value is already excluded from
+      // endSettled (usdt_balance). Mixing BTC quantity with USDT amounts corrupts netDeposits.
+      if (tx.asset !== null && tx.asset !== 'USDT') continue
       const sign = tx.type === 'deposit' ? 1 : -1
       netDepositsMap[tx.account_id] = (netDepositsMap[tx.account_id] ?? 0) + sign * Number(tx.amount)
     }
