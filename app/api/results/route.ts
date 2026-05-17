@@ -267,7 +267,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const netDeposits   = netDepositsMap[acc.id] ?? 0
     const totalFunding  = totalFundingMap[acc.id] ?? 0
     const deltaUsdt     = endUsdt - startUsdt
-    const tradingResult = deltaUsdt - netDeposits
+    const tradingResult = (endSettled - startSettled) - netDeposits
     return {
       accountId:   acc.id,
       accountName: acc.account_name,
