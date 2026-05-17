@@ -69,6 +69,25 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     allDayMapSt[row.account_id][date] = Number(row.usdt_balance)
   }
 
+  // Outlier guard for PM accounts: remove days where equity anomalously dropped >80%
+  // with no account closure (value > 0). Catches PM USDT sub-wallet readings slipping through.
+  // Threshold: new_value < prev_valid * 0.20 AND new_value > 0 (zero = legitimate closure)
+  for (const accountId of [...pmAccountIds]) {
+    const dayMap = allDayMap[accountId]
+    if (!dayMap) continue
+    const sortedDates = Object.keys(dayMap).sort()
+    let lastValid: number | null = null
+    for (const date of sortedDates) {
+      const val = dayMap[date]
+      if (lastValid !== null && val > 0 && val < lastValid * 0.20) {
+        delete allDayMap[accountId][date]
+        delete allDayMapSt[accountId]?.[date]
+      } else {
+        lastValid = val
+      }
+    }
+  }
+
   // Balance history for the requested range (for the USDT balance line chart)
   const balanceHistory: { accountId: string; date: string; usdt: number }[] = []
   for (const [accountId, dateMap] of Object.entries(allDayMap)) {

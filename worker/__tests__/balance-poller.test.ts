@@ -412,3 +412,117 @@ describe('saveBalance', () => {
     }))
   })
 })
+
+// ---------------------------------------------------------------------------
+// Equity drop guard
+// ---------------------------------------------------------------------------
+
+describe('equity drop guard', () => {
+  // Helper: re-apply mocks needed after jest.clearAllMocks() within a test
+  function resetMocks(accounts: ReturnType<typeof makeAccount>[]) {
+    mockRpc.mockResolvedValue({ error: null })
+    mockBanGuard.isBanned.mockReturnValue(false)
+    mockBanGuard.recordIfBanned.mockResolvedValue(undefined)
+    setupAccountsMock(accounts)
+  }
+
+  it('allows first write when no prior cache entry exists', async () => {
+    const acct = makeAccount('bybit', { id: 'acc-guard-first-write' })
+    setupAccountsMock([acct])
+    mockBybitFetchBalance.mockResolvedValue({ usdt: 500, totalEquityUsdt: 5000 })
+
+    startBalancePoller()
+    await jest.runAllTimersAsync()
+
+    expect(mockRpc).toHaveBeenCalledWith('upsert_main_balance', expect.objectContaining({
+      p_total_equity_usdt: 5000,
+    }))
+  })
+
+  it('blocks anomalous drop (equity falls to <20% of cached value)', async () => {
+    const acct = makeAccount('bybit', { id: 'acc-guard-drop-blocked' })
+    setupAccountsMock([acct])
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {})
+
+    // Phase 1: normal write — warms cache at 100_000
+    mockBybitFetchBalance.mockResolvedValueOnce({ usdt: 500, totalEquityUsdt: 100_000 })
+    startBalancePoller()
+    await jest.runAllTimersAsync()
+    expect(mockRpc).toHaveBeenCalledTimes(1)
+
+    // Phase 2: adapter returns anomalous sub-wallet (1.5% of cached — clearly PM bug)
+    jest.clearAllMocks()
+    resetMocks([acct])
+    mockBybitFetchBalance.mockResolvedValue({ usdt: 1500, totalEquityUsdt: 1500 })
+    startBalancePoller()
+    await jest.runAllTimersAsync()
+
+    expect(mockRpc).not.toHaveBeenCalled()
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('anomalous equity drop'))
+    warnSpy.mockRestore()
+  })
+
+  it('allows zero through (real account closure / full withdrawal)', async () => {
+    const acct = makeAccount('bybit', { id: 'acc-guard-closure' })
+    setupAccountsMock([acct])
+
+    // Phase 1: normal write — warms cache at 50_000
+    mockBybitFetchBalance.mockResolvedValueOnce({ usdt: 50_000, totalEquityUsdt: 50_000 })
+    startBalancePoller()
+    await jest.runAllTimersAsync()
+
+    // Phase 2: account emptied (legitimate withdrawal) — must write
+    jest.clearAllMocks()
+    resetMocks([acct])
+    mockBybitFetchBalance.mockResolvedValue({ usdt: 0, totalEquityUsdt: 0 })
+    startBalancePoller()
+    await jest.runAllTimersAsync()
+
+    expect(mockRpc).toHaveBeenCalledWith('upsert_main_balance', expect.objectContaining({
+      p_usdt_balance:      0,
+      p_total_equity_usdt: 0,
+    }))
+  })
+
+  it('allows dramatic equity increase (e.g. large unrealized PnL)', async () => {
+    const acct = makeAccount('bybit', { id: 'acc-guard-spike' })
+    setupAccountsMock([acct])
+
+    // Phase 1: warms cache at 50_000
+    mockBybitFetchBalance.mockResolvedValueOnce({ usdt: 50_000, totalEquityUsdt: 50_000 })
+    startBalancePoller()
+    await jest.runAllTimersAsync()
+
+    // Phase 2: 10x equity (large leveraged position in profit — valid data)
+    jest.clearAllMocks()
+    resetMocks([acct])
+    mockBybitFetchBalance.mockResolvedValue({ usdt: 50_000, totalEquityUsdt: 500_000 })
+    startBalancePoller()
+    await jest.runAllTimersAsync()
+
+    expect(mockRpc).toHaveBeenCalledWith('upsert_main_balance', expect.objectContaining({
+      p_total_equity_usdt: 500_000,
+    }))
+  })
+
+  it('allows drops above the 20% threshold (moderate loss is fine)', async () => {
+    const acct = makeAccount('bybit', { id: 'acc-guard-mild-drop' })
+    setupAccountsMock([acct])
+
+    // Phase 1: warms cache at 100_000
+    mockBybitFetchBalance.mockResolvedValueOnce({ usdt: 100_000, totalEquityUsdt: 100_000 })
+    startBalancePoller()
+    await jest.runAllTimersAsync()
+
+    // Phase 2: drops to 25% of cached — above 20% threshold, should pass
+    jest.clearAllMocks()
+    resetMocks([acct])
+    mockBybitFetchBalance.mockResolvedValue({ usdt: 25_000, totalEquityUsdt: 25_000 })
+    startBalancePoller()
+    await jest.runAllTimersAsync()
+
+    expect(mockRpc).toHaveBeenCalledWith('upsert_main_balance', expect.objectContaining({
+      p_total_equity_usdt: 25_000,
+    }))
+  })
+})

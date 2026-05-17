@@ -15,14 +15,39 @@ type AccountRow = {
   instrument?: string
 }
 
+// In-memory cache of last successfully saved equity per account.
+// Used to detect anomalous drops (PM adapter returning sub-wallet instead of portfolio equity).
+// Cache warms up after the first successful save per cycle; first-run after restart has no guard.
+const lastSavedEquity = new Map<string, number>()
+
+// Guard threshold: equity must not drop to <20% of last known value unless it's 0 (real closure).
+const EQUITY_DROP_THRESHOLD = 0.20
+
 async function saveBalance(acctId: string, usdt: number, totalEquityUsdt?: number): Promise<void> {
+  const equity = totalEquityUsdt ?? usdt
+  const lastEquity = lastSavedEquity.get(acctId)
+
+  // Only guard when we have a reference point and the new value is non-zero.
+  // Zero is allowed through — it signals a real account closure/withdrawal.
+  if (lastEquity !== undefined && lastEquity > 1000 && equity > 0 && equity < lastEquity * EQUITY_DROP_THRESHOLD) {
+    console.warn(
+      `[balance-poller] anomalous equity drop for ${acctId}: ${Math.round(lastEquity)} → ${Math.round(equity)} ` +
+      `(${Math.round(equity / lastEquity * 100)}% of previous) — skipping write`
+    )
+    return
+  }
+
   const { error } = await supabaseAdmin.rpc('upsert_main_balance', {
     p_account_id:        acctId,
     p_usdt_balance:      usdt,
     p_total_equity_usdt: totalEquityUsdt ?? null,
     p_recorded_at:       new Date().toISOString(),
   })
-  if (error) console.warn(`[balance-poller] save failed for ${acctId}:`, error.message)
+  if (error) {
+    console.warn(`[balance-poller] save failed for ${acctId}:`, error.message)
+    return
+  }
+  lastSavedEquity.set(acctId, equity)
 }
 
 async function pollNonBinance(): Promise<void> {
