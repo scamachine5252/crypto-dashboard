@@ -292,7 +292,7 @@ export default function ResultsPage() {
                       style={{ accentColor: 'var(--accent-blue)' }}
                     />
                   </th>
-                  {['Fund', 'Account', 'Exchange', 'Opening', 'Closing', 'Equity', 'Deposits', 'Difference', 'Gross PnL', 'Fees', 'Funding', 'Net PnL'].map((col) => (
+                  {['Fund', 'Account', 'Exchange', 'Opening', 'Closing', 'Equity', 'Deposits', 'Difference', 'Net PnL', 'Fees', 'Funding', 'Gross PnL'].map((col) => (
                     <th
                       key={col}
                       className="px-3 py-2 text-center text-[10px] uppercase tracking-widest font-semibold"
@@ -360,12 +360,12 @@ export default function ResultsPage() {
                         </td>
                         <td className={numCell} style={cellBorder}><Delta value={summary.netDeposits} /></td>
                         <td className={numCell} style={{ ...cellBorder, fontWeight: 600 }}><Delta value={summary.tradingResult} /></td>
-                        <td className={numCell} style={{ ...cellBorder, fontWeight: 600 }}><Delta value={summary.totalPnl} /></td>
+                        <td className={numCell} style={cellBorder}><Delta value={summary.totalPnl + summary.totalFees} /></td>
                         <td className={numCell} style={{ ...cellBorder, color: 'var(--accent-loss)' }}>
                           {formatMoney(summary.totalFees)}
                         </td>
                         <td className={numCell} style={cellBorder}><Delta value={summary.totalFunding ?? 0} /></td>
-                        <td className={numCell} style={cellBorder}><Delta value={summary.totalPnl + summary.totalFees} /></td>
+                        <td className={numCell} style={{ ...cellBorder, fontWeight: 600 }}><Delta value={summary.totalPnl} /></td>
                       </tr>
                     )
                   })
@@ -394,8 +394,8 @@ export default function ResultsPage() {
                     <td className="px-3 py-2 text-center" style={{ borderRight: '1px solid var(--border-subtle)', fontWeight: 600 }}>
                       <Delta value={totals.tradingResult} />
                     </td>
-                    <td className="px-3 py-2 text-center" style={{ borderRight: '1px solid var(--border-subtle)', fontWeight: 600 }}>
-                      <Delta value={totals.pnl} />
+                    <td className="px-3 py-2 text-center" style={{ borderRight: '1px solid var(--border-subtle)' }}>
+                      <Delta value={totals.netPnl} />
                     </td>
                     <td className="px-3 py-2 text-center font-mono tabular text-xs" style={{ color: 'var(--accent-loss)', borderRight: '1px solid var(--border-subtle)' }}>
                       {formatMoney(totals.fees)}
@@ -403,8 +403,8 @@ export default function ResultsPage() {
                     <td className="px-3 py-2 text-center" style={{ borderRight: '1px solid var(--border-subtle)' }}>
                       <Delta value={totals.funding} />
                     </td>
-                    <td className="px-3 py-2 text-center">
-                      <Delta value={totals.netPnl} />
+                    <td className="px-3 py-2 text-center" style={{ fontWeight: 600 }}>
+                      <Delta value={totals.pnl} />
                     </td>
                   </tr>
                 )}
