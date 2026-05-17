@@ -292,7 +292,7 @@ export default function ResultsPage() {
                       style={{ accentColor: 'var(--accent-blue)' }}
                     />
                   </th>
-                  {['Exchange', 'Account', 'Fund', 'Opening', 'Settled', 'Equity', 'Unrealized', 'Difference', 'Net Deposits', 'Trading Result', 'Fees', 'Funding', 'Gross PnL', 'Net PnL'].map((col) => (
+                  {['Fund', 'Account', 'Exchange', 'Opening', 'Closing', 'Equity', 'Deposits', 'Difference', 'Gross PnL', 'Fees', 'Funding', 'Net PnL'].map((col) => (
                     <th
                       key={col}
                       className="px-3 py-2 text-center text-[10px] uppercase tracking-widest font-semibold"
@@ -306,13 +306,13 @@ export default function ResultsPage() {
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan={15} className="px-4 py-8 text-center text-xs" style={{ color: 'var(--text-muted)' }}>
+                    <td colSpan={13} className="px-4 py-8 text-center text-xs" style={{ color: 'var(--text-muted)' }}>
                       Loading…
                     </td>
                   </tr>
                 ) : accountSummaries.length === 0 ? (
                   <tr>
-                    <td colSpan={15} className="px-4 py-8 text-center text-xs" style={{ color: 'var(--text-muted)' }}>
+                    <td colSpan={13} className="px-4 py-8 text-center text-xs" style={{ color: 'var(--text-muted)' }}>
                       No data for selected period. Run a sync first.
                     </td>
                   </tr>
@@ -335,19 +335,19 @@ export default function ResultsPage() {
                             style={{ accentColor: 'var(--accent-blue)' }}
                           />
                         </td>
-                        <td className="px-3 py-2" style={cellBorder}>
-                          <div className="flex items-center gap-1.5">
-                            <ExchangeLogo id={summary.exchange} />
-                            <span className="font-bold text-[10px] uppercase tracking-widest" style={{ color: exColor }}>
-                              {summary.exchange}
-                            </span>
-                          </div>
+                        <td className="px-3 py-2 text-center" style={{ ...cellBorder, color: 'var(--text-muted)', fontSize: 10 }}>
+                          {summary.fund || '—'}
                         </td>
                         <td className="px-3 py-2 whitespace-nowrap" style={{ ...cellBorder, color: 'var(--text-primary)' }}>
                           {summary.accountName}
                         </td>
-                        <td className="px-3 py-2 text-center" style={{ ...cellBorder, color: 'var(--text-muted)', fontSize: 10 }}>
-                          {summary.fund || '—'}
+                        <td className="px-3 py-2" style={cellBorder}>
+                          <div className="flex items-center gap-1.5">
+                            <ExchangeLogo id={summary.exchange} />
+                            <span className="text-[10px] uppercase tracking-widest" style={{ color: exColor }}>
+                              {summary.exchange}
+                            </span>
+                          </div>
                         </td>
                         <td className={numCell} style={{ ...cellBorder, color: 'var(--text-secondary)' }}>
                           {formatMoney(summary.startUsdt)}
@@ -358,18 +358,14 @@ export default function ResultsPage() {
                         <td className={numCell} style={{ ...cellBorder, color: 'var(--text-primary)' }}>
                           {formatMoney(summary.endEquity ?? summary.endUsdt)}
                         </td>
-                        <td className={numCell} style={cellBorder}>
-                          <Delta value={(summary.endEquity ?? summary.endUsdt) - (summary.endSettled ?? summary.endUsdt)} />
-                        </td>
-                        <td className={numCell} style={cellBorder}><Delta value={summary.deltaUsdt} /></td>
                         <td className={numCell} style={cellBorder}><Delta value={summary.netDeposits} /></td>
-                        <td className={numCell} style={cellBorder}><Delta value={summary.tradingResult} /></td>
+                        <td className={numCell} style={{ ...cellBorder, fontWeight: 600 }}><Delta value={summary.tradingResult} /></td>
+                        <td className={numCell} style={{ ...cellBorder, fontWeight: 600 }}><Delta value={summary.totalPnl} /></td>
                         <td className={numCell} style={{ ...cellBorder, color: 'var(--accent-loss)' }}>
                           {formatMoney(summary.totalFees)}
                         </td>
                         <td className={numCell} style={cellBorder}><Delta value={summary.totalFunding ?? 0} /></td>
-                        <td className={numCell} style={cellBorder}><Delta value={summary.totalPnl} /></td>
-                        <td className={numCell} style={{ ...cellBorder, fontWeight: 600 }}><Delta value={summary.totalPnl + summary.totalFees} /></td>
+                        <td className={numCell} style={cellBorder}><Delta value={summary.totalPnl + summary.totalFees} /></td>
                       </tr>
                     )
                   })
@@ -393,16 +389,13 @@ export default function ResultsPage() {
                       {formatMoney(totals.endEquity)}
                     </td>
                     <td className="px-3 py-2 text-center" style={{ borderRight: '1px solid var(--border-subtle)' }}>
-                      <Delta value={totals.endEquity - totals.endSettled} />
-                    </td>
-                    <td className="px-3 py-2 text-center" style={{ borderRight: '1px solid var(--border-subtle)' }}>
-                      <Delta value={totals.deltaUsdt} />
-                    </td>
-                    <td className="px-3 py-2 text-center" style={{ borderRight: '1px solid var(--border-subtle)' }}>
                       <Delta value={totals.netDeposits} />
                     </td>
-                    <td className="px-3 py-2 text-center" style={{ borderRight: '1px solid var(--border-subtle)' }}>
+                    <td className="px-3 py-2 text-center" style={{ borderRight: '1px solid var(--border-subtle)', fontWeight: 600 }}>
                       <Delta value={totals.tradingResult} />
+                    </td>
+                    <td className="px-3 py-2 text-center" style={{ borderRight: '1px solid var(--border-subtle)', fontWeight: 600 }}>
+                      <Delta value={totals.pnl} />
                     </td>
                     <td className="px-3 py-2 text-center font-mono tabular text-xs" style={{ color: 'var(--accent-loss)', borderRight: '1px solid var(--border-subtle)' }}>
                       {formatMoney(totals.fees)}
@@ -410,10 +403,7 @@ export default function ResultsPage() {
                     <td className="px-3 py-2 text-center" style={{ borderRight: '1px solid var(--border-subtle)' }}>
                       <Delta value={totals.funding} />
                     </td>
-                    <td className="px-3 py-2 text-center" style={{ borderRight: '1px solid var(--border-subtle)' }}>
-                      <Delta value={totals.pnl} />
-                    </td>
-                    <td className="px-3 py-2 text-center" style={{ fontWeight: 600 }}>
+                    <td className="px-3 py-2 text-center">
                       <Delta value={totals.netPnl} />
                     </td>
                   </tr>
