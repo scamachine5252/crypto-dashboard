@@ -83,7 +83,7 @@ export default function ResultsPage() {
   const [checkedIds, setCheckedIds]             = useState<Set<string>>(new Set())
   const [loading, setLoading]                   = useState(true)
   const [transactions, setTransactions]         = useState<Array<{
-    id: string; account_id: string; exchange: string; type: 'deposit'|'withdrawal'
+    id: string; account_id: string; exchange: string; type: string
     asset: string; amount: number; fee: number|null; status: string|null
     tx_id: string|null; recorded_at: string
   }>>([])
@@ -215,13 +215,13 @@ export default function ResultsPage() {
     funding:       visibleSummaries.reduce((s, r) => s + (r.totalFunding ?? 0), 0),
   }), [visibleSummaries])
 
-  // Transaction markers (for potential future use on balance chart)
+  // Transaction markers — deposits and withdrawals only (funding_fee excluded to prevent hundreds of SVG elements)
   const txMarkers = useMemo<TransactionMarker[]>(
     () => transactions
-      .filter(t => checkedIds.has(t.account_id))
+      .filter(t => checkedIds.has(t.account_id) && (t.type === 'deposit' || t.type === 'withdrawal'))
       .map(t => ({
         date:   t.recorded_at.slice(0, 10),
-        type:   t.type,
+        type:   t.type as 'deposit' | 'withdrawal',
         amount: t.amount,
         asset:  t.asset,
       })),
