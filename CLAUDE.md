@@ -367,6 +367,32 @@ Before implementing any adapter logic that reads a specific API field:
 3. **Write the "missing field" test first.** Before implementing, add a test where the field is `undefined`.
 4. **Never swallow Promise.allSettled rejections silently.** When both categories fail, throw — return 500 with the real error, not `{ synced: 0 }`.
 
+### Destructive changes require exhaustive verification
+
+**Гипотеза считается доказанной только тогда, когда исчерпаны все альтернативные объяснения, а не когда найдено первое совпадение. Первое совпадение — это повод искать дальше, а не останавливаться.**
+
+Never propose a destructive action (DELETE queries, rebuild scripts, removing routes or tables, architectural rewrites, declaring data "missing" or "phantom") until the hypothesis justifying it is proven exhaustively.
+
+**Прежде чем объявить гипотезу доказанной:**
+1. Перечисли все альтернативные объяснения наблюдаемого факта
+2. Проверь каждое из них — не только то, которое кажется наиболее очевидным
+3. Только если все альтернативы опровергнуты — вывод обоснован
+
+Пример: "fill не найден" → альтернативы: другой формат поля, другой source, другой путь записи данных, ошибка в запросе, различие timezone. Остановиться на первом объяснении ("данных нет") до проверки остальных — недопустимо.
+
+Additional checks before any destructive action:
+- **Verify from both directions.** Check source → record AND record → source. A 0-result scan in one direction is not proof of absence.
+- **Enumerate all data paths and formats.** Every system has multiple write paths (WebSocket vs REST, full sync vs reconciler vs incremental). A check that covers only one path is incomplete.
+- **State what you checked, not just what you found.** "No fills found" is only meaningful after specifying which formats, sources, and fields were searched.
+
+Example of how this rule was learned: declared 7 SOL trades "phantom" after searching `raw_data.time` only. WebSocket fills store timestamp in `raw_data.T`. Proposed rebuild-trades, skip guard changes, architectural rewrites — all based on incomplete evidence. Trades were real.
+
+Known `raw_data` timestamp fields by source (concrete example for this project):
+| source | timestamp field |
+|--------|----------------|
+| `rest` | `raw_data.time` |
+| `ws`   | `raw_data.T`   |
+
 ---
 
 ## Skill: Frontend Design
