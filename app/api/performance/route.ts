@@ -39,13 +39,11 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const bals = (allBalances ?? []) as BalRow[]
 
   type AccRow = { id: string; account_name: string; exchange: string; fund: string; initial_aum?: number | null; instrument?: string }
-  const pmAccountIds = new Set((accounts as AccRow[]).filter((a) => a.instrument === 'portfolio_margin').map((a) => a.id))
   const icMap: Record<string, number | null> = {}
 
   for (const acc of accounts as AccRow[]) {
     const accBals = bals.filter((b) => b.account_id === acc.id)
-    const isPm = pmAccountIds.has(acc.id)
-    const balVal = (r: BalRow) => isPm ? Number(r.usdt_balance) : Number(r.total_equity_usdt ?? r.usdt_balance)
+    const balVal = (r: BalRow) => Number(r.total_equity_usdt ?? r.usdt_balance)
 
     // Priority 1: last snapshot at or before period start (best IC proxy)
     const beforePeriod = accBals.filter((b) => b.recorded_at <= sinceDate)

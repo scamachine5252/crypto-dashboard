@@ -134,14 +134,15 @@ describe('GET /api/performance', () => {
     expect(body.accounts[0].initialCapital).toBe(9800)
   })
 
-  it('IC priority 1: PM account uses usdt_balance, not total_equity_usdt', async () => {
+  it('IC priority 1: PM account uses total_equity_usdt (same as non-PM)', async () => {
     const since = new Date('2025-06-01T00:00:00.000Z').getTime()
     const acc = makeAcc({ instrument: 'portfolio_margin' })
     const bal = makeBal({ recorded_at: '2025-05-31T12:00:00.000Z', total_equity_usdt: 9800, usdt_balance: 9500 })
     setupMocks({ accounts: [acc], balances: [bal] })
     const res = await GET(makeReq({ since: String(since) }))
     const body = await res.json()
-    expect(body.accounts[0].initialCapital).toBe(9500)
+    // PM accounts now use total_equity_usdt (includes BTC collateral) — same as non-PM
+    expect(body.accounts[0].initialCapital).toBe(9800)
   })
 
   it('IC priority 2: uses first in-period balance when no before-period snapshot exists', async () => {
