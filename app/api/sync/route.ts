@@ -83,7 +83,7 @@ async function syncAccount(row: AccountRow, dateRange: DateRange): Promise<Accou
   await supabaseAdmin.from('balances').insert(balanceRows)
 
   // Fetch and upsert trades
-  const since = Date.now() - 7 * 24 * 60 * 60 * 1000
+  const since = Date.now() - 14 * 24 * 60 * 60 * 1000
   const trades = await adapter.getTrades('all', dateRange, since)
   diag.tradesFetched = trades.length
   if (trades.length > 0) {
