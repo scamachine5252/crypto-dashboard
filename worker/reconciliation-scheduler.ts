@@ -24,6 +24,9 @@ interface AccountRow {
   api_secret:   string
   passphrase?:  string | null
   instrument?:  string | null
+  reconcile_consecutive_failures?: number
+  reconcile_first_failure_at?:     string | null
+  reconcile_backoff_until?:        string | null
 }
 
 export class ReconciliationScheduler {
@@ -63,7 +66,7 @@ export class ReconciliationScheduler {
 
     const { data: allAccounts, error } = await supabaseAdmin
       .from('accounts')
-      .select('id, exchange, api_key, api_secret, passphrase, instrument, is_suspended')
+      .select('id, exchange, api_key, api_secret, passphrase, instrument, is_suspended, reconcile_consecutive_failures, reconcile_first_failure_at, reconcile_backoff_until')
       .eq('is_suspended', false)
 
     if (error) {
@@ -91,7 +94,7 @@ export class ReconciliationScheduler {
 
     const { data: allAccounts, error } = await supabaseAdmin
       .from('accounts')
-      .select('id, exchange, api_key, api_secret, passphrase, instrument, is_suspended')
+      .select('id, exchange, api_key, api_secret, passphrase, instrument, is_suspended, reconcile_consecutive_failures, reconcile_first_failure_at, reconcile_backoff_until')
       .eq('is_suspended', false)
 
     if (error) {
@@ -110,6 +113,11 @@ export class ReconciliationScheduler {
   }
 
   private async reconcileAccount(account: AccountRow): Promise<void> {
+    if (account.reconcile_backoff_until && new Date(account.reconcile_backoff_until) > new Date()) {
+      console.log(`[reconciliation] ${account.id} in backoff until ${account.reconcile_backoff_until} — skipping`)
+      return
+    }
+
     const since = Date.now() - WINDOW_MS
     const until = Date.now()
     let filled = 0
@@ -186,6 +194,55 @@ export class ReconciliationScheduler {
     return this.upsert('mexc', rows)
   }
 
+  private async pingBinanceAccount(adapter: BinanceAdapter): Promise<boolean> {
+    try {
+      await adapter.fetchBalance()
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  private async updateReconcileState(
+    accountId:         string,
+    success:           boolean,
+    currentFailures:   number,
+    firstFailureAt:    string | null,
+    credentialsBroken: boolean,
+  ): Promise<void> {
+    if (success) {
+      await supabaseAdmin.from('accounts').update({
+        reconcile_consecutive_failures: 0,
+        reconcile_first_failure_at:     null,
+        reconcile_backoff_until:        null,
+      }).eq('id', accountId)
+      return
+    }
+
+    // 999 = permanent flag for broken credentials (no backoff — user must fix API keys)
+    const failures = credentialsBroken ? 999 : currentFailures + 1
+
+    // Backoff: 2h → 4h → 6h cap, aligning with the 6h reconcile cycle
+    const backoffHours = credentialsBroken
+      ? 0
+      : Math.min(2 * Math.pow(2, currentFailures), 6)
+
+    const backoffUntil = backoffHours > 0
+      ? new Date(Date.now() + backoffHours * 60 * 60 * 1000).toISOString()
+      : null
+
+    await supabaseAdmin.from('accounts').update({
+      reconcile_consecutive_failures: failures,
+      reconcile_first_failure_at:     firstFailureAt ?? new Date().toISOString(),
+      reconcile_backoff_until:        backoffUntil,
+    }).eq('id', accountId)
+
+    console.warn(
+      `[reconciliation] ${accountId} failure #${failures}` +
+      (credentialsBroken ? ' — CREDENTIALS BROKEN (check API keys)' : ` — backoff ${backoffHours}h`),
+    )
+  }
+
   private async reconcileBinance(account: AccountRow): Promise<number> {
     if (binanceBanGuard.isBanned()) return 0
 
@@ -200,7 +257,20 @@ export class ReconciliationScheduler {
       symbols = await adapter.discoverTradedSymbols()
     } catch (e) {
       await binanceBanGuard.recordIfBanned(e)
+      const credentialsBroken = !(await this.pingBinanceAccount(adapter))
+      await this.updateReconcileState(
+        account.id,
+        false,
+        account.reconcile_consecutive_failures ?? 0,
+        account.reconcile_first_failure_at ?? null,
+        credentialsBroken,
+      )
       throw e
+    }
+
+    // Success — reset any previous failure state
+    if ((account.reconcile_consecutive_failures ?? 0) > 0) {
+      await this.updateReconcileState(account.id, true, 0, null, false)
     }
 
     let total = 0
