@@ -28,20 +28,23 @@ const MIN = 60_000
 const HOUR = 60 * MIN
 
 /**
- * Set up the two `from()` calls the route makes:
- *   1. worker_status  (single row)
- *   2. accounts       (list)
+ * Set up the three `from()` calls the route makes:
+ *   1. worker_status      (single row)
+ *   2. accounts           (active accounts list)
+ *   3. accounts (anomaly) (failing accounts with reconcile_consecutive_failures > 0)
  * and the `rpc()` call for latest_fill_per_account.
  */
 function setupMocks({
   workerStatus,
   accounts = [],
   lastFills = [],
+  failingAccounts = [],
   rpcError = null,
 }: {
   workerStatus: Record<string, unknown> | null
   accounts?: Array<{ id: string; exchange: string; account_name: string }>
   lastFills?: Array<{ account_id: string; exec_time: string }>
+  failingAccounts?: Array<{ id: string; account_name: string; exchange: string; reconcile_consecutive_failures: number; reconcile_first_failure_at: string | null }>
   rpcError?: unknown
 }) {
   // worker_status chain: .from('worker_status').select(...).eq(...).single()
@@ -49,13 +52,23 @@ function setupMocks({
   const wsEq = jest.fn().mockReturnValue({ single: wsSingle })
   const wsSelect = jest.fn().mockReturnValue({ eq: wsEq })
 
-  // accounts chain: .from('accounts').select(...).eq(...)  — resolves directly
+  // accounts (active) chain: .from('accounts').select(...).eq(...)
   const accEq = jest.fn().mockResolvedValue({ data: accounts, error: null })
   const accSelect = jest.fn().mockReturnValue({ eq: accEq })
 
+  // accounts (anomaly) chain: .from('accounts').select(...).gt(...).eq(...)
+  const anomalyEq = jest.fn().mockResolvedValue({ data: failingAccounts, error: null })
+  const anomalyGt = jest.fn().mockReturnValue({ eq: anomalyEq })
+
+  let accountsCallCount = 0
   mockFrom.mockImplementation((table: string) => {
     if (table === 'worker_status') return { select: wsSelect }
-    if (table === 'accounts') return { select: accSelect }
+    if (table === 'accounts') {
+      accountsCallCount++
+      // First call: active accounts (.select().eq()), second call: anomaly (.select().gt().eq())
+      if (accountsCallCount % 2 === 1) return { select: accSelect }
+      return { select: jest.fn().mockReturnValue({ gt: anomalyGt }) }
+    }
     return { select: jest.fn().mockReturnValue({ eq: jest.fn().mockResolvedValue({ data: [], error: null }) }) }
   })
 

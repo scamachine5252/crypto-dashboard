@@ -43,6 +43,37 @@ export async function GET() {
   const banUntil     = ws?.binance_ban_until ?? null
   const binanceBanned = banUntil ? new Date(banUntil).getTime() > Date.now() : false
 
+  // Anomaly detection: accounts failing reconciliation for >24h or with broken credentials
+  const ANOMALY_ALERT_MS = 24 * 60 * 60 * 1000
+
+  const { data: failingAccounts } = await supabaseAdmin
+    .from('accounts')
+    .select('id, account_name, exchange, reconcile_consecutive_failures, reconcile_first_failure_at')
+    .gt('reconcile_consecutive_failures', 0)
+    .eq('is_suspended', false)
+
+  type FailingAccount = {
+    id: string; account_name: string; exchange: string;
+    reconcile_consecutive_failures: number; reconcile_first_failure_at: string | null
+  }
+
+  const anomalies = (failingAccounts ?? []).flatMap((a: FailingAccount) => {
+    const credentialsBroken = a.reconcile_consecutive_failures >= 999
+    const failingMs = a.reconcile_first_failure_at
+      ? Date.now() - new Date(a.reconcile_first_failure_at).getTime()
+      : 0
+    const shouldAlert = credentialsBroken || failingMs > ANOMALY_ALERT_MS
+    if (!shouldAlert) return []
+    return [{
+      account_id:   a.id,
+      account_name: a.account_name,
+      exchange:     a.exchange,
+      type:         credentialsBroken ? 'credentials_broken' as const : 'sync_failing' as const,
+      failures:     a.reconcile_consecutive_failures,
+      since:        a.reconcile_first_failure_at,
+    }]
+  })
+
   return NextResponse.json({
     worker: {
       alive:          workerAlive,
@@ -53,6 +84,7 @@ export async function GET() {
       banned:    binanceBanned,
       ban_until: binanceBanned ? banUntil : null,
     },
-    accounts: accountStatuses,
+    accounts:  accountStatuses,
+    anomalies,
   })
 }
