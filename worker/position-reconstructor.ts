@@ -270,12 +270,21 @@ export class PositionReconstructor {
         }
       }
 
-      await this.doReconstruct(accountId, exchange)
+      // Heartbeat: renew Redis lock TTL every 30s.
+      // Prevents lock expiry mid-reconstruction on large accounts (Continum: 33k fills > 120s).
+      const heartbeat = setInterval(() => {
+        this.redis.expire(lockKey, LOCK_TTL_S).catch(() => {})
+      }, 30_000)
 
-      await supabaseAdmin
-        .from('accounts')
-        .update({ last_reconstructed_at: new Date().toISOString() })
-        .eq('id', accountId)
+      try {
+        await this.doReconstruct(accountId, exchange)
+        await supabaseAdmin
+          .from('accounts')
+          .update({ last_reconstructed_at: new Date().toISOString() })
+          .eq('id', accountId)
+      } finally {
+        clearInterval(heartbeat)
+      }
     } finally {
       await this.redis.del(lockKey)
     }
