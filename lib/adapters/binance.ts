@@ -2,6 +2,7 @@ import 'server-only'
 import * as ccxt from 'ccxt'
 import type { ExchangeAdapter, BalanceResult, RawPosition } from './types'
 import type { DailyPnLEntry, Trade, DateRange } from '../types'
+import { paginateByTime } from './paginate'
 
 interface BinanceCredentials {
   apiKey: string
@@ -497,7 +498,7 @@ export class BinanceAdapter implements ExchangeAdapter {
     const fapi = this.exchange as unknown as FapiEx
 
     try {
-      let rows: Array<{ symbol: string; time: number }>
+      let rows: Array<{ symbol: string; time: number | string }>
       if (this.isPortfolioMargin) {
         // Single paginated fetch (UM + CM in parallel) — 2 base requests total.
         // Time-based pagination handles accounts with >1000 income events in 180 days.
@@ -524,20 +525,24 @@ export class BinanceAdapter implements ExchangeAdapter {
         ])
         rows = [...umRows, ...cmRows]
       } else {
-        // Split into 6 × 30-day windows to avoid the 1000-row cap on high-volume accounts.
+        // 6 × 30-day windows, each fully paginated — handles any volume per window.
+        // delayMs:200 keeps Binance FAPI weight well within 2400/min budget.
         const WINDOW_30 = 30 * DAY
-        const allRows30: Array<{ symbol: string; time: number }> = []
+        const allRows30: Array<{ symbol: string; time: number | string }> = []
         for (let i = 0; i < 6; i++) {
           const wStart = scanStart + i * WINDOW_30
           const wEnd   = Math.min(wStart + WINDOW_30, Date.now())
           if (wStart >= Date.now()) break
-          const chunk = await fapi.fapiPrivateGetIncome({
-            incomeType: 'REALIZED_PNL',
-            startTime:  wStart,
-            endTime:    wEnd,
-            limit:      1000,
-          })
-          allRows30.push(...chunk)
+          const windowRows = await paginateByTime(
+            (p) => fapi.fapiPrivateGetIncome({
+              incomeType: 'REALIZED_PNL',
+              startTime:  p.startTime,
+              endTime:    p.endTime,
+              limit:      p.limit,
+            }),
+            { startTime: wStart, endTime: wEnd, limit: 1000, delayMs: 200 },
+          )
+          allRows30.push(...windowRows)
         }
         rows = allRows30
       }

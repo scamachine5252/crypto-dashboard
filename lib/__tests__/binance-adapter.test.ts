@@ -73,7 +73,9 @@ function makeRegular() {
 
 beforeEach(() => {
   jest.clearAllMocks()
-  jest.useFakeTimers()
+  // advanceTimers:true auto-advances the fake clock when async code awaits setTimeout,
+  // which is needed because paginateByTime uses setTimeout for delayMs between pages.
+  jest.useFakeTimers({ advanceTimers: true })
   jest.setSystemTime(NOW)
 })
 
@@ -287,5 +289,61 @@ describe('BinanceAdapter.discoverTradedSymbols() — regular account', () => {
     for (const sym of symbols) {
       expect(names).toContain(sym)
     }
+  })
+
+  // ── regression bug #4 ──────────────────────────────────────────────────────
+  // High-volume regular accounts (e.g. Korean Binance: ~90 closing fills/day)
+  // generate >1000 REALIZED_PNL income events in a single 30-day window.
+  // Without within-window pagination, the first 1000 events fill the request,
+  // symbols active only AFTER those 1000 events are silently dropped, and the
+  // sync job completes successfully with 0 failed_items — invisible data loss.
+  //
+  // Root cause confirmed in production: Korean account had 161 traded symbols
+  // in May 2026 CSV; discoverTradedSymbols() found only 23 (86% miss rate).
+  it('regression bug #4: window returning exactly 1000 rows triggers within-window pagination', async () => {
+    const WINDOW_30 = 30 * DAY
+    // Window 0: page 1 returns 1000 rows for BTCUSDT (full page → must fetch page 2)
+    //           page 2 returns 1 row for ETHUSDT (appeared late in the window)
+    // Windows 1–5: return empty
+    const page1 = makeIncomePage(1000, SCAN_START + 1_000, 'BTCUSDT')
+    const lastTimeW0 = page1[page1.length - 1].time as number
+    const page2 = [makeIncomeRow('ETHUSDT', lastTimeW0 + 1_000)]
+
+    mockFapiPrivateGetIncome.mockImplementation(async ({ startTime, endTime }) => {
+      const inW0 = startTime >= SCAN_START && startTime < SCAN_START + WINDOW_30
+      if (!inW0) return []
+      // First call: startTime == SCAN_START → full page
+      if (startTime === SCAN_START) return page1
+      // Second call: startTime == lastTime+1 → tail of window
+      return page2
+    })
+
+    const adapter = makeRegular()
+    const discovered = await adapter.discoverTradedSymbols()
+
+    const names = discovered.map(s => s.rawSymbol)
+    // ETHUSDT appeared on page 2 of window 0 — must be discovered
+    expect(names).toContain('ETHUSDT')
+    // At least 7 calls: 1 extra for the paginated window + 5 empty windows
+    expect(mockFapiPrivateGetIncome.mock.calls.length).toBeGreaterThanOrEqual(7)
+  })
+
+  it('regression bug #4b: within-window pagination cursor advances by time, not count', async () => {
+    // Verifies that the startTime of the second page call equals lastRow.time + 1,
+    // not a fixed offset — prevents duplicate rows at window boundaries.
+    const page1 = makeIncomePage(1000, SCAN_START + 500_000, 'XRPUSDT')
+    const lastTime = page1[page1.length - 1].time as number
+
+    mockFapiPrivateGetIncome
+      .mockResolvedValueOnce(page1) // window 0 page 1 (full)
+      .mockResolvedValue([])        // page 2 + remaining windows
+
+    const adapter = makeRegular()
+    await adapter.discoverTradedSymbols()
+
+    const calls = mockFapiPrivateGetIncome.mock.calls
+    // Second call for window 0 must use startTime = lastTime + 1
+    const page2Call = calls.find(c => c[0].startTime === lastTime + 1)
+    expect(page2Call).toBeDefined()
   })
 })
