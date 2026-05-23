@@ -202,7 +202,9 @@ describe('BybitConnector — startup gap fill', () => {
       return []
     })
     const fp = { store: mockFillProcessorStore, storeBatch: mockFillProcessorBatch } as unknown as FillProcessor
-    const conn = new BybitConnector({ ...CREDS, fillProcessor: fp, fetchGapFills: mockGapFills })
+    // Use lastFillTime 2h ago so gap is well within 7d (not triggering the >30d enqueue path)
+    const recentFillTime = Date.now() - 2 * 60 * 60 * 1000
+    const conn = new BybitConnector({ ...CREDS, lastFillTime: recentFillTime, fillProcessor: fp, fetchGapFills: mockGapFills })
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     jest.spyOn(conn as any, 'connectOnce')
       .mockImplementation(async () => { callOrder.push('connectOnce'); conn.disconnect() })
@@ -216,7 +218,8 @@ describe('BybitConnector — startup gap fill', () => {
   it('does NOT crash when startup gap fill throws — connector still connects', async () => {
     const mockGapFills = jest.fn().mockRejectedValue(new Error('API timeout'))
     const fp = { store: mockFillProcessorStore, storeBatch: mockFillProcessorBatch } as unknown as FillProcessor
-    const conn = new BybitConnector({ ...CREDS, fillProcessor: fp, fetchGapFills: mockGapFills })
+    const recentFillTime = Date.now() - 2 * 60 * 60 * 1000
+    const conn = new BybitConnector({ ...CREDS, lastFillTime: recentFillTime, fillProcessor: fp, fetchGapFills: mockGapFills })
     const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {})
     let connectOnceCalled = false
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -238,7 +241,8 @@ describe('BybitConnector — startup gap fill', () => {
 
 describe('BybitConnector — runGapFill updates lastFillTime', () => {
   it('advances lastFillTime to max exec_time of fetched fills', async () => {
-    const ts = 1735689600000
+    const since = Date.now() - 3 * 24 * 60 * 60 * 1000  // 3 days ago — well within 7d chunk
+    const ts = since + 2 * 60 * 60 * 1000               // 2h after since
     const mockFill: RawFill = {
       account_id: 'acc', exchange: 'bybit', exec_id: 'x', symbol: 'BTC',
       exec_time: new Date(ts), side: 'buy', exec_qty: 1, exec_price: 50000,
@@ -246,12 +250,27 @@ describe('BybitConnector — runGapFill updates lastFillTime', () => {
     }
     const mockGapFills = jest.fn().mockResolvedValue([mockFill])
     const fp = { store: mockFillProcessorStore, storeBatch: mockFillProcessorBatch } as unknown as FillProcessor
-    const conn = new BybitConnector({ ...CREDS, fillProcessor: fp, fetchGapFills: mockGapFills })
+    const conn = new BybitConnector({ ...CREDS, lastFillTime: since, fillProcessor: fp, fetchGapFills: mockGapFills })
     mockFillProcessorBatch.mockResolvedValue(undefined)
 
-    await conn.runGapFill(0, ts + 1000)
+    await conn.runGapFill(since, ts + 1000)
 
     expect((conn as unknown as { lastFillTime: number }).lastFillTime).toBe(ts)
+  })
+
+  it('gap > 30d calls enqueueFullSync and skips fetchGapFills', async () => {
+    const mockGapFills   = jest.fn()
+    const mockEnqueue    = jest.fn().mockResolvedValue(undefined)
+    const fp = { store: mockFillProcessorStore, storeBatch: mockFillProcessorBatch } as unknown as FillProcessor
+    const conn = new BybitConnector({
+      ...CREDS, fillProcessor: fp, fetchGapFills: mockGapFills, enqueueFullSync: mockEnqueue,
+    })
+
+    const since = Date.now() - 45 * 24 * 60 * 60 * 1000  // 45 days ago
+    await conn.runGapFill(since, Date.now())
+
+    expect(mockGapFills).not.toHaveBeenCalled()
+    expect(mockEnqueue).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -259,6 +278,7 @@ describe('BybitConnector — runGapFill updates lastFillTime', () => {
 
 describe('BybitConnector — gap fill', () => {
   it('calls storeBatch with fills fetched since lastFillTime', async () => {
+    const since = Date.now() - 3 * 60 * 60 * 1000  // 3 hours ago — small gap, no chunking needed
     const fetchGapFills = jest.fn().mockResolvedValue([
       {
         account_id: 'acc-1', exchange: 'bybit', exec_id: 'gap-fill-1',
@@ -269,11 +289,11 @@ describe('BybitConnector — gap fill', () => {
     mockFillProcessorBatch.mockResolvedValue(1)
 
     const fp = { store: mockFillProcessorStore, storeBatch: mockFillProcessorBatch } as unknown as FillProcessor
-    const connector = new BybitConnector({ ...CREDS, lastFillTime: 1000, fillProcessor: fp, fetchGapFills })
+    const connector = new BybitConnector({ ...CREDS, lastFillTime: since, fillProcessor: fp, fetchGapFills })
 
-    await connector.runGapFill(1000, Date.now())
+    await connector.runGapFill(since, Date.now())
 
-    expect(fetchGapFills).toHaveBeenCalledWith(1000, expect.any(Number))
+    expect(fetchGapFills).toHaveBeenCalledWith(since, expect.any(Number))
     expect(mockFillProcessorBatch).toHaveBeenCalledWith(expect.arrayContaining([
       expect.objectContaining({ exec_id: 'gap-fill-1' }),
     ]))

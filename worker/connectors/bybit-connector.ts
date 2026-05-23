@@ -25,12 +25,13 @@ type WsMessage = {
 }
 
 export interface BybitConnectorOptions {
-  apiKey:         string
-  apiSecret:      string
-  accountId:      string
-  lastFillTime?:  number
-  fillProcessor:  FillProcessor
-  fetchGapFills?: (since: number, until: number) => Promise<RawFill[]>
+  apiKey:            string
+  apiSecret:         string
+  accountId:         string
+  lastFillTime?:     number
+  fillProcessor:     FillProcessor
+  fetchGapFills?:    (since: number, until: number) => Promise<RawFill[]>
+  enqueueFullSync?:  () => Promise<void>
 }
 
 export class BybitConnector {
@@ -41,18 +42,20 @@ export class BybitConnector {
   private fillProcessor: FillProcessor
   private fetchGapFillsFn?: (since: number, until: number) => Promise<RawFill[]>
 
-  private ws:             WebSocket | null = null
-  private pingTimer:      ReturnType<typeof setInterval> | null = null
-  private reconnectDelay: number = 1000
-  private destroyed:      boolean = false
+  private ws:               WebSocket | null = null
+  private pingTimer:        ReturnType<typeof setInterval> | null = null
+  private reconnectDelay:   number = 1000
+  private destroyed:        boolean = false
+  private enqueueFullSync?: () => Promise<void>
 
   constructor(opts: BybitConnectorOptions) {
-    this.apiKey        = opts.apiKey
-    this.apiSecret     = opts.apiSecret
-    this.accountId     = opts.accountId
-    this.lastFillTime  = opts.lastFillTime ?? 0
-    this.fillProcessor = opts.fillProcessor
+    this.apiKey          = opts.apiKey
+    this.apiSecret       = opts.apiSecret
+    this.accountId       = opts.accountId
+    this.lastFillTime    = opts.lastFillTime ?? 0
+    this.fillProcessor   = opts.fillProcessor
     this.fetchGapFillsFn = opts.fetchGapFills
+    this.enqueueFullSync = opts.enqueueFullSync
   }
 
   // ── Public helpers (tested directly) ────────────────────────────────────
@@ -123,11 +126,35 @@ export class BybitConnector {
 
   async runGapFill(since: number, until: number): Promise<void> {
     if (!this.fetchGapFillsFn) return
-    const fills = await this.fetchGapFillsFn(since, until)
-    if (fills.length > 0) {
-      await this.fillProcessor.storeBatch(fills)
-      const maxTs = fills.reduce((max, f) => Math.max(max, f.exec_time.getTime()), 0)
-      if (maxTs > this.lastFillTime) this.lastFillTime = maxTs
+
+    const MAX_BYBIT_WINDOW_MS = 7  * 24 * 60 * 60 * 1000
+    const MAX_CHUNK_GAP_MS   = 30 * 24 * 60 * 60 * 1000
+    const gap = until - since
+
+    if (gap > MAX_CHUNK_GAP_MS) {
+      console.warn(
+        `[bybit-connector] gap ${Math.round(gap / 86400000)}d > 30d for account ` +
+        `${this.accountId} — skipping gap fill, triggering full sync`,
+      )
+      if (this.enqueueFullSync) {
+        await this.enqueueFullSync().catch(e =>
+          console.error('[bybit-connector] failed to enqueue full sync:', e),
+        )
+      }
+      return
+    }
+
+    // Chunk into ≤7d windows (Bybit API hard limit)
+    let chunkStart = since
+    while (chunkStart < until) {
+      const chunkEnd = Math.min(chunkStart + MAX_BYBIT_WINDOW_MS, until)
+      const fills = await this.fetchGapFillsFn(chunkStart, chunkEnd)
+      if (fills.length > 0) {
+        await this.fillProcessor.storeBatch(fills)
+        const maxTs = fills.reduce((max, f) => Math.max(max, f.exec_time.getTime()), 0)
+        if (maxTs > this.lastFillTime) this.lastFillTime = maxTs
+      }
+      chunkStart = chunkEnd
     }
   }
 

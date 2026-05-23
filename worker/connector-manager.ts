@@ -132,9 +132,31 @@ export class ConnectorManager {
           this.trackEnd()
         }
       }
+      const enqueueFullSync = async (): Promise<void> => {
+        const { data: existing } = await supabaseAdmin
+          .from('full_sync_jobs')
+          .select('id')
+          .eq('account_id', acct.id)
+          .in('status', ['pending', 'processing'])
+          .limit(1)
+        if (existing && existing.length > 0) {
+          console.log(`[connector-manager] full sync already queued for ${acct.id}`)
+          return
+        }
+        const { data: job } = await supabaseAdmin
+          .from('full_sync_jobs')
+          .insert({ account_id: acct.id, exchange: 'bybit', status: 'pending' })
+          .select('id')
+          .single()
+        if (job) {
+          await this.redis.lpush('fullscan:queue', job.id)
+          console.log(`[connector-manager] full sync enqueued for ${acct.id} (gap >30d)`)
+        }
+      }
+
       const connector = new BybitConnector({
         apiKey, apiSecret, accountId: acct.id, lastFillTime,
-        fillProcessor: this.processor, fetchGapFills,
+        fillProcessor: this.processor, fetchGapFills, enqueueFullSync,
       })
       this.connectors.push(connector)
       void connector.connect()  // runs its own reconnect loop — do not await
