@@ -12,7 +12,7 @@ export async function GET(
     .from('full_sync_jobs')
     .select(
       'id, account_id, exchange, status, current_step, total_steps, ' +
-      'failed_items, error_message, created_at, started_at, completed_at',
+      'discovered_symbols_count, failed_items, error_message, created_at, started_at, completed_at',
     )
     .eq('id', jobId)
     .single()

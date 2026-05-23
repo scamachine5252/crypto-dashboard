@@ -360,7 +360,8 @@ export class FullHistorySyncer {
     })
 
     const symbols = await adapter.discoverTradedSymbols()
-    await this.updateProgress(job.id, { total_steps: symbols.length })
+    console.log(`[full-history-syncer] ${job.account_id} discovered ${symbols.length} symbols`)
+    await this.updateProgress(job.id, { total_steps: symbols.length, discovered_symbols_count: symbols.length })
 
     const allFailed: Array<{ symbol: string; error: string }> = []
 
@@ -503,7 +504,7 @@ export class FullHistorySyncer {
 
   private async updateProgress(
     jobId: string,
-    patch: { current_step?: number; total_steps?: number; failed_items?: Array<{ symbol: string; error: string }> },
+    patch: { current_step?: number; total_steps?: number; failed_items?: Array<{ symbol: string; error: string }>; discovered_symbols_count?: number },
   ): Promise<void> {
     await supabaseAdmin.from('full_sync_jobs').update(patch).eq('id', jobId)
   }
