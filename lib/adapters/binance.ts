@@ -534,15 +534,30 @@ export class BinanceAdapter implements ExchangeAdapter {
           const wStart = scanStart + i * WINDOW_30
           const wEnd   = Math.min(wStart + WINDOW_30, Date.now())
           if (wStart >= Date.now()) break
-          const windowRows = await paginateByTime(
-            (p) => fapi.fapiPrivateGetIncome({
-              incomeType: 'REALIZED_PNL',
-              startTime:  p.startTime,
-              endTime:    p.endTime,
-              limit:      p.limit,
-            }),
-            { startTime: wStart, endTime: wEnd, limit: 1000, delayMs: 1000 },
-          )
+          // Retry up to 3× for transient Binance server timeouts (-1007).
+          // These are backend-side and usually resolve within seconds.
+          // Real errors (auth, bad key) are not -1007 and propagate immediately.
+          let windowRows: Array<{ symbol: string; time: number | string }> = []
+          for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+              windowRows = await paginateByTime(
+                (p) => fapi.fapiPrivateGetIncome({
+                  incomeType: 'REALIZED_PNL',
+                  startTime:  p.startTime,
+                  endTime:    p.endTime,
+                  limit:      p.limit,
+                }),
+                { startTime: wStart, endTime: wEnd, limit: 1000, delayMs: 1000 },
+              )
+              break
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e)
+              const isTransient = msg.includes('-1007') || msg.includes('ETIMEDOUT') || msg.includes('ECONNRESET')
+              if (!isTransient || attempt === 2) throw e
+              console.warn(`[binance-adapter] window ${i} attempt ${attempt + 1} failed (${msg.slice(0, 80)}), retrying in ${(attempt + 1) * 2}s`)
+              await new Promise(r => setTimeout(r, (attempt + 1) * 2000))
+            }
+          }
           allRows30.push(...windowRows)
           if (i < 5) await new Promise(r => setTimeout(r, 500))
         }
