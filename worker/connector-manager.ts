@@ -143,11 +143,15 @@ export class ConnectorManager {
           console.log(`[connector-manager] full sync already queued for ${acct.id}`)
           return
         }
-        const { data: job } = await supabaseAdmin
+        const { data: job, error: insertError } = await supabaseAdmin
           .from('full_sync_jobs')
           .insert({ account_id: acct.id, exchange: 'bybit', status: 'pending' })
           .select('id')
           .single()
+        if (insertError) {
+          console.error(`[connector-manager] failed to insert full sync job for ${acct.id}:`, insertError.message)
+          return
+        }
         if (job) {
           await this.redis.lpush('fullscan:queue', job.id)
           console.log(`[connector-manager] full sync enqueued for ${acct.id} (gap >30d)`)

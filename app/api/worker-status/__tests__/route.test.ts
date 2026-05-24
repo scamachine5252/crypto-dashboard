@@ -52,22 +52,25 @@ function setupMocks({
   const wsEq = jest.fn().mockReturnValue({ single: wsSingle })
   const wsSelect = jest.fn().mockReturnValue({ eq: wsEq })
 
-  // accounts (active) chain: .from('accounts').select(...).eq(...)
+  // accounts (active) chain: .select('id, exchange, account_name').eq(is_suspended)
   const accEq = jest.fn().mockResolvedValue({ data: accounts, error: null })
-  const accSelect = jest.fn().mockReturnValue({ eq: accEq })
 
-  // accounts (anomaly) chain: .from('accounts').select(...).gt(...).eq(...)
+  // accounts (anomaly) chain: .select('…reconcile_consecutive_failures…').gt(…).eq(is_suspended)
   const anomalyEq = jest.fn().mockResolvedValue({ data: failingAccounts, error: null })
   const anomalyGt = jest.fn().mockReturnValue({ eq: anomalyEq })
 
-  let accountsCallCount = 0
   mockFrom.mockImplementation((table: string) => {
     if (table === 'worker_status') return { select: wsSelect }
     if (table === 'accounts') {
-      accountsCallCount++
-      // First call: active accounts (.select().eq()), second call: anomaly (.select().gt().eq())
-      if (accountsCallCount % 2 === 1) return { select: accSelect }
-      return { select: jest.fn().mockReturnValue({ gt: anomalyGt }) }
+      // Distinguish by select fields: anomaly query selects reconcile_consecutive_failures
+      return {
+        select: jest.fn().mockImplementation((fields: string) => {
+          if (fields.includes('reconcile_consecutive_failures')) {
+            return { gt: anomalyGt }
+          }
+          return { eq: accEq }
+        }),
+      }
     }
     return { select: jest.fn().mockReturnValue({ eq: jest.fn().mockResolvedValue({ data: [], error: null }) }) }
   })

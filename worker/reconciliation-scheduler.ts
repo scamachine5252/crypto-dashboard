@@ -257,6 +257,9 @@ export class ReconciliationScheduler {
       symbols = await adapter.discoverTradedSymbols()
     } catch (e) {
       await binanceBanGuard.recordIfBanned(e)
+      // If the error triggered a ban, pingBinanceAccount would also fail — don't misclassify
+      // an IP ban as broken credentials (ping sees same 418, returns false).
+      if (binanceBanGuard.isBanned()) throw e
       const credentialsBroken = !(await this.pingBinanceAccount(adapter))
       await this.updateReconcileState(
         account.id,

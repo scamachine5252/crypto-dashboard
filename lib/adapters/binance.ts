@@ -526,7 +526,8 @@ export class BinanceAdapter implements ExchangeAdapter {
         rows = [...umRows, ...cmRows]
       } else {
         // 6 × 30-day windows, each fully paginated — handles any volume per window.
-        // delayMs:200 keeps Binance FAPI weight well within 2400/min budget.
+        // fapiPrivateGetIncome costs 30 weight; budget is 2400/min → max 80 req/min → ≥750ms/req.
+        // delayMs:1000 within a window + 500ms between windows keeps weight ~1200/min worst-case.
         const WINDOW_30 = 30 * DAY
         const allRows30: Array<{ symbol: string; time: number | string }> = []
         for (let i = 0; i < 6; i++) {
@@ -540,9 +541,10 @@ export class BinanceAdapter implements ExchangeAdapter {
               endTime:    p.endTime,
               limit:      p.limit,
             }),
-            { startTime: wStart, endTime: wEnd, limit: 1000, delayMs: 200 },
+            { startTime: wStart, endTime: wEnd, limit: 1000, delayMs: 1000 },
           )
           allRows30.push(...windowRows)
+          if (i < 5) await new Promise(r => setTimeout(r, 500))
         }
         rows = allRows30
       }
