@@ -1,4 +1,5 @@
-import Redis from 'ioredis'
+import type Redis from 'ioredis'
+import { createRedisClient } from '@/lib/redis'
 import { supabaseAdmin } from '@/lib/supabase/server'
 import { decrypt } from '@/lib/crypto/decrypt'
 import { FillProcessor } from './fill-processor'
@@ -33,7 +34,7 @@ export class ConnectorManager {
   private drainResolve:   (() => void) | null = null
 
   constructor(redisUrl = 'redis://127.0.0.1:6379') {
-    this.redis        = new Redis(redisUrl)
+    this.redis        = createRedisClient(redisUrl, 'connector-manager')
     this.reconstructor = new PositionReconstructor(redisUrl)
     this.processor    = new FillProcessor(this.redis, {
       onReconstruct: (accountId, exchange) =>

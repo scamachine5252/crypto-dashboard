@@ -12,6 +12,7 @@ jest.mock('ioredis', () =>
   jest.fn().mockImplementation(() => ({
     set: mockRedisSet,
     del: mockRedisDel,
+    on:  jest.fn(),
   }))
 )
 
@@ -177,6 +178,17 @@ function makeMexcFillRow(overrides: Record<string, unknown> = {}) {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+describe('PositionReconstructor — Redis connection reuse', () => {
+  it('shares one Redis connection across instances (regression: per-call connection leak)', () => {
+    const RedisMock = jest.requireMock('ioredis') as jest.Mock
+    const before = RedisMock.mock.calls.length
+    new PositionReconstructor('redis://reuse-test:6379')
+    new PositionReconstructor('redis://reuse-test:6379')
+    new PositionReconstructor('redis://reuse-test:6379')
+    expect(RedisMock.mock.calls.length - before).toBeLessThanOrEqual(1)
+  })
+})
 
 describe('PositionReconstructor', () => {
   let reconstructor: PositionReconstructor

@@ -18,6 +18,7 @@ jest.mock('ioredis', () =>
     del:        mockDel,
     get:        mockGet,
     disconnect: mockDisconnect,
+    on:         jest.fn(),
   })),
 )
 
@@ -163,6 +164,28 @@ describe('FullHistorySyncer', () => {
     mockDel.mockResolvedValue(1)
     await syncer.releaseLock('acc-1')
     expect(mockDel).toHaveBeenCalledWith('fullscan:lock:acc-1')
+  })
+
+  // ── processLoop ───────────────────────────────────────────────────────────
+
+  it('processLoop pauses after a BRPOP error instead of spinning (regression: Redis-down log flood)', async () => {
+    jest.useFakeTimers()
+    mockBrpop.mockRejectedValue(new Error('Connection is closed.'))
+    const loop = (syncer as unknown as { processLoop(): Promise<void> })
+    ;(syncer as unknown as { running: boolean }).running = true
+    void loop.processLoop()
+
+    await jest.advanceTimersByTimeAsync(0)
+    const afterFirst = mockBrpop.mock.calls.length
+    await jest.advanceTimersByTimeAsync(500)
+    expect(mockBrpop.mock.calls.length).toBe(afterFirst)        // no tight retry
+    await jest.advanceTimersByTimeAsync(5000)
+    expect(mockBrpop.mock.calls.length).toBeGreaterThan(afterFirst)  // but it does retry
+    expect(mockBrpop.mock.calls.length).toBeLessThan(afterFirst + 5)
+
+    syncer.stop()
+    await jest.advanceTimersByTimeAsync(10_000)
+    jest.useRealTimers()
   })
 
   // ── enqueue ───────────────────────────────────────────────────────────────

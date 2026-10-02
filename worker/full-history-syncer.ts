@@ -1,5 +1,6 @@
 import 'server-only'
-import Redis from 'ioredis'
+import type Redis from 'ioredis'
+import { createRedisClient } from '@/lib/redis'
 import { supabaseAdmin } from '@/lib/supabase/server'
 import { PositionReconstructor } from './position-reconstructor'
 import { BybitAdapter, type ReconstructionStateJson, type RawExecution } from '@/lib/adapters/bybit'
@@ -37,6 +38,7 @@ interface AccountRow {
 const QUEUE_KEY    = 'fullscan:queue'
 const LOCK_PREFIX  = 'fullscan:lock:'
 const LOCK_TTL_SEC = 3600
+const BRPOP_ERROR_DELAY_MS = 2000
 
 const BYBIT_CHUNK_DAYS = 7
 const BYBIT_CHUNKS     = 26
@@ -52,7 +54,7 @@ export class FullHistorySyncer {
 
   constructor(redisUrl: string) {
     this.redisUrl = redisUrl
-    this.redis    = new Redis(redisUrl)
+    this.redis    = createRedisClient(redisUrl, 'full-history-syncer')
   }
 
   // ── Public helpers ───────────────────────────────────────────────────────
@@ -150,7 +152,11 @@ export class FullHistorySyncer {
 
   private async processLoop(): Promise<void> {
     while (this.running) {
-      const result = await this.redis.brpop(QUEUE_KEY, 5).catch(() => null)
+      // On Redis errors wait before retrying; the client itself logs the outage once
+      const result = await this.redis.brpop(QUEUE_KEY, 5).catch(async () => {
+        await new Promise(r => setTimeout(r, BRPOP_ERROR_DELAY_MS))
+        return null
+      })
       if (!result) continue
       const [, jobId] = result as [string, string]
       await this.processJob(jobId).catch((e) =>

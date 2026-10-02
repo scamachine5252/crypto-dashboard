@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 const mockRpc    = jest.fn()
 const mockFrom   = jest.fn()
-const mockRedis  = { set: jest.fn(), del: jest.fn(), disconnect: jest.fn() }
+const mockRedis  = { set: jest.fn(), del: jest.fn(), disconnect: jest.fn(), on: jest.fn() }
 const mockConnectorDisconnect = jest.fn()
 
 jest.mock('ioredis', () =>

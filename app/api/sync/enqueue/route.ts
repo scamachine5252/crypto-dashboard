@@ -1,14 +1,15 @@
 import 'server-only'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase/server'
-import Redis from 'ioredis'
+import type Redis from 'ioredis'
+import { createRedisClient } from '@/lib/redis'
 
 const QUEUE_KEY   = 'fullscan:queue'
 const LOCK_PREFIX = 'fullscan:lock:'
 
 let _redis: Redis | null = null
 function getRedis(): Redis {
-  if (!_redis) _redis = new Redis(process.env.REDIS_URL ?? 'redis://127.0.0.1:6379')
+  if (!_redis) _redis = createRedisClient(process.env.REDIS_URL ?? 'redis://127.0.0.1:6379', 'enqueue')
   return _redis
 }
 

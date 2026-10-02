@@ -32,6 +32,7 @@ jest.mock('ioredis', () =>
     lpush: mockLpush,
     get:   mockGet,
     set:   mockSet,
+    on:    jest.fn(),
   })),
 )
 

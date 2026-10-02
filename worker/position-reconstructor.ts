@@ -1,4 +1,5 @@
-import Redis from 'ioredis'
+import type Redis from 'ioredis'
+import { getSharedRedis } from '@/lib/redis'
 import { supabaseAdmin } from '@/lib/supabase/server'
 import { reconstructPositions, type RawExecution } from '@/lib/adapters/bybit'
 import { reconstructBinanceTrades, type RawFapiTrade } from '@/lib/adapters/binance'
@@ -229,7 +230,8 @@ export class PositionReconstructor {
   private redis: Redis
 
   constructor(redisUrl = 'redis://127.0.0.1:6379') {
-    this.redis = new Redis(redisUrl, { lazyConnect: true })
+    // Shared connection: callers create a reconstructor per run, a client per instance leaked connections
+    this.redis = getSharedRedis(redisUrl)
   }
 
   async reconstruct(accountId: string, exchange: string): Promise<void> {
