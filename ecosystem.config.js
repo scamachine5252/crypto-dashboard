@@ -3,7 +3,7 @@ module.exports = {
     {
       name: 'next-app',
       script: 'node_modules/.bin/next',
-      args: 'start',
+      args: 'start -H 127.0.0.1',
       instances: 2,
       exec_mode: 'cluster',
       max_memory_restart: '1G',
